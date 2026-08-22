@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "lib": ["ES2019"],
+    "strict": true,
+    "moduleResolution": "node",
+    "types": ["@figma/plugin-typings"],
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}

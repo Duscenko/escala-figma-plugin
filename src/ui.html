@@ -1,0 +1,2730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Escala DS</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* Full Escala semantic palette (light + dark), wired 1:1 to the plugin's
+     chrome — this REPLACES the earlier approach of reading Figma's own
+     --figma-color-* vars for background/border/text; those are now used
+     ONLY by the theme-detection script below (to know which of the two
+     blocks to apply), not by any rendered color. Every value here traces to
+     a named role in Escala's token set (color.<family>.<step>, and its
+     semantic.<light|dark>.<role> alias) — see the mapping table in each
+     declaration's comment.
+
+     Dark-mode overrides are gated on [data-theme="dark"], set by a tiny
+     script (see <head>, right after this block) that reads the ACTUAL
+     injected --figma-color-bg and picks a theme from its luminance —
+     prefers-color-scheme reflects the OS/browser instead, which can disagree
+     with Figma's own light/dark setting (e.g. Figma set to light on a
+     dark-OS machine) and made brand colors render in the wrong palette while
+     chrome sourced straight from Figma stayed correct. The media query below
+     is kept only as a same-tab fallback for the narrow window before that
+     script runs (or outside Figma entirely); the explicit attribute always
+     wins once set. */
+  :root {
+    --bg:           #ffffff;   /* background-primary */
+    --surface:      #f5f5f6;   /* background-secondary — neutral/2 */
+    --surface2:     #ebebed;   /* background-tertiary — neutral/3 */
+    --border:       #ebebed;   /* border-tertiary — neutral/3 */
+    --border2:      #d0d0d4;   /* border-primary — neutral/5 */
+    /* --text/--text-sub/--text-dim used to be a hand-tuned muted-gray
+       approximation (neutral/11 · /9 · /8) that this file's own header
+       claimed was "wired 1:1" but wasn't — measured, it cleared only
+       4.19 / 4.89 / 3.21:1 against this page, i.e. the plugin's default body
+       text sat under WCAG AA everywhere and --text-dim failed badly. Fixed by
+       actually mirroring the app's real chrome tokens — `--fg`/`--fg-muted`/
+       `--fg-faint` in scalable-designs/src/index.css — which are genuinely
+       contrast-tuned: 17.72 / 7.73 / 4.74:1 here. */
+    --text:         #18181b;   /* content-primary — app --fg */
+    --text-sub:     #52525b;   /* content-secondary — app --fg-muted */
+    --text-dim:     #737373;   /* content-tertiary — app --fg-faint */
+    --text-on-tint: #39393d;   /* neutral/12 — for text on a --accent-soft fill,
+                                   where content-primary's own contrast is too
+                                   thin (see dark-mode comment below) */
+
+    --success:      #68ca9e;   /* content-success — success/8 */
+    --error:        #f97969;   /* content-error — error/8 */
+    --success-tint: #edfcf4;   /* background-success-primary — success/2 */
+
+    --accent:        #a172fa;   /* background-brand-solid — accent/8 */
+    --accent-strong: #8a38f5;   /* background-brand-solid-hover — accent/9 */
+    --accent-soft:   #f7f1ff;   /* background-brand-primary — accent/2 */
+    --accent-ring:   #b594fe;   /* border-brand — accent/7 */
+    --on-accent:     #ffffff;
+
+    /* Spacing scale — 4px base. Named by beat rather than by pixel so the
+       rhythm stays deliberate: --sp-2 binds rows inside a card, --sp-3 is the
+       default card-to-card beat, --sp-4 marks a change of kind (read-only
+       summary → live control). Spacing used to be typed in by hand at every
+       call site, which is how a panel ended up with no gap at all. */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+
+    --radius: 8px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+    --rail-w: 52px;
+    --aside-w: 336px;
+  }
+
+  /* Dark theme — Escala's *-dark scale, built for dark surfaces rather than
+     derived from the light scale, so brand fills stay saturated instead of
+     washing out. Brand solid/hover inverts on purpose (brighten, don't
+     darken, on hover) — the convention dark UIs use since darkening reads as
+     "disabled" on an already-dark surface; light mode keeps the opposite
+     (accent/8 resting → accent/9, darker, on hover), the normal light-UI cue.
+
+     --text-on-tint exists because the OLD hand-tuned --text/--text-sub (a
+     muted-gray approximation, since replaced — see the :root block's comment)
+     dropped under WCAG AA on --accent-soft specifically (a much darker,
+     purple-tinted fill): ~4:1 for the bold heading, ~3:1 for the
+     regular-weight description, both below the 4.5:1 normal-text minimum.
+     Now that --text/--text-sub mirror the app's real --fg/--fg-muted (17.69 /
+     7.20:1 on this same fill), the escape is no longer strictly needed for
+     contrast — kept anyway since it's still a deliberately-tuned value and
+     retiring `.scope.on`'s override wasn't part of that fix; see `.scope.on`
+     below.
+
+     Defined twice on purpose: the media query is a same-tab fallback for the
+     sliver of time before the theme-detection script (see <head>) runs, or
+     for previewing this file outside Figma; :root[data-theme] is the real
+     source of truth and always wins, in both directions — including forcing
+     LIGHT back on when the OS prefers dark but Figma's actual theme isn't. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:           #0f0f12;   /* background-primary — neutral-dark/1 */
+      --surface:      #131314;   /* background-secondary — neutral-dark/2 */
+      --surface2:     #181819;   /* background-tertiary — neutral-dark/3 */
+      --border:       #181819;   /* border-tertiary — neutral-dark/3 */
+      --border2:      #262628;   /* border-primary — neutral-dark/5 */
+      --text:         #fafafa;   /* content-primary — app --fg (dark) */
+      --text-sub:     #a1a1aa;   /* content-secondary — app --fg-muted (dark) */
+      --text-dim:     #6b6b6b;   /* content-tertiary — app --fg-faint (dark);
+                                     3.72:1, the one residual under AA — same
+                                     tier, same gap the app's own dark chrome
+                                     already accepts, never used for prose */
+      --text-on-tint: #c9c9cc;   /* neutral-dark/12 — see comment above */
+
+      --success:      #228c64;   /* content-success — success-dark/8 */
+      --error:        #b53b30;   /* content-error — error-dark/8 */
+      --success-tint: #0d1913;   /* background-success-primary — success-dark/2 */
+
+      --accent:        #6933b8;   /* background-brand-solid — accent-dark/8 */
+      --accent-strong: #8a38f5;   /* background-brand-solid-hover — accent/9, brighten on hover */
+      --accent-soft:   #161122;   /* background-brand-primary — accent-dark/2 */
+      --accent-ring:   #532d8e;   /* border-brand — accent-dark/7 */
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:           #0f0f12;
+    --surface:      #131314;
+    --surface2:     #181819;
+    --border:       #181819;
+    --border2:      #262628;
+    --text:         #fafafa;
+    --text-sub:     #a1a1aa;
+    --text-dim:     #6b6b6b;
+    --text-on-tint: #c9c9cc;
+
+    --success:      #228c64;
+    --error:        #b53b30;
+    --success-tint: #0d1913;
+
+    --accent:        #6933b8;
+    --accent-strong: #8a38f5;
+    --accent-soft:   #161122;
+    --accent-ring:   #532d8e;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;               /* rail | app */
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button { font-family: var(--font); }
+
+  :focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 1px;
+    border-radius: 4px;
+  }
+
+  /* ── Icon rail ── */
+  .rail {
+    width: var(--rail-w);
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 10px 0 12px;
+    gap: 6px;
+  }
+  .rail-logo {
+    height: 32px; display: flex; align-items: center; justify-content: center;
+    margin-bottom: 4px;
+  }
+  .rail-logo svg { width: 22px; height: 22px; border-radius: 6px; display: block; }
+  .rail-btn {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: none; border: 1px solid transparent; cursor: pointer;
+    color: var(--text-dim); font-size: 14px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+    transition: color 140ms var(--ease), background 140ms var(--ease), border-color 140ms var(--ease);
+  }
+  .rail-btn:hover { color: var(--text); background: var(--surface2); }
+  .rail-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
+  .rail-btn.active {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-ring);
+  }
+  /* Unread activity marker on the Log rail button */
+  .rail-btn .rail-dot {
+    position: absolute; top: 6px; right: 6px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .rail-spacer { flex: 1; }
+
+  /* Rail tooltip */
+  .rail-btn::after {
+    content: attr(data-label);
+    position: absolute; left: calc(100% + 8px); top: 50%;
+    transform: translateY(-50%);
+    background: var(--text); color: var(--bg);
+    font-size: 10px; font-weight: 500; white-space: nowrap;
+    padding: 4px 8px; border-radius: 4px;
+    opacity: 0; pointer-events: none;
+    transition: opacity 120ms var(--ease);
+    z-index: 20;
+  }
+  .rail-btn:hover::after { opacity: 1; }
+
+  /* ── App shell ── */
+  .app { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .header-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .header-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .header-sub { font-size: 11px; color: var(--text-sub); }
+  .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+  .close-btn {
+    background: none; border: none; cursor: pointer;
+    color: var(--text-sub); font-size: 15px; line-height: 1;
+    padding: 4px 6px; border-radius: 5px;
+    transition: color 140ms var(--ease), background 140ms var(--ease);
+  }
+  .close-btn:hover { color: var(--text); background: var(--surface2); }
+
+  .link-btn {
+    background: none; border: none; cursor: pointer; padding: 2px 0;
+    color: var(--accent); font-size: 11px; font-weight: 500;
+  }
+  .link-btn:hover { color: var(--accent-strong); text-decoration: underline; }
+
+  /* ── Two-column body ── */
+  .body { flex: 1; min-height: 0; display: flex; }
+  .main {
+    flex: 1; min-width: 0; overflow-y: auto;
+    padding: 14px 16px 18px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .aside {
+    width: var(--aside-w); flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .aside-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .aside-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+
+  .main::-webkit-scrollbar, .aside-body::-webkit-scrollbar,
+  .log-wrap::-webkit-scrollbar, .json-view::-webkit-scrollbar { width: 4px; height: 4px; }
+  .main::-webkit-scrollbar-track, .aside-body::-webkit-scrollbar-track { background: transparent; }
+  .main::-webkit-scrollbar-thumb, .aside-body::-webkit-scrollbar-thumb,
+  .log-wrap::-webkit-scrollbar-thumb, .json-view::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  /* ── Panels ──
+     A panel stacks cards. It had no rule at all, so its children were plain
+     block siblings with no gap: two adjacent cards welded into one slab with a
+     doubled 1px border down the seam. Invisible while every panel rendered a
+     single card, glaring the moment Live Sync folded into Overview. */
+  .panel { display: flex; flex-direction: column; gap: var(--sp-3); }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .aside .card { background: var(--bg); }
+  .card-title {
+    font-size: 10px; font-weight: 600;
+    color: var(--text-sub); text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+  /* ── Steps ── */
+  .steps {
+    display: flex; align-items: center; gap: 0;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; background: var(--bg);
+  }
+  .step {
+    display: flex; align-items: center; gap: 8px;
+    background: none; border: none; cursor: pointer;
+    padding: 4px 8px; border-radius: 6px;
+    color: var(--text-dim); font-size: 11px; font-weight: 500;
+    font-family: var(--font);
+    transition: color 140ms var(--ease), background 140ms var(--ease);
+  }
+  .step:disabled { cursor: not-allowed; }
+  .step:not(:disabled):hover { color: var(--text); background: var(--surface2); }
+  .step-num {
+    width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
+    border: 1px solid var(--border2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 600;
+    transition: all 140ms var(--ease);
+  }
+  .step.active { color: var(--text); }
+  .step.active .step-num { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .step.done { color: var(--text-sub); }
+  .step.done .step-num { background: var(--success); border-color: var(--success); color: #fff; }
+  .step-sep { flex: 1; height: 1px; background: var(--border); min-width: 8px; }
+
+  /* ── Step intro ── */
+  /* No margin-bottom: the panel's own gap owns the space after the intro now,
+     otherwise the two stack and the wizard's heading drifts twice as far from
+     its first card as it used to. */
+  .step-intro { display: flex; flex-direction: column; gap: var(--sp-1); }
+  .step-intro h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .step-intro p { font-size: 12px; color: var(--text-sub); line-height: 1.6; }
+
+  /* ── Textarea / inputs ── */
+  textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border2);
+    border-radius: 6px; color: var(--text); font-family: var(--mono);
+    font-size: 11px; line-height: 1.6; padding: 10px; resize: vertical;
+    outline: none; transition: border-color 140ms var(--ease);
+    min-height: 72px;
+  }
+  textarea:focus { border-color: var(--accent); }
+  textarea::placeholder { color: var(--text-dim); }
+
+  .input-row { display: flex; gap: 8px; align-items: center; }
+  input[type="text"] {
+    flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border2);
+    border-radius: 6px; color: var(--text); font-family: var(--mono);
+    font-size: 11px; padding: 8px 10px;
+    outline: none; transition: border-color 140ms var(--ease);
+  }
+  input[type="text"]:focus { border-color: var(--accent); }
+  input[type="text"]::placeholder { color: var(--text-dim); }
+
+  /* Custom chevron via a masked pseudo-element, not a background-image SVG:
+     currentColor/var() don't reliably reach into a data-URI's own fill, but a
+     mask takes only the shape from the SVG and paints it with a real
+     background-color — so the arrow tracks the theme like everything else. */
+  .select-wrap { position: relative; display: inline-flex; min-width: 0; }
+  .select-wrap::after {
+    content: ''; position: absolute; top: 50%; right: 9px;
+    width: 8px; height: 8px; transform: translateY(-50%);
+    background: var(--text-dim); pointer-events: none;
+    transition: background-color 140ms var(--ease);
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / contain;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / contain;
+  }
+  .select-wrap:hover::after { background: var(--text-sub); }
+  .select-wrap:focus-within::after { background: var(--accent); }
+
+  select {
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+    width: 100%; background: var(--bg); border: 1px solid var(--border2);
+    border-radius: 6px; color: var(--text); font-size: 11px;
+    font-family: var(--font); cursor: pointer;
+    padding: 6px 26px 6px 10px; outline: none;
+    transition: border-color 140ms var(--ease);
+  }
+  select:hover { border-color: var(--text-dim); }
+  select:focus { border-color: var(--accent); }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font-size: 12px; font-weight: 500; border: none; border-radius: 6px;
+    cursor: pointer; padding: 8px 14px; white-space: nowrap;
+    transition: background 140ms var(--ease), color 140ms var(--ease),
+                border-color 140ms var(--ease), transform 80ms var(--ease);
+  }
+  .btn:active:not(:disabled) { transform: translateY(0.5px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-primary { background: var(--accent); color: var(--on-accent); }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-strong); }
+
+  .btn-secondary {
+    background: transparent; color: var(--text-sub);
+    border: 1px solid var(--border2);
+  }
+  .btn-secondary:hover:not(:disabled) { color: var(--text); border-color: var(--text-dim); }
+
+  .btn-sm { padding: 6px 10px; font-size: 11px; }
+  .btn-success { background: var(--success) !important; color: #fff !important; }
+
+  /* ── Scope cards (what to import) ── */
+  .scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .scope {
+    text-align: left; background: var(--bg);
+    border: 1px solid var(--border2); border-radius: var(--radius);
+    padding: 10px 12px 12px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 4px;
+    transition: border-color 140ms var(--ease), background 140ms var(--ease);
+    position: relative;
+  }
+  .scope:hover { border-color: var(--text-dim); }
+  .scope.on { border-color: var(--accent); background: var(--accent-soft); }
+  .scope-head { display: flex; align-items: center; gap: 8px; }
+  .scope-check {
+    width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
+    border: 1px solid var(--border2); background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: transparent; line-height: 1;
+    transition: all 140ms var(--ease);
+  }
+  .scope.on .scope-check { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .scope-name { font-size: 12px; font-weight: 600; }
+  .scope small { font-size: 11px; color: var(--text-sub); line-height: 1.45; }
+  /* --text/--text-sub are tuned for the page background, not the tinted
+     --accent-soft fill this card switches to when selected — see the
+     dark-mode comment near :root[data-theme="dark"] for the contrast math. */
+  .scope.on .scope-name,
+  .scope.on small { color: var(--text-on-tint); }
+
+  /* ── Option / export rows ── */
+  .row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  .row:first-of-type { padding-top: 2px; }
+  .row:last-child { border-bottom: none; padding-bottom: 0; }
+  .row-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .row-label span { font-size: 12px; font-weight: 500; }
+  .row-label small { font-size: 11px; color: var(--text-sub); line-height: 1.45; }
+
+  .toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
+  .toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .toggle-track {
+    position: absolute; inset: 0; border-radius: 9px; pointer-events: none;
+    background: var(--border2); transition: background 160ms var(--ease);
+  }
+  .toggle-track::after {
+    content: ''; position: absolute; width: 12px; height: 12px;
+    border-radius: 50%; background: #fff; top: 3px; left: 3px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+    transition: transform 160ms var(--ease);
+  }
+  .toggle input:checked + .toggle-track { background: var(--accent); }
+  .toggle input:checked + .toggle-track::after { transform: translateX(14px); }
+  .toggle input:focus-visible + .toggle-track { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+
+  /* ── Live sync ── */
+  .sync-row { display: flex; align-items: center; gap: 8px; }
+  .sync-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-dim); flex-shrink: 0; transition: background 300ms var(--ease);
+  }
+  .sync-dot.active { background: var(--success); animation: pulse 2s infinite; }
+  .sync-dot.error  { background: var(--error); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .sync-status { font-size: 11px; color: var(--text-sub); flex: 1; min-width: 0; }
+
+  .help-list { font-size: 12px; color: var(--text-sub); line-height: 1.8; padding-left: 16px; }
+  .help-list strong { color: var(--text); font-weight: 500; }
+  .help-list a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+
+  /* ── Token preview (aside) ── */
+  .token-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .meta-pill {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px;
+    display: flex; flex-direction: column; gap: 1px; min-width: 0;
+  }
+  .meta-pill .mk { font-size: 9px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.07em; }
+  .meta-pill .mv { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 1px solid var(--border); }
+
+  /* ── Progress ── */
+  .progress {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 10px 16px; border-top: 1px solid var(--border);
+    background: var(--bg); flex-shrink: 0;
+  }
+  .progress-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .progress-head span:first-child { font-size: 12px; font-weight: 500; color: var(--text); }
+  .progress-head span:last-child { font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
+  .progress-track { height: 4px; border-radius: 2px; background: var(--border2); overflow: hidden; }
+  .progress-fill {
+    height: 100%; width: 0%; border-radius: 2px; background: var(--accent);
+    transition: width 220ms var(--ease);
+  }
+  /* Indeterminate: a phase that can't count its work still has to look alive. */
+  .progress-fill.indeterminate {
+    width: 32%; transition: none;
+    animation: slide 1.15s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0%   { transform: translateX(-105%); }
+    100% { transform: translateX(320%); }
+  }
+  .progress-note { font-size: 11px; color: var(--warning-fg, var(--text-sub)); line-height: 1.5; }
+  .progress-note.warn { color: var(--error); }
+
+  /* ── Overview (home) ── */
+  /* The connected system at a glance. Everything here is read from the last
+     imported payload in clientStorage — no network, no second source. */
+
+  /* Overview is the only view that hides the aside, so it owns the full 880px
+     window — ~796px of content. Stacked in one column that width went to
+     over-long measures while the 620px height overflowed into a scroll. Two
+     columns instead: the read-only summary beside the live control, which is
+     also the honest grouping (facts | the thing with a state). The right
+     column takes --aside-w so it lands in the same slot the aside occupies on
+     every other view. */
+  .panel.ov-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--aside-w);
+    gap: var(--sp-3);
+    align-items: start;
+  }
+  .ov-col { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  /* Falls back to one column if the window ever gets narrower than the two
+     can honestly share. */
+  @media (max-width: 720px) {
+    .panel.ov-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .ov-hero { display: flex; align-items: center; gap: 12px; }
+  .ov-chip {
+    width: 38px; height: 38px; border-radius: 9px; flex-shrink: 0;
+    border: 1px solid var(--border);
+  }
+  .ov-hero-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ov-hero-text b { font-size: 14px; font-weight: 600; color: var(--text-on-tint); }
+  .ov-hero-text small { font-size: 11px; color: var(--text-sub); font-family: var(--mono); }
+
+  /* The 1–12 ramp as one seamless strip — the same shape the configurator
+     shows, so the two read as the same system. */
+  .ramp { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+  .ramp i { flex: 1; min-width: 0; }
+  .ramp-label { display: flex; justify-content: space-between; font-size: 9px; color: var(--text-dim); font-family: var(--mono); }
+
+  .ov-states { display: flex; gap: 6px; }
+  .ov-states .color-dot { width: 14px; height: 14px; border-radius: 4px; }
+
+  .ov-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+  .ov-empty { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  .ov-empty p { font-size: 12px; color: var(--text-sub); line-height: 1.6; }
+
+  /* Identity and Foundations are one thing — "the system this file is on" —
+     so they share a single card. As two cards they competed for the top of the
+     screen and the eye had to decide which was the subject. A hairline does
+     the internal grouping instead of a second border box. */
+  .ov-divide { height: 1px; background: var(--border2); }
+
+  /* ── "In this file" asset checklist ──
+     A row per generated page: a checkbox (build this or skip it — see
+     buildPrefs), the name, and its current status. The checkbox is the one
+     thing here that IS a control; the rest of the row is still a fact, not
+     a button. */
+  .asset-list { display: flex; flex-direction: column; }
+  .asset-row {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding: 5px 0; font-size: 11px; color: var(--text-sub);
+  }
+  .asset-row + .asset-row { border-top: 1px solid var(--border); }
+  .asset-check {
+    appearance: none; -webkit-appearance: none;
+    width: 14px; height: 14px; flex-shrink: 0; margin: 0;
+    border: 1px solid var(--border2); border-radius: 4px;
+    background: var(--bg); cursor: pointer; position: relative;
+    transition: background-color 140ms var(--ease), border-color 140ms var(--ease);
+  }
+  .asset-check:hover { border-color: var(--text-dim); }
+  .asset-check:checked { background: var(--accent); border-color: var(--accent); }
+  .asset-check:checked::after {
+    content: ''; position: absolute; left: 4px; top: 1px;
+    width: 4px; height: 8px;
+    border: solid var(--on-accent); border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+  .asset-check:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .asset-row.present .asset-name { color: var(--text); }
+  .asset-name { font-weight: 500; }
+  .asset-note { margin-left: auto; font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+  .asset-count { font-size: 10px; color: var(--text-dim); font-family: var(--mono); }
+  .asset-foot {
+    display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+    margin-top: var(--sp-2); padding-top: var(--sp-2);
+    border-top: 1px solid var(--border2);
+    font-size: 11px; color: var(--text-sub); line-height: 1.45;
+  }
+  .asset-foot > span { flex: 1; min-width: 160px; }
+
+  /* States sits under the pill grid as a labelled row. Not space-between:
+     across a 448px card that flung four 14px swatches to the far edge, a
+     third of a screen away from the word they belong to. */
+  .ov-states-row { display: flex; align-items: center; gap: var(--sp-2); }
+  .ov-states-row > .mk { font-size: 11px; color: var(--text-sub); }
+
+  /* Secondary actions: a strip, not a card. Wrapping two buttons and one line
+     of caption in its own bordered box gave "go do something elsewhere" the
+     same visual weight as the system itself. */
+  .ov-continue { display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 2px; }
+  /* --text-sub, not --text-dim: this is prose. The palette-level gap this
+     comment used to flag (--text-dim at 2.94:1 light / 2.21:1 dark, the whole
+     neutral scale under AA) is fixed — see the :root block's comment —
+     --text-dim is now 4.74:1 light / 3.72:1 dark. --text-sub (7.73 / 7.20:1)
+     is still the more legible step, so prose keeps using it; --text-dim's
+     dark value is the one deliberate residual left (matches the app's own
+     accepted gap for that tier) and stays reserved for non-prose use. */
+  .ov-continue p { font-size: 11px; color: var(--text-sub); line-height: 1.55; }
+
+  /* Live Sync is the one stateful surface on Overview, so it earns a border
+     that reacts — accent ring while it's actually running. State, not decor. */
+  .ov-sync { transition: border-color 300ms var(--ease); }
+  .ov-sync.is-live { border-color: var(--accent-ring); }
+  .sync-check { font-size: 10px; color: var(--text-dim); font-family: var(--mono); flex-shrink: 0; }
+  .sync-config { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .sync-meta { display: flex; align-items: center; gap: var(--sp-2); }
+  .sync-meta label { font-size: 11px; color: var(--text-sub); flex-shrink: 0; }
+  /* Wide enough for the longest option ("5 minutes") plus the chevron's 26px
+     of right padding — it used to hug its content and clip the label. */
+  .sync-interval { min-width: 132px; }
+  .sync-now { margin-left: auto; flex-shrink: 0; }
+  .sync-hint { font-size: 10px; color: var(--text-sub); line-height: 1.5; }
+
+  /* Reset row: a quiet, secondary zone below the sync config — not styled as
+     a call to action, since resetting is the exception, not something anyone
+     reaches for on a normal visit. .link-btn.is-danger only appears for the
+     ~4s "click again to confirm" window (see resetFileBtn's click handler). */
+  .reset-row { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+  .reset-hint { font-size: 10px; color: var(--text-dim); line-height: 1.5; }
+  .link-btn.is-danger { color: var(--error); }
+
+  /* Progressive disclosure for the walkthrough. It used to sit open forever,
+     costing ~9 permanent lines to explain a two-field form to people who read
+     token JSON for a living. */
+  .ov-help > summary {
+    font-size: 11px; color: var(--text-sub); cursor: pointer;
+    padding: 2px 2px; border-radius: 4px; list-style: none;
+    display: flex; align-items: center; gap: 6px;
+    transition: color 140ms var(--ease);
+  }
+  .ov-help > summary::-webkit-details-marker { display: none; }
+  .ov-help > summary::before {
+    content: '›'; font-size: 13px; line-height: 1;
+    transition: transform 160ms var(--ease);
+  }
+  .ov-help[open] > summary::before { transform: rotate(90deg); }
+  .ov-help > summary:hover { color: var(--text); }
+  .ov-help > summary:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .ov-help .help-list { margin-top: var(--sp-2); padding-left: 22px; line-height: 1.7; }
+  .ov-help .asset-list { margin-top: var(--sp-2); }
+
+  /* JSON viewer with a line-number gutter */
+  .json-view {
+    flex: 1; min-height: 120px; overflow: auto;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    font-family: var(--mono); font-size: 10px; line-height: 1.65;
+    padding: 8px 0;
+  }
+  .json-line { display: flex; white-space: pre; }
+  .json-line:hover { background: var(--surface2); }
+  .json-n {
+    width: 34px; flex-shrink: 0; text-align: right; padding-right: 8px;
+    color: var(--text-dim); user-select: none;
+  }
+  .json-t { padding-right: 10px; color: var(--text-sub); }
+  .json-more { padding: 6px 12px; font-size: 10px; color: var(--text-dim); }
+
+  .empty {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 6px; text-align: center;
+    color: var(--text-dim); padding: 24px 20px;
+  }
+  .empty-icon { font-size: 19px; opacity: 0.55; }
+  .empty-main { font-size: 12px; font-weight: 500; color: var(--text-sub); }
+  .empty-sub { font-size: 11px; }
+
+  /* ── Log ── */
+  .log-wrap {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px;
+    font-family: var(--mono); font-size: 10px; line-height: 1.7;
+    flex: 1; min-height: 140px; overflow-y: auto; color: var(--text-sub);
+  }
+  .log-wrap:empty::before { content: 'No activity yet — imports and exports are logged here.'; color: var(--text-dim); }
+  .log-line { display: block; }
+  .log-line.success { color: var(--success); }
+  .log-line.error   { color: var(--error); }
+  .log-line.heading { color: var(--text); font-weight: 600; }
+  .log-card { flex: 1; min-height: 0; }
+
+  /* ── Footer ── */
+  .footer {
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+    background: var(--bg);
+  }
+  .footer-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--text-sub); }
+  .footer-hint.error { color: var(--error); }
+
+  /* ── Drop zone ── */
+  .drop-zone {
+    border: 1.5px dashed var(--border2);
+    border-radius: var(--radius);
+    padding: 20px 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; cursor: pointer; text-align: center;
+    transition: border-color 140ms var(--ease), background 140ms var(--ease);
+    min-height: 96px; user-select: none;
+  }
+  .drop-zone:hover { border-color: var(--text-dim); background: var(--surface2); }
+  .drop-zone.drag-active { border-color: var(--accent); border-style: solid; background: var(--accent-soft); }
+  .drop-zone.loaded { border-color: var(--success); border-style: solid; background: var(--success-tint); }
+  .drop-icon { font-size: 17px; line-height: 1.2; color: var(--text-dim); transition: color 140ms var(--ease); }
+  .drag-active .drop-icon { color: var(--accent); }
+  .loaded .drop-icon      { color: var(--success); }
+  .drop-main { font-size: 12px; font-weight: 500; color: var(--text-sub); transition: color 140ms var(--ease); }
+  .drag-active .drop-main { color: var(--accent); }
+  .loaded .drop-main      { color: var(--success); }
+  .drop-hint { font-size: 10px; color: var(--text-dim); }
+
+  .or-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 9px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.07em; flex-shrink: 0;
+  }
+  .or-row::before, .or-row::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* ── Review list ── */
+  .review-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  .review-item:last-child { border-bottom: none; padding-bottom: 0; }
+  .review-mark { font-size: 11px; line-height: 1.4; flex-shrink: 0; width: 14px; text-align: center; }
+  .review-mark.yes { color: var(--success); }
+  .review-mark.no  { color: var(--text-dim); }
+  .review-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .review-text span { font-size: 12px; font-weight: 500; }
+  .review-text small { font-size: 11px; color: var(--text-sub); line-height: 1.45; }
+  .review-item.off .review-text span { color: var(--text-dim); font-weight: 400; }
+
+  /* ── States ── */
+  .hidden { display: none !important; }
+  .parse-error { font-size: 11px; color: var(--error); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+</style>
+<script>
+// Real theme detection — reads the RAW --figma-color-bg Figma injects
+// directly (NOT our own --bg, which is now a fixed Escala hex per theme and
+// would be circular to read here) rather than trusting prefers-color-scheme,
+// which tracks the OS/browser and can disagree with Figma's own light/dark
+// setting. Runs here, before <body>, so [data-theme] is set before first
+// paint (no flash).
+;(function () {
+  function luminance(color) {
+    if (!color) return null
+    color = color.trim()
+    var r, g, b
+    if (color[0] === '#') {
+      var h = color.slice(1)
+      if (h.length === 3) h = h.split('').map(function (c) { return c + c }).join('')
+      if (h.length < 6) return null
+      r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16)
+    } else {
+      var m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/)
+      if (!m) return null
+      r = parseFloat(m[1]); g = parseFloat(m[2]); b = parseFloat(m[3])
+    }
+    if ([r, g, b].some(function (n) { return Number.isNaN(n) })) return null
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  }
+
+  function applyTheme() {
+    var raw = getComputedStyle(document.documentElement).getPropertyValue('--figma-color-bg')
+    var l = luminance(raw)
+    if (l === null) {
+      // Not running inside Figma (e.g. this file opened directly in a
+      // browser) — fall back to the OS/browser preference so a local preview
+      // still looks reasonable instead of always defaulting to light.
+      l = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 0 : 1
+    }
+    document.documentElement.setAttribute('data-theme', l < 0.5 ? 'dark' : 'light')
+  }
+
+  applyTheme()
+  // Figma's own theme can't change mid-session for an already-open plugin,
+  // but re-check once more after full parse in case --figma-color-bg landed
+  // after this early pass (belt and suspenders, not a live theme switcher).
+  document.addEventListener('DOMContentLoaded', applyTheme)
+})()
+</script>
+</head>
+<body>
+
+<!-- ── Icon rail ── -->
+<nav class="rail" aria-label="Sections">
+  <div class="rail-logo" aria-hidden="true">
+    <svg width="32" height="32" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <g clip-path="url(#railLogoClip)">
+        <rect width="128" height="128" rx="34" fill="white"/>
+        <rect width="128" height="128" fill="url(#railLogoGradient)"/>
+        <path d="M106 39.8481V87.898L64.3867 111.925L22.7734 87.898V39.8481L64.3867 15.8214L106 39.8481ZM29.6536 43.8189V83.9238L64.3867 103.98L99.1199 83.9238V43.8189L64.3867 23.7631L29.6536 43.8189Z" fill="white"/>
+        <path opacity="0.3" d="M91.6095 52.8753L88.1292 63.9582L91.5972 75.0166L81.3524 80.4527L75.9405 90.7366L64.8473 87.2581L53.7814 90.7186L48.3392 80.483L38.0794 75.098L41.5247 63.9899L38.0566 52.9314L48.3361 47.5212L53.7116 37.2127L64.8051 40.6914L75.8724 37.2294L81.3143 47.465L91.6095 52.8753V52.8753" fill="white"/>
+        <path d="M88.0666 73.2848C80.1023 71.8979 73.2116 78.8453 74.5659 86.793C69.8877 80.204 60.0955 80.1852 55.4601 86.8069C56.8379 78.8381 49.8879 71.9403 41.9451 73.2874C48.527 68.6141 48.5341 58.8196 41.9121 54.1749C49.8786 55.5617 56.7671 48.6144 55.4128 40.6666C60.0906 47.2556 69.8832 47.2721 74.5186 40.6528C73.1412 48.6192 80.0934 55.519 88.0336 54.1722C81.454 58.8455 81.4446 68.64 88.0666 73.2848V73.2848" fill="white"/>
+      </g>
+      <defs>
+        <radialGradient id="railLogoGradient" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(64 64) rotate(90) scale(64)">
+          <stop stop-color="#7003FF"/>
+          <stop offset="0.451149" stop-color="#B47AFF"/>
+          <stop offset="1" stop-color="#6D19DB"/>
+        </radialGradient>
+        <clipPath id="railLogoClip">
+          <rect width="128" height="128" rx="34" fill="white"/>
+        </clipPath>
+      </defs>
+    </svg>
+  </div>
+  <button class="rail-btn active" id="railHome"   data-view="home"   data-label="Overview"     aria-label="Overview">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M3 9.5L12 3L21 9.5V20C21 20.5523 20.5523 21 20 21H15V14H9V21H4C3.44772 21 3 20.5523 3 20V9.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="rail-btn"        id="railGuide"  data-view="guide"  data-label="Guided setup" aria-label="Guided setup">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M11.223 2.43177C11.5066 2.27421 11.6484 2.19543 11.7985 2.16454C11.9315 2.13721 12.0685 2.13721 12.2015 2.16454C12.3516 2.19543 12.4934 2.27421 12.777 2.43177L20.177 6.54288C20.4766 6.70928 20.6263 6.79248 20.7354 6.91082C20.8318 7.01551 20.9049 7.13959 20.9495 7.27477C21 7.42756 21 7.59889 21 7.94153V16.0586C21 16.4013 21 16.5726 20.9495 16.7254C20.9049 16.8606 20.8318 16.9847 20.7354 17.0893C20.6263 17.2077 20.4766 17.2909 20.177 17.4573L12.777 21.5684C12.4934 21.726 12.3516 21.8047 12.2015 21.8356C12.0685 21.863 11.9315 21.863 11.7985 21.8356C11.6484 21.8047 11.5066 21.726 11.223 21.5684L3.82297 17.4573C3.52345 17.2909 3.37369 17.2077 3.26463 17.0893C3.16816 16.9847 3.09515 16.8606 3.05048 16.7254C3 16.5726 3 16.4013 3 16.0586V7.94153C3 7.59889 3 7.42756 3.05048 7.27477C3.09515 7.13959 3.16816 7.01551 3.26463 6.91082C3.37369 6.79248 3.52345 6.70928 3.82297 6.54288L11.223 2.43177Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="rail-btn"        id="railExport" data-view="export" data-label="Export"       aria-label="Export">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12 3V15M12 15L7 10M12 15L17 10M4 17V19C4 20.1046 4.89543 21 6 21H18C19.1046 21 20 20.1046 20 19V17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="rail-btn"        id="railLog"    data-view="log"    data-label="Activity log" aria-label="Activity log">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 12H21.5M6 16H10M8.96656 4H15.0334C16.1103 4 16.6487 4 17.1241 4.16396C17.5445 4.30896 17.9274 4.5456 18.2451 4.85675C18.6043 5.2086 18.8451 5.6902 19.3267 6.65337L21.4932 10.9865C21.6822 11.3645 21.7767 11.5535 21.8434 11.7515C21.9026 11.9275 21.9453 12.1085 21.971 12.2923C22 12.4992 22 12.7105 22 13.1331V15.2C22 16.8802 22 17.7202 21.673 18.362C21.3854 18.9265 20.9265 19.3854 20.362 19.673C19.7202 20 18.8802 20 17.2 20H6.8C5.11984 20 4.27976 20 3.63803 19.673C3.07354 19.3854 2.6146 18.9265 2.32698 18.362C2 17.7202 2 16.8802 2 15.2V13.1331C2 12.7105 2 12.4992 2.02897 12.2923C2.05471 12.1085 2.09744 11.9275 2.15662 11.7515C2.22326 11.5535 2.31776 11.3645 2.50675 10.9865L4.67331 6.65337C5.1549 5.69019 5.3957 5.2086 5.75495 4.85675C6.07263 4.5456 6.45551 4.30896 6.87589 4.16396C7.35125 4 7.88969 4 8.96656 4Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span class="rail-dot hidden" id="logDot"></span>
+  </button>
+  <div class="rail-spacer"></div>
+  <button class="rail-btn" id="closeBtn" data-label="Close" aria-label="Close plugin">✕</button>
+</nav>
+
+<div class="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-text">
+      <div class="header-title" id="viewTitle">Set up your design system</div>
+      <div class="header-sub"   id="viewSub">Four steps — source, scope, review, import.</div>
+    </div>
+    <div class="header-actions">
+      <button class="link-btn hidden" id="skipBtn">Skip to expert mode →</button>
+      <button class="link-btn hidden" id="guideBtn">← Back to guided setup</button>
+    </div>
+  </div>
+
+  <!-- Step bar (guided mode only) -->
+  <div class="steps" id="stepBar">
+    <button class="step active" data-step="0"><span class="step-num">1</span>Source</button>
+    <div class="step-sep"></div>
+    <button class="step" data-step="1"><span class="step-num">2</span>What to import</button>
+    <div class="step-sep"></div>
+    <button class="step" data-step="2"><span class="step-num">3</span>Review</button>
+    <div class="step-sep"></div>
+    <button class="step" data-step="3"><span class="step-num">4</span>Import</button>
+  </div>
+
+  <!-- Hidden file input (triggered by drop zone click) -->
+  <input type="file" id="fileInput" accept=".json,application/json" style="display:none" />
+
+  <div class="body">
+
+    <!-- ── Main column ── -->
+    <div class="main" id="main">
+
+      <!-- Panel: Overview (home) — the connected system, rendered from the last
+           imported payload. Read-only by design: the web is the source of
+           truth, this is the window onto it. -->
+      <div class="panel hidden ov-grid" id="panel-home">
+       <!-- Left column: what this file is connected to (read-only facts). -->
+       <div class="ov-col">
+        <!-- Identity + Foundations in ONE card: they answer the same question
+             ("which system is this file on"), and as two bordered boxes they
+             competed for the top of the screen. A hairline groups them. -->
+        <div id="homeConnected" class="ov-col hidden">
+          <div class="card">
+            <div class="ov-hero">
+              <div class="ov-chip" id="ovAccentChip"></div>
+              <div class="ov-hero-text">
+                <b id="ovProject">—</b>
+                <small id="ovAccentHex">—</small>
+              </div>
+            </div>
+            <div class="ramp" id="ovRamp"></div>
+            <div class="ramp-label"><span>1</span><span>accent</span><span>12</span></div>
+
+            <!-- The two ways forward sit directly under the ramp, inside the
+                 identity card. They used to live at the very bottom of the
+                 column, below the metadata and the file checklist — which put
+                 the only two actions on this screen past everything that is
+                 merely informative, and off-screen entirely on a short plugin
+                 window. -->
+            <div class="ov-actions">
+              <button class="btn btn-secondary btn-sm" id="ovEditBtn">Edit on the web ↗</button>
+              <button class="btn btn-secondary btn-sm" id="ovImportBtn">Import into this file</button>
+            </div>
+
+            <div class="ov-divide"></div>
+
+            <div class="token-meta">
+              <div class="meta-pill"><span class="mk">Typeface</span><span class="mv" id="ovFont">—</span></div>
+              <div class="meta-pill"><span class="mk">Semantics</span><span class="mv" id="ovArch">—</span></div>
+              <div class="meta-pill"><span class="mk">Themes</span><span class="mv" id="ovThemes">—</span></div>
+              <div class="meta-pill"><span class="mk">Last import</span><span class="mv" id="ovLastImport">—</span></div>
+            </div>
+            <div class="ov-states-row">
+              <span class="mk">States</span>
+              <div class="ov-states" id="ovStates"></div>
+            </div>
+          </div>
+
+          <!-- What's actually IN the file, as opposed to which system it's on.
+               Without this there was no way to notice the pages were missing —
+               the state every file that has only ever Live-Synced is in, since
+               a sync refreshes variables and never builds pages.
+
+               Missing pages now build themselves (see maybeAutoBuild) the
+               moment the file reports them, so this card is no longer a
+               chore — it's a status readout. The itemised list and the manual
+               "Build them" fallback (for a failed auto-attempt, or picking
+               through what landed) sit behind a closed disclosure instead of
+               forcing everyone to look at a checklist for something that
+               already happened. -->
+          <div class="card">
+            <div class="card-row">
+              <div class="card-title">In this file</div>
+              <span class="asset-count" id="ovVarCount"></span>
+            </div>
+            <details class="ov-help">
+              <summary>What's included</summary>
+              <div class="asset-list" id="ovAssets"></div>
+              <div class="asset-foot hidden" id="ovAssetsMissing">
+                <span id="ovAssetsMissingText"></span>
+                <button class="btn btn-secondary btn-sm" id="ovBuildBtn">Build them</button>
+              </div>
+            </details>
+          </div>
+
+          <div class="ov-continue">
+            <p>Custom families, themes, gradients, shadows and components live on the web.</p>
+          </div>
+        </div>
+
+        <div id="homeEmpty" class="card ov-empty">
+          <div class="card-title">No system connected yet</div>
+          <p>
+            Build your system in the Escala configurator — colors, semantics, typography,
+            spacing and radius — then bring it into this file.
+          </p>
+          <div class="ov-actions">
+            <button class="btn btn-primary btn-sm" id="ovCreateBtn">Create on escalatokens.com ↗</button>
+            <button class="btn btn-secondary btn-sm" id="ovHaveBtn">I already have a tokens.json</button>
+          </div>
+        </div>
+       </div>
+
+       <!-- Right column: the one surface here that has a running state.
+            Live Sync folded into Overview — it used to be its own rail tab,
+            but every path to it started here and ended with "now go to another
+            screen to paste the URL". Present in both Overview states, empty or
+            connected, so pasting a sync URL never means leaving this panel. -->
+       <div class="ov-col">
+        <div class="card ov-sync" id="homeSyncCard">
+          <!-- Status first. This is a recurring check, not a procedure: the
+               question it answers is "is it running / when did it last look",
+               so the answer comes before the configuration. The explanatory
+               paragraph that used to lead is gone — two labelled fields don't
+               need three lines of preamble.
+
+               The toggle used to live up here, detached from the URL it
+               acts on, with a separate "Test" button doing an overlapping
+               check down in sync-config — two controls that both amounted to
+               "try this URL", in two different places. startSync() already
+               runs a real fetch on its first tick (see fetchAndSync), so
+               there was nothing "Test" did that pressing sync itself
+               doesn't. One button now, sitting right next to the field it
+               reads. -->
+          <div class="card-title">Live Sync</div>
+          <div class="sync-row">
+            <div class="sync-dot" id="syncDot"></div>
+            <span class="sync-status" id="syncStatus">Not active</span>
+            <span class="sync-check" id="syncLastCheck"></span>
+          </div>
+
+          <div class="sync-config">
+            <div class="input-row">
+              <input type="text" id="syncUrl" value="" placeholder="https://www.escalatokens.com/api/tokens?project=your-system" aria-label="Sync URL" />
+              <button class="btn btn-sm btn-secondary" id="syncToggleBtn">Start sync</button>
+            </div>
+            <div class="sync-meta">
+              <label for="syncInterval">Check every</label>
+              <span class="select-wrap sync-interval">
+                <select id="syncInterval">
+                  <option value="10">10 seconds</option>
+                  <option value="30" selected>30 seconds</option>
+                  <option value="60">1 minute</option>
+                  <option value="300">5 minutes</option>
+                </select>
+              </span>
+              <!-- The interval is a floor on how stale this file can get, not a
+                   queue anyone should have to wait in: publish on the web, press
+                   this, see it now. Works whether or not sync is running. -->
+              <button class="btn btn-sm btn-secondary sync-now" id="syncNowBtn" type="button"
+                      title="Check the publish URL right now instead of waiting for the next check">Update now</button>
+            </div>
+            <span class="sync-hint">Scope to one system with <code>?project=name</code></span>
+          </div>
+          <div class="ov-divide"></div>
+          <!-- Disconnects THIS file only: clears its imported system and its
+               sync connection so it starts exactly like a brand-new file.
+               Lives here, not in homeConnected, because it has to be reachable
+               even when the file has no system yet but Live Sync is running. -->
+          <div class="reset-row">
+            <button class="link-btn" id="resetFileBtn" type="button">Reset this file</button>
+            <span class="reset-hint">Disconnects the system and sync URL from this file only.</span>
+          </div>
+        </div>
+
+        <details class="ov-help">
+          <summary>How Live Sync works</summary>
+          <ol class="help-list">
+            <li>In the configurator, open <strong>Bring to Figma</strong> and publish your tokens</li>
+            <li>Paste the URL above, then press <strong>Start sync</strong></li>
+            <li>Re-publish on the web → this file updates on its own</li>
+            <li>No login needed — the endpoint is public and read-only. Tokens living in a Git repo aren't covered: download <code>tokens.json</code> and use Import instead.</li>
+          </ol>
+        </details>
+       </div>
+      </div>
+
+      <!-- Panel: Source (step 1 / expert) -->
+      <div class="panel hidden" id="panel-source">
+        <div class="step-intro guide-only">
+          <h2>Where do your tokens come from?</h2>
+          <p>Drop the <code>tokens.json</code> exported from the
+             <a href="https://www.escalatokens.com" target="_blank" rel="noopener" style="color:var(--accent)">Escala configurator</a>,
+             paste it, or pull it straight from the publish URL.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Token source</div>
+
+          <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Load a tokens.json file">
+            <div class="drop-icon" aria-hidden="true">↑</div>
+            <div class="drop-main">Drop tokens.json here</div>
+            <div class="drop-hint">or click to browse a file</div>
+          </div>
+
+          <div class="or-row">or paste manually</div>
+
+          <textarea id="jsonInput" aria-label="Paste tokens.json" placeholder='{"project":"My App","colors":{...}}'></textarea>
+          <div id="parseError" class="hidden parse-error"></div>
+
+          <div class="card-row">
+            <button class="btn btn-secondary btn-sm" id="pasteBtn">Paste from clipboard</button>
+            <button class="btn btn-secondary btn-sm" id="fetchUrlBtn">Fetch from publish URL</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Scope (step 2 / expert) -->
+      <div class="panel hidden" id="panel-scope">
+        <div class="step-intro guide-only">
+          <h2>What should land in this file?</h2>
+          <p>Pick what the import writes. You can re-run it any time — each pass overwrites its own layer only.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Import scope</div>
+          <div class="scope-grid">
+            <button class="scope on" id="scopeVariables" data-opt="optVariables" type="button" aria-pressed="true">
+              <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Variables</span></div>
+              <small>Colors, spacing, radius and typography as Figma Variables</small>
+            </button>
+            <button class="scope on" id="scopeStyles" data-opt="optStyles" type="button" aria-pressed="true">
+              <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Styles</span></div>
+              <small>Text styles, gradient paints, shadow effects, grid</small>
+            </button>
+            <button class="scope on" id="scopeComponents" data-opt="optComponents" type="button" aria-pressed="true">
+              <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Components Overview</span></div>
+              <small>One page showing your tokens on real components</small>
+            </button>
+            <button class="scope on" id="scopeDocs" data-opt="optDocs" type="button" aria-pressed="true">
+              <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Documentation</span></div>
+              <small>Cover and handoff boards — bound to variables</small>
+            </button>
+            <!-- Off by default: this is 351 SVG components plus a network
+                 fetch, and it used to be forced on by the Components tick. -->
+            <button class="scope" id="scopeIcons" data-opt="optIcons" type="button" aria-pressed="false">
+              <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Icon library</span></div>
+              <small>Generates the icon set as components — slow, rarely needed</small>
+            </button>
+          </div>
+          <!-- Real checkboxes keep the sandbox contract unchanged -->
+          <div class="hidden">
+            <input type="checkbox" id="optVariables"  checked />
+            <input type="checkbox" id="optStyles"     checked />
+            <input type="checkbox" id="optComponents" checked />
+            <input type="checkbox" id="optDocs"       checked />
+            <input type="checkbox" id="optIcons" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Review (step 3, guided only) -->
+      <div class="panel hidden" id="panel-review">
+        <div class="step-intro">
+          <h2>Ready to import</h2>
+          <p>Here's exactly what the plugin will write into this Figma file.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Summary</div>
+          <div id="reviewList"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Keep it in sync (optional)</div>
+          <div class="row">
+            <div class="row-label">
+              <span>Live Sync</span>
+              <small>Re-import automatically whenever you publish new tokens on the web.</small>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="reviewSyncBtn">Set up</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Run (step 4, guided only) -->
+      <div class="panel hidden" id="panel-run">
+        <div class="step-intro">
+          <h2 id="runTitle">Importing…</h2>
+          <p id="runSub">Watch the log on the right — each phase reports as it lands.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Next steps</div>
+          <ol class="help-list">
+            <li>Open the <strong>⬡ Cover</strong> page — it's the entry point of the file</li>
+            <li>Check <strong>⬡ Documentation</strong> for the handoff boards</li>
+            <li>Turn on <strong>Live Sync</strong> so web edits keep flowing in</li>
+          </ol>
+          <div class="card-row" style="margin-top:2px;">
+            <button class="btn btn-secondary btn-sm" id="runSyncBtn">Set up Live Sync</button>
+            <button class="btn btn-secondary btn-sm" id="runAgainBtn">Start over</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Export (expert only) -->
+      <div class="panel hidden" id="panel-export">
+        <div class="card">
+          <div class="card-title">Export from this file</div>
+          <div class="row">
+            <div class="row-label">
+              <span>Figma variables</span>
+              <small>Every local collection, mode and value — works in any file</small>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="exportVarsBtn">Export</button>
+          </div>
+          <div class="row">
+            <div class="row-label">
+              <span>tokens.json</span>
+              <small>Last synced payload — re-import it in the configurator</small>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="exportTokensBtn" disabled>Export</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel: Log (full width view) -->
+      <div class="panel hidden" id="panel-log" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+        <div class="card log-card">
+          <div class="card-row">
+            <div class="card-title">Activity log</div>
+            <button class="btn btn-sm btn-secondary" id="clearLogBtn">Clear</button>
+          </div>
+          <div class="log-wrap" id="logBoxFull" aria-live="polite"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Aside: preview / log ── -->
+    <aside class="aside" id="aside">
+      <div class="aside-head">
+        <div class="card-title" id="asideTitle">Token preview</div>
+        <div style="display:flex;gap:6px;">
+          <button class="link-btn" id="asideTabTokens">Tokens</button>
+          <button class="link-btn" id="asideTabLog" style="color:var(--text-dim)">Activity</button>
+        </div>
+      </div>
+
+      <div class="aside-body" id="asidePaneTokens">
+        <div class="empty" id="previewEmpty">
+          <div class="empty-icon" aria-hidden="true">◇</div>
+          <div class="empty-main">No tokens loaded yet</div>
+          <div class="empty-sub">Drop or paste a tokens.json to see it here</div>
+        </div>
+        <div class="hidden" id="previewLoaded" style="display:flex;flex-direction:column;gap:12px;flex:1;min-height:0;">
+          <div class="token-meta" id="tokenMeta"></div>
+          <div class="json-view" id="jsonView"></div>
+        </div>
+      </div>
+
+      <div class="aside-body hidden" id="asidePaneLog">
+        <div class="log-wrap" id="logBox" aria-live="polite"></div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Progress — global on purpose: a Live Sync import can start from any view,
+       so this can't live inside the guided Run panel. -->
+  <div class="progress hidden" id="progressBar">
+    <div class="progress-head">
+      <span id="progressPhase">Working…</span>
+      <span id="progressCount"></span>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-note hidden" id="progressStall"></div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span class="footer-hint" id="footerHint">Load a tokens.json to continue.</span>
+    <button class="btn btn-secondary btn-sm hidden" id="backBtn">Back</button>
+    <button class="btn btn-primary" id="primaryBtn" disabled>Continue</button>
+  </div>
+
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let parsedTokens   = null
+let syncTimer      = null
+let syncRunning    = false
+let lastHash       = null   // hash of the last imported token payload (persisted)
+let importInFlight = false  // an import is running in the sandbox — don't overlap
+let failCount      = 0
+
+// Shell state: `view` is what the rail selects; in guided mode the Import view
+// is driven by `step` instead of showing every panel at once.
+let guided   = true    // false = expert mode (all panels, no step bar)
+let step     = 0       // 0 source · 1 scope · 2 review · 3 run
+let view     = 'home'  // home | guide | import | sync | log
+
+// The system this file is connected to: the last payload that was imported,
+// restored from clientStorage on boot. Distinct from `parsedTokens`, which is
+// whatever is staged in the Source step and may not be imported yet.
+let storedTokens = null
+let lastImportAt = null   // ISO string, persisted in settings
+let booted       = false  // clientStorage has answered — see renderHome
+// What the sandbox reports is actually in this file (pages + variable counts).
+// null until it answers — see renderAssets for why that's not the same as
+// "nothing is here".
+let fileAssets   = null
+// Guards maybeAutoBuild to one attempt per window session — otherwise every
+// Live Sync tick re-reports assets (see the 'assets' handler) and would retry
+// forever against, say, an offline network instead of leaving the manual
+// "Build them" fallback for the user to reach for.
+let autoBuildAttempted = false
+let asidePane = 'tokens'
+let guideDone = false  // completed the walkthrough at least once → open in expert
+
+const $ = (id) => document.getElementById(id)
+
+// djb2 string hash — cheap change detection for token payloads
+function hashStr(s) {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return String(h)
+}
+
+// The scope for an EXPLICIT import (the button). Live Sync does not use this —
+// see fetchAndSync, which only ever refreshes variables and styles.
+function currentOptions() {
+  return {
+    importVariables:  $('optVariables').checked,
+    importStyles:     $('optStyles').checked,
+    importComponents: $('optComponents').checked,
+    importIcons:      $('optIcons').checked,
+    importDocs:       $('optDocs').checked,
+  }
+}
+
+// Persist tool PREFERENCES in figma.clientStorage (via the sandbox) so they
+// survive closing the plugin. Deliberately user-scoped, not file-scoped —
+// check interval and import scope are things someone sets once and reasonably
+// expects in every file. `url` and `autoStart` used to live in this same
+// object, which meant a brand-new file inherited another file's sync
+// connection and could auto-start syncing against it on open — reported bug.
+// Both now live in `saveFileSync()` below, file-scoped, and `lastHash` /
+// `lastImportAt` are derived from this file's own record on the 'settings'
+// message — see below.
+function saveSettings() {
+  parent.postMessage({ pluginMessage: { type: 'save-settings', settings: {
+    interval: $('syncInterval').value,
+    options: currentOptions(),
+    buildPrefs,
+    guideDone,
+    onboardingDismissed: guideDone,   // legacy key, kept for older stored blobs
+  } } }, '*')
+}
+
+// This file's sync CONNECTION — which URL, and whether it should resume on
+// open. File-scoped (figma.root.pluginData, via the sandbox) so a brand-new
+// file has no connection until someone starts one IN THAT FILE; see
+// FILE_SYNC_KEY in code.ts for the full reasoning.
+function saveFileSync() {
+  parent.postMessage({ pluginMessage: { type: 'save-file-sync',
+    url: $('syncUrl').value.trim(),
+    autoStart: syncRunning,
+  } }, '*')
+}
+
+// ─── Shell: rail, panels, steps, footer ──────────────────────────────────────
+const PANELS = ['home', 'source', 'scope', 'review', 'run', 'export', 'log']
+const STEP_PANEL = ['source', 'scope', 'review', 'run']
+
+const VIEW_COPY = {
+  home:   ['Your design system', 'What this file is connected to.'],
+  guide:  ['Set up your design system', 'Four steps — source, scope, review, import.'],
+  // 'import' has no rail button of its own — it's the consolidated screen
+  // returning users land on (source + scope + export together), reached via
+  // "Skip to expert mode" or automatically once the wizard's been completed
+  // once. The Guided setup rail icon covers both that screen and the wizard.
+  import: ['Import', 'Everything in one place: source, scope and export.'],
+  export: ['Export', 'Send this file’s variables or the last synced tokens back out.'],
+  log:    ['Activity log', 'Every import and export phase, newest last.'],
+}
+
+function showPanels(names) {
+  PANELS.forEach((p) => $('panel-' + p).classList.toggle('hidden', !names.includes(p)))
+}
+
+function render() {
+  // Rail highlight. 'import' (the consolidated expert screen) has no button
+  // of its own — it's still part of the "Guided setup" journey, just its
+  // fast-forwarded form — so the Guide icon stays lit while it's showing.
+  document.querySelectorAll('.rail-btn[data-view]').forEach((b) =>
+    b.classList.toggle('active', b.dataset.view === view || (b.dataset.view === 'guide' && view === 'import')))
+
+  // The review summary reflects both the payload and the scope toggles, so it
+  // has to be rebuilt on every render — not only when a payload is parsed.
+  if (parsedTokens) renderReview()
+
+  const inGuide = view === 'guide'
+  $('stepBar').classList.toggle('hidden', !inGuide)
+  $('skipBtn').classList.toggle('hidden', !inGuide)
+  $('guideBtn').classList.toggle('hidden', view !== 'import')
+  document.querySelectorAll('.guide-only').forEach((el) => el.classList.toggle('hidden', !inGuide))
+  // The aside previews the STAGED payload; Overview is about the CONNECTED one,
+  // so showing both side by side would put two different systems on screen.
+  $('aside').classList.toggle('hidden', view === 'log' || view === 'home')
+
+  if (inGuide) {
+    showPanels([STEP_PANEL[step]])
+    const [t, s] = VIEW_COPY.guide
+    $('viewTitle').textContent = t
+    $('viewSub').textContent = s
+    renderSteps()
+  } else {
+    const [t, s] = VIEW_COPY[view]
+    $('viewTitle').textContent = t
+    $('viewSub').textContent = s
+    if (view === 'home')        { showPanels(['home']); renderHome() }
+    else if (view === 'import') showPanels(['source', 'scope', 'export'])
+    else if (view === 'export') showPanels(['export'])
+    else if (view === 'log')    showPanels(['log'])
+  }
+
+  renderFooter()
+}
+
+function renderSteps() {
+  document.querySelectorAll('.step').forEach((b) => {
+    const i = Number(b.dataset.step)
+    b.classList.toggle('active', i === step)
+    b.classList.toggle('done', i < step)
+    b.disabled = !stepReachable(i)
+    b.querySelector('.step-num').textContent = i < step ? '✓' : String(i + 1)
+  })
+}
+
+// Step 2+ needs a parsed payload; step 4 is only reachable by importing.
+function stepReachable(i) {
+  if (i === 0) return true
+  if (i === 3) return step === 3
+  return !!parsedTokens
+}
+
+function anyScopeOn() {
+  const o = currentOptions()
+  return o.importVariables || o.importStyles || o.importComponents || o.importDocs
+}
+
+function renderFooter() {
+  const primary = $('primaryBtn')
+  const back    = $('backBtn')
+  const hint    = $('footerHint')
+  hint.classList.remove('error')
+  primary.classList.remove('hidden')
+  back.classList.add('hidden')
+
+  if (view === 'home') {
+    // Overview is a dashboard, not a step — every action it offers is a button
+    // inside a card, so the footer would only duplicate one of them.
+    primary.classList.add('hidden')
+    hint.textContent = storedTokens
+      ? 'Edit on the web, then sync or re-import to update this file.'
+      : 'Build your system on escalatokens.com, then bring it here.'
+    return
+  }
+  if (view === 'log') {
+    primary.textContent = 'Close'
+    primary.disabled = false
+    hint.textContent = 'Logs are kept for this session only.'
+    return
+  }
+  if (view === 'export') {
+    // Each row in the Export panel has its own button — no single global
+    // action applies to both, so the footer just hints instead of duplicating.
+    primary.classList.add('hidden')
+    hint.textContent = 'Pick what to export above — each button downloads its own file.'
+    return
+  }
+  if (view === 'import') {
+    primary.textContent = importInFlight ? 'Importing…' : 'Import into Figma'
+    primary.disabled = !parsedTokens || importInFlight || !anyScopeOn()
+    hint.textContent = !parsedTokens ? 'Load a tokens.json to continue.'
+      : !anyScopeOn() ? 'Select at least one thing to import.'
+      : `Ready — "${parsedTokens.project || 'Untitled'}".`
+    return
+  }
+
+  // Guided
+  back.classList.toggle('hidden', step === 0)
+  back.textContent = 'Back'
+  if (step === 0) {
+    primary.textContent = 'Continue'
+    primary.disabled = !parsedTokens
+    hint.textContent = parsedTokens
+      ? `Loaded "${parsedTokens.project || 'Untitled'}" — continue to pick what to import.`
+      : 'Load a tokens.json to continue.'
+  } else if (step === 1) {
+    primary.textContent = 'Continue'
+    primary.disabled = !anyScopeOn()
+    hint.textContent = anyScopeOn() ? 'Pick as many as you need.' : 'Select at least one thing to import.'
+  } else if (step === 2) {
+    primary.textContent = importInFlight ? 'Importing…' : 'Import into Figma'
+    primary.disabled = importInFlight
+    hint.textContent = 'This writes into the current Figma file.'
+  } else {
+    primary.textContent = importInFlight ? 'Importing…' : 'Done'
+    primary.disabled = importInFlight
+    back.classList.add('hidden')
+    hint.textContent = importInFlight ? 'Import running — hang tight.' : 'Import finished.'
+  }
+}
+
+function goView(v) {
+  // 'import' (no rail button — reached via the skip link or as the returning-
+  // user default) is the expert/consolidated screen; 'guide' always restarts
+  // the step-by-step wizard.
+  if (v === 'import') guided = false
+  if (v === 'guide')  guided = true
+  view = v
+  render()
+}
+
+function goStep(i) {
+  if (!stepReachable(i)) return
+  step = i
+  render()
+}
+
+// Live Sync lives inside Overview now (no view of its own) — this is what
+// every former `goView('sync')` call becomes: land on Overview and put the
+// cursor in the URL field so pasting a sync URL is the very next keystroke.
+function goSync() {
+  goView('home')
+  $('syncUrl').focus()
+}
+
+document.querySelectorAll('.rail-btn[data-view]').forEach((b) =>
+  b.addEventListener('click', () => goView(b.dataset.view)))
+
+document.querySelectorAll('.step').forEach((b) =>
+  b.addEventListener('click', () => goStep(Number(b.dataset.step))))
+
+$('skipBtn').addEventListener('click', () => {
+  guideDone = true
+  saveSettings()
+  goView('import')
+})
+$('guideBtn').addEventListener('click', () => { step = Math.min(step, 2); goView('guide') })
+
+$('backBtn').addEventListener('click', () => { if (step > 0) goStep(step - 1) })
+
+$('primaryBtn').addEventListener('click', () => {
+  if (view === 'log')  { parent.postMessage({ pluginMessage: { type: 'close' } }, '*'); return }
+  if (view === 'import') { runImport(); return }
+  if (step === 0 || step === 1) { goStep(step + 1); return }
+  if (step === 2) { runImport(); return }
+  if (step === 3) { parent.postMessage({ pluginMessage: { type: 'close' } }, '*') }
+})
+
+// ─── Aside tabs ───────────────────────────────────────────────────────────────
+function setAside(pane) {
+  asidePane = pane
+  const isTokens = pane === 'tokens'
+  $('asidePaneTokens').classList.toggle('hidden', !isTokens)
+  $('asidePaneLog').classList.toggle('hidden', isTokens)
+  $('asideTitle').textContent = isTokens ? 'Token preview' : 'Activity log'
+  $('asideTabTokens').style.color = isTokens ? 'var(--accent)' : 'var(--text-dim)'
+  $('asideTabLog').style.color    = isTokens ? 'var(--text-dim)' : 'var(--accent)'
+  if (!isTokens) $('logDot').classList.add('hidden')
+}
+$('asideTabTokens').addEventListener('click', () => setAside('tokens'))
+$('asideTabLog').addEventListener('click', () => setAside('log'))
+
+// ─── Scope cards ↔ hidden checkboxes ─────────────────────────────────────────
+document.querySelectorAll('.scope').forEach((card) => {
+  card.addEventListener('click', () => {
+    const box = $(card.dataset.opt)
+    box.checked = !box.checked
+    syncScopeCards()
+    saveSettings()
+    render()
+  })
+})
+
+function syncScopeCards() {
+  document.querySelectorAll('.scope').forEach((card) => {
+    const on = $(card.dataset.opt).checked
+    card.classList.toggle('on', on)
+    card.setAttribute('aria-pressed', String(on))
+  })
+}
+
+// ─── File / drag-drop ────────────────────────────────────────────────────────
+const dropZone  = $('dropZone')
+const fileInput = $('fileInput')
+
+function loadFile(file) {
+  if (!file) return
+  const ok = file.name.endsWith('.json') || file.type === 'application/json'
+  if (!ok) {
+    addLog(`✗ Only .json files are accepted (got "${file.name}")`, 'error')
+    return
+  }
+  const reader = new FileReader()
+  reader.onerror = () => addLog('✗ Could not read the file', 'error')
+  reader.onload  = (e) => {
+    const text = e.target.result
+    $('jsonInput').value = text
+    const valid = tryParse(text)
+    if (valid) {
+      dropZone.classList.add('loaded')
+      dropZone.querySelector('.drop-icon').textContent = '✓'
+      dropZone.querySelector('.drop-main').textContent = file.name
+      dropZone.querySelector('.drop-hint').textContent =
+        `${(file.size / 1024).toFixed(1)} KB · ready to import`
+      addLog(`Loaded "${file.name}"`, 'success')
+    } else {
+      setDropIdle()
+    }
+  }
+  reader.readAsText(file)
+}
+
+function setDropIdle() {
+  dropZone.classList.remove('loaded', 'drag-active')
+  dropZone.querySelector('.drop-icon').textContent = '↑'
+  dropZone.querySelector('.drop-main').textContent = 'Drop tokens.json here'
+  dropZone.querySelector('.drop-hint').textContent = 'or click to browse a file'
+}
+
+dropZone.addEventListener('click', () => fileInput.click())
+dropZone.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click() }
+})
+fileInput.addEventListener('change', (e) => { loadFile(e.target.files[0]); fileInput.value = '' })
+
+// Block browser default for all drag events (prevents opening the file in the tab)
+;['dragenter','dragover','dragleave','drop'].forEach(ev =>
+  document.addEventListener(ev, e => e.preventDefault(), false)
+)
+
+dropZone.addEventListener('dragenter', () => dropZone.classList.add('drag-active'))
+dropZone.addEventListener('dragover',  () => dropZone.classList.add('drag-active'))
+dropZone.addEventListener('dragleave', (e) => {
+  if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-active')
+})
+dropZone.addEventListener('drop', (e) => {
+  dropZone.classList.remove('drag-active')
+  loadFile(e.dataTransfer.files[0])
+})
+
+// Dropping anywhere in the main column also loads the file
+const mainCol = $('main')
+mainCol.addEventListener('dragenter', () => {
+  if (!$('panel-source').classList.contains('hidden')) dropZone.classList.add('drag-active')
+})
+mainCol.addEventListener('dragleave', (e) => {
+  if (!mainCol.contains(e.relatedTarget)) dropZone.classList.remove('drag-active')
+})
+mainCol.addEventListener('drop', (e) => {
+  dropZone.classList.remove('drag-active')
+  loadFile(e.dataTransfer.files[0])
+})
+
+$('jsonInput').addEventListener('input', () => {
+  if (dropZone.classList.contains('loaded')) setDropIdle()
+})
+
+// ─── Parse helpers ────────────────────────────────────────────────────────────
+
+// The configurator's Export wizard can write the SAME filename
+// (`<slug>.tokens.json`) in two different shapes: the Escala payload this
+// plugin imports (`{ project, colors, typography, … }`) and the W3C DTCG tree
+// (`{ color: { accent: { 1: { $value } } }, semantic: { light: … }, … }`).
+// Downloading the W3C one and dropping it here used to fail with
+// `Missing "colors" field`, which names an Escala field the user never chose
+// to leave out. Read it instead — everything the plugin needs is in there,
+// only spelled differently.
+
+// A DTCG leaf is any object carrying $value; a tree is anything that holds one.
+function isW3CLeaf(n) { return !!n && typeof n === 'object' && '$value' in n }
+
+function w3cHasLeaf(n, depth = 0) {
+  if (isW3CLeaf(n)) return true
+  if (!n || typeof n !== 'object' || depth > 4) return false
+  return Object.keys(n).some((k) => w3cHasLeaf(n[k], depth + 1))
+}
+
+// { a: { b: { $value: v } } } → { 'a.b': v } — one flat map per subtree, so
+// refs (`{color.accent.9}`) resolve by the same dotted path they're written in.
+function w3cFlatten(node, prefix, out) {
+  if (!node || typeof node !== 'object') return out
+  if (isW3CLeaf(node)) { out[prefix] = node.$value; return out }
+  for (const k of Object.keys(node)) {
+    if (k.charAt(0) === '$') continue
+    w3cFlatten(node[k], prefix ? prefix + '.' + k : k, out)
+  }
+  return out
+}
+
+// Values of a subtree keyed by their path RELATIVE to it: `size.md` under
+// `typography` → 'size.md'.
+function w3cSection(root, key) {
+  return root && root[key] ? w3cFlatten(root[key], '', {}) : {}
+}
+
+// The leaf name only (`typography.size.md` → 'md'), for the flat
+// `Record<string,string>` maps the plugin's own shape uses.
+function w3cLeafMap(root, key, strip) {
+  const flat = w3cSection(root, key)
+  const out = {}
+  for (const path of Object.keys(flat)) {
+    if (strip && path.indexOf(strip + '.') !== 0) continue
+    const name = strip ? path.slice(strip.length + 1) : path
+    out[name] = flat[path]
+  }
+  return out
+}
+
+function fromW3C(t) {
+  const missing = []
+
+  // ── Primitives: color.<family>.<tone> → 'family-tone' (`accent-9`,
+  // `neutral-dark-3`), the pre-flattened spelling the rest of the plugin uses.
+  const colorFlat = w3cSection(t, 'color')
+  const primitive = {}
+  const byRef = {}   // '{color.accent.9}' → hex, for the semantic aliases
+  for (const path of Object.keys(colorFlat)) {
+    const v = colorFlat[path]
+    if (typeof v !== 'string') continue
+    primitive[path.split('.').join('-')] = v
+    byRef['{color.' + path + '}'] = v
+  }
+  if (Object.keys(primitive).length === 0) missing.push('color')
+
+  // ── Semantics: semantic.<theme>.<role>, values either hex or a
+  // `{color.family.tone}` reference (the wizard's "Include aliases" toggle).
+  const semFlat = w3cSection(t, 'semantic')
+  const themes = {}
+  let unresolved = 0
+  for (const path of Object.keys(semFlat)) {
+    const dot = path.indexOf('.')
+    if (dot === -1) continue
+    const theme = path.slice(0, dot)
+    const role  = path.slice(dot + 1)
+    let v = semFlat[path]
+    if (typeof v !== 'string') continue
+    if (v.charAt(0) === '{') v = byRef[v] || v
+    // An alias whose primitives this file left out stays unresolved — drop it
+    // rather than writing '{color.accent.9}' into a Figma color variable.
+    if (v.charAt(0) !== '#') { unresolved++; continue }
+    ;(themes[theme] || (themes[theme] = {}))[role] = v
+  }
+  const themeNames = Object.keys(themes)
+  if (themeNames.length === 0) missing.push('semantic')
+
+  const typo = t.typography || {}
+  const fam = w3cSection({ typography: typo }, 'typography')
+  const sizes   = w3cLeafMap({ typography: typo }, 'typography', 'size')
+  const weights = w3cLeafMap({ typography: typo }, 'typography', 'weight')
+  const lines   = w3cLeafMap({ typography: typo }, 'typography', 'lineHeight')
+  if (Object.keys(sizes).length === 0) missing.push('typography')
+
+  const flatOf = (key) => {
+    const m = w3cLeafMap(t, key, '')
+    if (Object.keys(m).length === 0) missing.push(key)
+    return m
+  }
+  const spacing = flatOf('spacing')
+  const radius  = flatOf('radius')
+
+  const icon = w3cSection(t, 'icon')
+
+  return {
+    unresolved,
+    tokens: {
+      // The W3C tree carries no project name — the plugin only uses it for
+      // labels, so a neutral one is honest rather than inventing a slug.
+      project: 'Imported system',
+      colors: {
+        primitive,
+        semantic: themes[themeNames[0]] || {},
+        themes,
+        themeOrder: themeNames,
+      },
+      typography: {
+        fontFamily: fam['fontFamily.body'] || fam['fontFamily.heading'] || 'Inter',
+        headingFontFamily: fam['fontFamily.heading'] || undefined,
+        sizes,
+        weights,
+        lineHeights: Object.keys(lines).length ? lines : undefined,
+      },
+      spacing,
+      radius,
+      sizes: w3cLeafMap(t, 'size', ''),
+      grid: w3cLeafMap(t, 'grid', ''),
+      shadows: w3cLeafMap(t, 'shadow', ''),
+      icons: icon.library ? { name: icon.library, package: icon.package } : undefined,
+      // A W3C file describes tokens only — it carries no component selection,
+      // so nothing is generated. Empty (not "all") is the honest reading, and
+      // the plugin already treats it as a deliberate "send no components".
+      style: null,
+      atoms: [],
+    },
+    missing,
+  }
+}
+
+// Escala payload → as-is. W3C DTCG → converted. Anything else → null, so the
+// caller can say what the file actually is instead of naming a missing field.
+function adaptTokens(t) {
+  if (!t || typeof t !== 'object') throw new Error('Not a JSON object')
+  if (t.colors) return t
+  if (w3cHasLeaf(t)) {
+    const res = fromW3C(t)
+    if (res.missing.indexOf('color') !== -1 && res.missing.indexOf('semantic') !== -1) {
+      throw new Error('W3C token file with no colors — re-export with the Primitives and Semantics collections included, in a single file')
+    }
+    addLog(
+      'Read a W3C DTCG token file (not the Escala payload)' +
+      (res.missing.length ? ` — no ${res.missing.join(', ')} tokens in it, those are skipped` : '') +
+      (res.unresolved ? ` — ${res.unresolved} semantic value${res.unresolved > 1 ? 's' : ''} reference a primitive this file doesn't contain, and were dropped` : '') +
+      '. For components and documentation too, export the "Escala JSON" format.',
+      res.missing.length || res.unresolved ? 'error' : 'success',
+    )
+    return res.tokens
+  }
+  throw new Error('Unrecognized token file — export "Escala JSON" from escalatokens.com, or pull it from the publish URL')
+}
+
+function tryParse(raw) {
+  const err = $('parseError')
+  try {
+    const t = adaptTokens(JSON.parse(raw.trim()))
+    parsedTokens = t
+    err.classList.add('hidden')
+    showPreview(t)
+    $('exportTokensBtn').disabled = false
+    render()
+    return true
+  } catch(e) {
+    err.textContent = '✗ ' + e.message
+    err.classList.remove('hidden')
+    parsedTokens = null
+    $('previewLoaded').classList.add('hidden')
+    $('previewEmpty').classList.remove('hidden')
+    render()
+    return false
+  }
+}
+
+const JSON_MAX_LINES = 500
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** Brand solid hex from `colors.architecture` — the contract the platform
+ *  published and Color Semantics will hold. Nested Categorical keys stay dotted
+ *  (`action['primary.default']`), never a rebuilt tree. */
+function architectureSolidHex(t) {
+  const c = t && t.colors
+  const arch = c && c.architecture
+  const groups = arch && arch.tokens
+  if (!groups) return null
+  const theme = (c.themeOrder && c.themeOrder[0]) || 'light'
+  const pick = (group, key) => {
+    const node = groups[group] && groups[group][key]
+    if (!node || typeof node !== 'object') return null
+    const v = node[theme] || node.light || Object.values(node)[0]
+    return typeof v === 'string' && v.charAt(0) === '#' ? v : null
+  }
+  if (arch.kind === 'categorical') return pick('action', 'primary.default')
+  if (arch.kind === 'astryx') return pick('accent', 'solid')
+  if (arch.kind === 'shadcn') return pick('primary', 'fill')
+  return null
+}
+
+function showPreview(t) {
+  const meta = $('tokenMeta')
+  const sem = (t.colors && t.colors.semantic) || {}
+  // Brand chip: the architecture the platform published (Categorical
+  // `Action/primary.default`), not the flat catalogue the projection is FROM.
+  // Flat keys stay as fallback for a payload with no architecture.
+  const primary = architectureSolidHex(t) || sem['background-brand-solid'] || sem['content-brand'] || '#7f56d9'
+  // 'Scale' means the ACCENT family's own tone count, not every primitive key
+  // in the file (colors, neutrals, error/warning/success/info, every dark
+  // twin — 168 on a typical project) — filter to 'accent-<tone>' only,
+  // excluding the 'accent-dark-*' twin family. Prefix-based on purpose: tone
+  // labels vary by the project's naming scheme (1…12 / 25…950 / 10…120), the
+  // 'accent-' prefix doesn't.
+  const primitive = (t.colors && t.colors.primitive) || {}
+  const scaleLen = Object.keys(primitive).filter((k) => /^accent-(?!dark)/.test(k)).length
+  const atomCount = (t.atoms || []).length
+  meta.innerHTML = `
+    <div class="meta-pill">
+      <div class="mk">Project</div>
+      <div class="mv">${escapeHtml(String(t.project || '—'))}</div>
+    </div>
+    <div class="meta-pill">
+      <div class="mk">Primary</div>
+      <div class="mv">
+        <div class="color-dot" style="background:${escapeHtml(String(primary))}"></div>
+        ${escapeHtml(String(primary))}
+      </div>
+    </div>
+    <div class="meta-pill">
+      <div class="mk">Scale</div>
+      <div class="mv">${scaleLen} tones</div>
+    </div>
+    <div class="meta-pill">
+      <div class="mk">Atoms</div>
+      <div class="mv">${atomCount} selected</div>
+    </div>
+  `
+
+  // Pretty-printed payload with a line gutter, capped so a huge tokens.json
+  // can't stall the iframe.
+  const lines = JSON.stringify(t, null, 2).split('\n')
+  const shown = lines.slice(0, JSON_MAX_LINES)
+  let html = shown.map((l, i) =>
+    `<div class="json-line"><span class="json-n">${i + 1}</span><span class="json-t">${escapeHtml(l)}</span></div>`
+  ).join('')
+  if (lines.length > shown.length) {
+    html += `<div class="json-more">… ${lines.length - shown.length} more lines</div>`
+  }
+  $('jsonView').innerHTML = html
+
+  $('previewEmpty').classList.add('hidden')
+  $('previewLoaded').classList.remove('hidden')
+  setAside('tokens')
+}
+
+// Size of the configurator's full component catalogue (componentCatalogue.ts →
+// COMPONENT_KEYS.length on the web). Kept as a constant, same as every other
+// place the two repos mirror each other (see README's "What it imports") —
+// there's no live channel to ask the web for its own catalogue size.
+const FULL_CATALOGUE_SIZE = 58
+
+function renderReview() {
+  const o = currentOptions()
+  const t = parsedTokens || {}
+  const scaleLen = Object.keys((t.colors && t.colors.primitive) || {}).length
+  const atomCount = (t.atoms || []).length
+  const moreAvailable = Math.max(0, FULL_CATALOGUE_SIZE - atomCount)
+  const componentsDesc = atomCount === 0
+    ? 'No components selected — none will be created'
+    : `${atomCount} selected${moreAvailable > 0 ? ` · ${moreAvailable} more in the full catalogue on escalatokens.com` : ''}, plus their icons`
+  const items = [
+    [o.importVariables,  'Variables',     `Color primitives + semantics (all groups), spacing, radius, border, typography (${scaleLen} primitive tones)`],
+    [o.importStyles,     'Styles',        'Text styles, gradient paint styles, shadow effect styles, grid'],
+    [o.importComponents, 'Components',    componentsDesc],
+    [o.importDocs,       'Documentation', 'Cover page and handoff boards'],
+  ]
+  $('reviewList').innerHTML = items.map(([on, name, desc]) => `
+    <div class="review-item${on ? '' : ' off'}">
+      <span class="review-mark ${on ? 'yes' : 'no'}">${on ? '✓' : '—'}</span>
+      <span class="review-text">
+        <span>${name}</span>
+        <small>${on ? escapeHtml(desc) : 'Skipped'}</small>
+      </span>
+    </div>`).join('')
+}
+
+// ─── Overview ─────────────────────────────────────────────────────────────────
+
+// Pull one primitive family's ramp out of the payload, in tone order.
+// The key pattern is `<family>-<tone>`, and the tone LABELS depend on the
+// configurator's naming scheme (1…12, but also 50…1000 or 10…120), so the tone
+// is matched as "digits" and sorted numerically rather than assumed to be 1–12.
+// The `-dark-` and `-a-` twins share the prefix but never match `\d+$` alone,
+// so they're excluded without needing to be listed.
+function famRamp(tokens, family) {
+  const prim = (tokens && tokens.colors && tokens.colors.primitive) || {}
+  const re = new RegExp('^' + family + '-(\\d+)$')
+  return Object.keys(prim)
+    .map((k) => { const m = k.match(re); return m ? { tone: Number(m[1]), hex: prim[k] } : null })
+    .filter(Boolean)
+    .sort((a, b) => a.tone - b.tone)
+    .map((e) => e.hex)
+}
+
+// The "this is the color" step of a ramp — tone 9 in the 12-step model, which is
+// where the configurator anchors a family's solid fill. Falls back to the last
+// step for a shorter ramp.
+function familySolid(tokens, family) {
+  const r = famRamp(tokens, family)
+  return r.length ? r[Math.min(8, r.length - 1)] : null
+}
+
+// Mirrors ARCHITECTURE_OPTIONS in the configurator's semanticArchitectures.ts.
+// Unknown values pass through verbatim: a new architecture on the web should
+// show its raw key here, not be silently mislabelled as Flat.
+const ARCH_LABELS = {
+  flat: 'Flat', astryx: 'Astryx', shadcn: 'shadcn/ui',
+  categorical: 'Categorical Semantic', vibrancy: 'Contextual Vibrancy', tonal: 'Material Tonal',
+}
+
+function relTime(iso) {
+  if (!iso) return 'Never'
+  const then = new Date(iso).getTime()
+  if (!then) return 'Never'
+  const mins = Math.round((Date.now() - then) / 60000)
+  if (mins < 1) return 'Just now'
+  if (mins < 60) return mins + ' min ago'
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return hrs + (hrs === 1 ? ' hour ago' : ' hours ago')
+  const days = Math.round(hrs / 24)
+  return days < 30 ? days + (days === 1 ? ' day ago' : ' days ago') : new Date(iso).toLocaleDateString()
+}
+
+function renderHome() {
+  // Before clientStorage answers we don't yet know whether this file has a
+  // system — showing either half would be a guess, and the wrong guess flashes
+  // "No system connected yet" at someone who has one. Show neither.
+  if (!booted) {
+    $('homeConnected').classList.add('hidden')
+    $('homeEmpty').classList.add('hidden')
+    return
+  }
+  const t = storedTokens
+  $('homeConnected').classList.toggle('hidden', !t)
+  $('homeEmpty').classList.toggle('hidden', !!t)
+  if (!t) return
+
+  const c = t.colors || {}
+  const accent = familySolid(t, 'accent')
+
+  $('ovProject').textContent = t.project || 'Untitled system'
+  $('ovAccentHex').textContent = accent ? accent.toUpperCase() : '—'
+  $('ovAccentChip').style.background = accent || 'var(--border2)'
+
+  const ramp = famRamp(t, 'accent')
+  $('ovRamp').innerHTML = ramp.map((hex) =>
+    `<i style="background:${escapeHtml(hex)}"></i>`).join('')
+
+  const typo = t.typography || {}
+  const body = typo.fontFamily || '—'
+  const display = typo.headingFontFamily
+  $('ovFont').textContent = display && display !== body ? `${display} · ${body}` : body
+
+  // What Color Semantics will actually hold — architecture.kind from the
+  // published payload — not a parallel picker field that could drift.
+  const arch = (c.architecture && c.architecture.kind) || c.semanticArchitecture || 'flat'
+  $('ovArch').textContent = ARCH_LABELS[arch] || arch
+
+  const themes = (c.themeOrder && c.themeOrder.length)
+    ? c.themeOrder
+    : Object.keys(c.themes || {})
+  $('ovThemes').textContent = themes.length ? themes.join(', ') : 'light'
+
+  $('ovLastImport').textContent = relTime(lastImportAt)
+
+  $('ovStates').innerHTML = ['error', 'warning', 'success', 'info']
+    .map((f) => ({ f, hex: familySolid(t, f) }))
+    .filter((e) => e.hex)
+    .map((e) => `<span class="color-dot" title="${e.f}" style="background:${escapeHtml(e.hex)}"></span>`)
+    .join('') || '<span style="font-size:11px;color:var(--text-dim)">—</span>'
+
+  renderAssets()
+}
+
+// ─── "In this file" ──────────────────────────────────────────────────────────
+// `fileAssets` is what the SANDBOX reports (see reportFileAssets in code.ts),
+// never what the last run intended to build — an import phase can fail and
+// still finish, so intent is not evidence.
+//
+// Icon library isn't listed: it's not generated by this checklist's flow (it
+// lives behind its own opt-in card on the Import step), so a row for it here
+// could only ever read "Not in this file" with nothing this panel can do
+// about it.
+const ASSET_ROWS = [
+  { key: 'cover',         name: 'Cover',         note: 'Title page',        required: true },
+  { key: 'documentation', name: 'Documentation', note: 'Handoff boards',    required: true },
+  { key: 'sample',        name: 'Components Overview', note: 'Tokens on components', required: true },
+]
+
+// Per-page "include this when building" preference — independent of whether
+// the page is already IN the file. A tool preference (see saveSettings), not
+// file-scoped, same as the Import panel's scope checkboxes: someone who
+// doesn't want a Cover page generally doesn't want one in any file.
+let buildPrefs = { cover: true, documentation: true, sample: true }
+
+function renderAssets() {
+  const list = $('ovAssets')
+  const foot = $('ovAssetsMissing')
+  if (!fileAssets) {
+    // Nothing reported yet — leave the panel blank rather than claiming
+    // everything is missing before the sandbox has answered.
+    list.innerHTML = ''
+    $('ovVarCount').textContent = ''
+    foot.classList.add('hidden')
+    return
+  }
+
+  list.innerHTML = ASSET_ROWS.map((r) => {
+    const on = !!fileAssets[r.key]
+    const wanted = buildPrefs[r.key] !== false
+    return `<div class="asset-row${on ? ' present' : ''}">
+      <input type="checkbox" class="asset-check" data-key="${r.key}" ${wanted ? 'checked' : ''} aria-label="Build ${r.name}" />
+      <span class="asset-name">${r.name}</span>
+      <span class="asset-note">${on ? r.note : (wanted ? 'Not in this file' : 'Skipped')}</span>
+    </div>`
+  }).join('')
+
+  $('ovVarCount').textContent = fileAssets.variables > 0
+    ? `${fileAssets.variables} variables · ${fileAssets.collections} collections`
+    : 'no variables yet'
+
+  const missing = ASSET_ROWS.filter((r) => r.required && buildPrefs[r.key] !== false && !fileAssets[r.key])
+  foot.classList.toggle('hidden', missing.length === 0)
+  if (missing.length > 0) {
+    // Name the cause, not just the symptom: a synced-only file is the common
+    // way to land here, and "run an import" is not obvious from "missing".
+    $('ovAssetsMissingText').textContent =
+      `${missing.map((m) => m.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing — Live Sync only refreshes variables, so pages come from an import.`
+  }
+}
+
+// Delegated: rows are rebuilt wholesale on every renderAssets() call, so a
+// listener on each checkbox would be re-attached (and leaked) every render.
+$('ovAssets').addEventListener('change', (e) => {
+  const el = e.target
+  if (!el.classList || !el.classList.contains('asset-check')) return
+  buildPrefs[el.dataset.key] = el.checked
+  saveSettings()
+  renderAssets()
+})
+
+// The plugin's one door out to the browser. The sandbox re-checks the scheme.
+function openWeb(url) {
+  parent.postMessage({ pluginMessage: { type: 'open-external', url } }, '*')
+}
+
+$('ovCreateBtn').addEventListener('click', () => openWeb('https://www.escalatokens.com'))
+  $('ovEditBtn').addEventListener('click', () => openWeb('https://www.escalatokens.com'))
+$('ovHaveBtn').addEventListener('click', () => goView('guide'))
+$('ovImportBtn').addEventListener('click', () => goView(guideDone ? 'import' : 'guide'))
+
+// ─── Textarea live parse ──────────────────────────────────────────────────────
+const jsonInput = $('jsonInput')
+jsonInput.addEventListener('input', () => {
+  if (jsonInput.value.trim()) tryParse(jsonInput.value)
+})
+
+// ─── Paste / fetch shortcuts ──────────────────────────────────────────────────
+$('pasteBtn').addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText()
+    jsonInput.value = text
+    tryParse(text)
+  } catch {
+    addLog('Could not read clipboard — paste manually', 'error')
+  }
+})
+
+// One-shot pull from the publish URL, without turning on Live Sync
+$('fetchUrlBtn').addEventListener('click', async () => {
+  const url = $('syncUrl').value.trim()
+  if (!url) { goSync(); return }
+  const btn = $('fetchUrlBtn')
+  btn.disabled = true
+  btn.textContent = 'Fetching…'
+  try {
+    const text = await fetchJson(url)
+    jsonInput.value = text
+    if (tryParse(text)) addLog(`✓ Fetched tokens from ${url}`, 'success')
+  } catch (e) {
+    addLog(`✗ Fetch failed: ${e.message}`, 'error')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Fetch from publish URL'
+  }
+})
+
+$('reviewSyncBtn').addEventListener('click', goSync)
+$('runSyncBtn').addEventListener('click', goSync)
+$('runAgainBtn').addEventListener('click', () => { step = 0; goView('guide') })
+
+// ─── Export — Figma variables and last synced payload ────────────────────────
+function slugify(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+function downloadJson(name, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// Figma variables → JSON. The sandbox serializes this file's local collections;
+// the reply arrives as 'export-variables-data'.
+const exportVarsBtn = $('exportVarsBtn')
+let exportVarsTimer = null
+exportVarsBtn.addEventListener('click', () => {
+  exportVarsBtn.disabled = true
+  exportVarsBtn.textContent = 'Exporting…'
+  parent.postMessage({ pluginMessage: { type: 'export-variables' } }, '*')
+  // Failsafe: never leave the button stuck if the sandbox doesn't answer
+  exportVarsTimer = setTimeout(() => resetExportVarsBtn(), 5000)
+})
+function resetExportVarsBtn() {
+  clearTimeout(exportVarsTimer)
+  exportVarsBtn.disabled = false
+  exportVarsBtn.textContent = 'Export'
+}
+
+// tokens.json — the payload loaded in this session, or the last one the
+// sandbox imported (persisted in clientStorage).
+function downloadTokens(t) {
+  const name = (slugify(t.project) || 'escala') + '.tokens.json'
+  downloadJson(name, t)
+  addLog(`✓ Exported ${name} — import it in the configurator to sync manually`, 'success')
+}
+
+$('exportTokensBtn').addEventListener('click', () => {
+  if (parsedTokens) { downloadTokens(parsedTokens); return }
+  parent.postMessage({ pluginMessage: { type: 'export-tokens' } }, '*')
+})
+
+// ─── Log ──────────────────────────────────────────────────────────────────────
+function addLog(msg, type = '') {
+  const ts = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const text = `[${ts}] ${msg}`
+  // Mirrored in the aside pane and in the full-width Log view
+  ;[$('logBox'), $('logBoxFull')].forEach((box) => {
+    const line = document.createElement('span')
+    line.className = 'log-line' + (type ? ' ' + type : '')
+    line.textContent = text
+    box.appendChild(line)
+    box.scrollTop = box.scrollHeight
+  })
+  if (asidePane !== 'log' && view !== 'log') $('logDot').classList.remove('hidden')
+}
+
+$('clearLogBtn').addEventListener('click', () => {
+  $('logBox').innerHTML = ''
+  $('logBoxFull').innerHTML = ''
+})
+
+// ─── Progress + stall watchdog ────────────────────────────────────────────────
+// An import can run for a minute across six phases. Without this the only
+// feedback was log lines, so a slow phase and a dead plugin looked identical —
+// and a genuinely stuck run left `importInFlight` true forever, which silently
+// disables Live Sync (`fetchAndSync` returns early while it's set).
+const STALL_MS = 30000
+let stallTimer = null
+
+function showProgress(phase, done, total, label) {
+  $('progressBar').classList.remove('hidden')
+  $('progressPhase').textContent = label ? `${phase} · ${label}` : phase
+  const fill = $('progressFill')
+  if (total > 0) {
+    fill.classList.remove('indeterminate')
+    fill.style.width = Math.round((done / total) * 100) + '%'
+    $('progressCount').textContent = `${done}/${total}`
+  } else {
+    // Unknown total — animate rather than freeze at a fake percentage.
+    fill.classList.add('indeterminate')
+    fill.style.width = ''
+    $('progressCount').textContent = ''
+  }
+}
+
+function hideProgress() {
+  $('progressBar').classList.add('hidden')
+  $('progressStall').classList.add('hidden')
+  $('progressFill').classList.remove('indeterminate')
+  $('progressFill').style.width = '0%'
+  if (stallTimer) { clearTimeout(stallTimer); stallTimer = null }
+}
+
+// Any word from the sandbox counts as "alive" and restarts the countdown.
+function noteActivity() {
+  if (stallTimer) clearTimeout(stallTimer)
+  $('progressStall').classList.add('hidden')
+  if (!importInFlight) { stallTimer = null; return }
+  stallTimer = setTimeout(() => {
+    const note = $('progressStall')
+    note.classList.remove('hidden')
+    note.classList.add('warn')
+    note.innerHTML = 'No response from Figma for 30s — the import may have stalled. ' +
+      '<button class="link-btn" id="stallResetBtn" style="color:inherit;text-decoration:underline">Reset</button>'
+    // Escape hatch, not a cancel: the sandbox may still be working (there's no
+    // way to interrupt it), but the UI stops claiming an import is in flight so
+    // Live Sync can run again and the user isn't stuck staring at a dead bar.
+    $('stallResetBtn').addEventListener('click', () => {
+      importInFlight = false
+      hideProgress()
+      addLog('Import marked as stalled and reset — if it was still running, its result may still land', 'error')
+      updateSyncStatus('error', 'Import reset after a stall')
+      render()
+    })
+  }, STALL_MS)
+}
+
+// ─── Import ───────────────────────────────────────────────────────────────────
+function runImport() {
+  if (!parsedTokens || importInFlight) return
+  if (!anyScopeOn()) return
+
+  // Manual import counts as the latest synced state
+  lastHash = hashStr(JSON.stringify(parsedTokens))
+  importInFlight = true
+  guideDone = true
+  saveSettings()
+
+  if (view === 'guide') { step = 3; $('runTitle').textContent = 'Importing…'; $('runSub').textContent = 'Watch the log on the right — each phase reports as it lands.' }
+  setAside('log')
+  // Show the bar on the same tick the work is requested — the sandbox's first
+  // phase message arrives after it has already taken the thread.
+  showProgress('Starting…', 0, 0)
+  noteActivity()
+  render()
+
+  parent.postMessage({
+    pluginMessage: { type: 'import', tokens: parsedTokens, options: currentOptions() }
+  }, '*')
+}
+
+// Overview's "Build them": generate exactly the pages this file is missing.
+//
+// It runs on THIS FILE's stored payload, so it works straight from Overview
+// with nothing loaded in the Source step — the file already knows which system
+// it's on. And it deliberately IGNORES the Import scope checkboxes: those
+// describe what the last explicit import chose to write, and a file whose
+// pages are missing is usually a file where those boxes are off. Honouring
+// them here would make the button do nothing, which is the worst outcome for
+// a control that says "Build them".
+function buildMissingAssets() {
+  const tokens = parsedTokens || storedTokens
+  if (!tokens || importInFlight || !fileAssets) return
+
+  // Each respects its own checkbox in the "In this file" list — someone who
+  // unchecked Cover doesn't want it built just because Documentation is
+  // still missing.
+  const needsSample = buildPrefs.sample !== false && !fileAssets.sample
+  const needsCover = buildPrefs.cover !== false && !fileAssets.cover
+  const needsDocumentation = buildPrefs.documentation !== false && !fileAssets.documentation
+  // Variables underpin every generated page (fills, radii, text all bind to
+  // them), so a file with none gets them regardless of what's missing.
+  const needsVars = fileAssets.variables === 0
+  if (!needsSample && !needsCover && !needsDocumentation && !needsVars) return
+
+  lastHash = hashStr(JSON.stringify(tokens))
+  importInFlight = true
+  setAside('log')
+  showProgress('Starting…', 0, 0)
+  noteActivity()
+  render()
+
+  parent.postMessage({
+    pluginMessage: {
+      type: 'import',
+      tokens,
+      options: {
+        importVariables: needsVars,
+        importStyles: needsVars,
+        importComponents: needsSample,
+        importIcons: false,
+        importCover: needsCover,
+        importDocumentation: needsDocumentation,
+      },
+    },
+  }, '*')
+}
+$('ovBuildBtn').addEventListener('click', buildMissingAssets)
+
+// Missing default pages used to sit there until someone noticed the "In
+// this file" card and clicked "Build them" — easy to miss on a file that
+// only ever Live-Synced. The moment the file reports what it's missing (on
+// boot, or after any import), try once to build it without being asked;
+// the disclosure in the "In this file" card is what's left for a retry or
+// for hand-picking, not the primary path anymore.
+function maybeAutoBuild() {
+  if (autoBuildAttempted || importInFlight || !fileAssets) return
+  if (!(parsedTokens || storedTokens)) return
+  const missing = ASSET_ROWS.filter((r) => r.required && buildPrefs[r.key] !== false && !fileAssets[r.key])
+  if (missing.length === 0) return
+  autoBuildAttempted = true
+  addLog('Building missing pages automatically…')
+  buildMissingAssets()
+}
+
+// ─── Live Sync ────────────────────────────────────────────────────────────────
+// Every network call here is on a timeout. A hung connection used to wait
+// forever: the sync tick never finished, and on the import path that left
+// `importInFlight` stuck true, which quietly killed Live Sync for the rest of
+// the session. 20s is well past a normal fetch of a tokens.json.
+async function fetchJson(url, ms = 20000) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), ms)
+  try {
+    const res = await fetch(url, { cache: 'no-store', signal: ctrl.signal })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.text()
+  } catch (e) {
+    // A timeout surfaces as a bare "AbortError", which tells the user nothing.
+    if (e.name === 'AbortError') throw new Error(`Timed out after ${Math.round(ms / 1000)}s`)
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function fetchAndSync(url) {
+  if (importInFlight) return   // previous import still running — try next tick
+  try {
+    // Same ingest as a dropped tokens.json: Escala JSON (`colors`) passes
+    // through verbatim, including `colors.architecture`. Do not rebuild the
+    // payload here — the platform is the source of truth.
+    const tokens = adaptTokens(JSON.parse(await fetchJson(url)))
+    failCount = 0
+
+    // Content hash beats etag here: the endpoint is no-store and re-uploads
+    // produce new blobs even when the payload is identical.
+    const hash = hashStr(JSON.stringify(tokens))
+    if (hash === lastHash) {
+      updateSyncStatus('active', 'Up to date — no changes')
+      return
+    }
+    lastHash = hash
+    parsedTokens = tokens
+    showPreview(tokens)
+    $('exportTokensBtn').disabled = false
+
+    addLog(`Sync: fetched "${tokens.project}" — refreshing variables…`)
+    updateSyncStatus('active', `Refreshing "${tokens.project}"…`)
+    importInFlight = true
+    showProgress('Starting…', 0, 0)
+    noteActivity()
+    renderFooter()
+    // A sync refreshes VARIABLES and STYLES — never pages.
+    //
+    // This used to post `currentOptions()`, i.e. the exact same full import the
+    // button runs, so every token edit rebuilt the sample sheet, wiped and
+    // regenerated the whole Documentation page, and re-ran the icon phase.
+    // That was the freeze: minutes of work to produce identical nodes.
+    //
+    // It's unnecessary because everything the plugin generates is
+    // VARIABLE-BOUND — fills and strokes via setBoundVariableForPaint, corner
+    // radii, padding/itemSpacing, and every text property. Updating the
+    // variables re-themes every instance already placed in the file, which is
+    // the whole point of importing them as variables in the first place.
+    // Styles ride along because they're cheap (no pages, no nodes) and text /
+    // shadow styles genuinely change with the tokens.
+    //
+    // What a sync does NOT pick up, by design: newly added elements, and the
+    // two things that aren't variable-bound (the focus-ring drop shadow and
+    // the Documentation page's own chrome). Re-run Import for those.
+    //
+    // ONE exception, decided in the sandbox, not here: if the payload moved the
+    // system to a different semantic architecture (or otherwise reordered the
+    // token set), importVariables recreates the semantic variables and every
+    // binding in the file dies with the old ones. The import escalates itself
+    // to redraw components, cover and boards in that case — see
+    // `semanticsRebuilt` in code.ts. It costs the one slow pass that a
+    // re-architecture genuinely needs, and only then.
+    parent.postMessage({
+      pluginMessage: {
+        type: 'import',
+        tokens,
+        options: { importVariables: true, importStyles: true, importComponents: false, importIcons: false, importDocs: false },
+      }
+    }, '*')
+  } catch (e) {
+    failCount++
+    updateSyncStatus('error', `Fetch failed${failCount > 1 ? ` ×${failCount}` : ''}: ${e.message}`)
+    addLog(`Sync error: ${e.message}`, 'error')
+    // Timer keeps running — sync recovers on the next successful check
+  }
+}
+
+function updateSyncStatus(state, msg) {
+  const dot = $('syncDot')
+  dot.className = 'sync-dot' + (state === 'active' ? ' active' : state === 'error' ? ' error' : '')
+  $('syncStatus').textContent = msg
+  // Terser than "Last checked: …" — it now shares one row with the status
+  // text, which gets the flexible space and truncates first.
+  $('syncLastCheck').textContent = `Checked ${new Date().toLocaleTimeString()}`
+}
+
+function startSync() {
+  const url = $('syncUrl').value.trim()
+  if (!url) {
+    addLog('Enter a URL first', 'error')
+    return
+  }
+  const btn = $('syncToggleBtn')
+  const interval = parseInt($('syncInterval').value) * 1000
+  syncRunning = true
+  failCount = 0
+  btn.textContent = 'Stop sync'
+  btn.classList.remove('btn-secondary')
+  btn.classList.add('btn-primary')
+  $('homeSyncCard').classList.add('is-live')
+  updateSyncStatus('active', 'Syncing…')
+  addLog(`Live sync started — checking every ${interval / 1000}s`)
+  saveSettings()
+  saveFileSync()
+  renderFooter()
+
+  fetchAndSync(url)
+  syncTimer = setInterval(() => fetchAndSync(url), interval)
+}
+
+function stopSync() {
+  const btn = $('syncToggleBtn')
+  clearInterval(syncTimer)
+  syncRunning = false
+  btn.textContent = 'Start sync'
+  btn.classList.remove('btn-primary')
+  btn.classList.add('btn-secondary')
+  $('homeSyncCard').classList.remove('is-live')
+  updateSyncStatus('', 'Stopped')
+  addLog('Live sync stopped')
+  saveSettings()
+  saveFileSync()
+  renderFooter()
+}
+
+$('syncToggleBtn').addEventListener('click', () => {
+  if (syncRunning) stopSync()
+  else startSync()
+})
+
+// ─── Update now ──────────────────────────────────────────────────────────────
+// The same check the timer runs, on demand. Two reasons it exists: someone who
+// just published shouldn't sit through the rest of the interval, and someone
+// who doesn't want a timer running at all still wants a one-press pull.
+//
+// When sync IS running the interval is restarted from now, so pressing this
+// doesn't leave a redundant tick a second behind it. It goes through
+// `fetchAndSync` unchanged, hash check included — if nothing was published
+// since the last check it says "Up to date" instead of rewriting the file.
+$('syncNowBtn').addEventListener('click', async () => {
+  const url = $('syncUrl').value.trim()
+  if (!url) { addLog('Enter a sync URL first', 'error'); return }
+  if (importInFlight) { addLog('An import is already running — the check will follow it', 'error'); return }
+  const btn = $('syncNowBtn')
+  btn.disabled = true
+  btn.textContent = 'Checking…'
+  try {
+    await fetchAndSync(url)
+    if (syncRunning) {
+      clearInterval(syncTimer)
+      syncTimer = setInterval(() => fetchAndSync(url), parseInt($('syncInterval').value) * 1000)
+    }
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Update now'
+  }
+})
+
+// Re-persist settings whenever sync config changes. The URL is file-scoped
+// (saveFileSync) since it names which system THIS file talks to; the interval
+// is a tool preference (saveSettings) that applies to every file.
+$('syncUrl').addEventListener('change', saveFileSync)
+$('syncInterval').addEventListener('change', saveSettings)
+
+// ─── Reset this file ─────────────────────────────────────────────────────────
+// Two clicks, not one: this clears the file's connected system AND its sync
+// URL, and there's no undo short of re-importing or re-syncing. `alert`/
+// `confirm` aren't available inside a Figma plugin UI, so the button arms
+// itself instead — a second click within the window confirms, anything else
+// (waiting it out, clicking elsewhere) disarms it.
+let resetArmed = false
+let resetArmTimer = null
+function disarmReset() {
+  resetArmed = false
+  clearTimeout(resetArmTimer)
+  const btn = $('resetFileBtn')
+  btn.textContent = 'Reset this file'
+  btn.classList.remove('is-danger')
+}
+$('resetFileBtn').addEventListener('click', () => {
+  if (!resetArmed) {
+    resetArmed = true
+    const btn = $('resetFileBtn')
+    btn.textContent = 'Click again to confirm'
+    btn.classList.add('is-danger')
+    resetArmTimer = setTimeout(disarmReset, 4000)
+    return
+  }
+  disarmReset()
+  if (syncRunning) stopSync()
+  parent.postMessage({ pluginMessage: { type: 'reset-file' } }, '*')
+})
+
+// ─── Messages from sandbox ────────────────────────────────────────────────────
+window.onmessage = (event) => {
+  const msg = event.data.pluginMessage
+  if (!msg) return
+
+  if (msg.type === 'log') {
+    const isHeading = msg.message.startsWith('―')
+    const isError   = msg.message.startsWith('✗')
+    addLog(msg.message, isHeading ? 'heading' : isError ? 'error' : '')
+    // A log line is proof the sandbox is still executing, so it resets the
+    // stall countdown just like a progress message does.
+    noteActivity()
+  }
+
+  if (msg.type === 'progress') {
+    showProgress(msg.phase, msg.done, msg.total, msg.label)
+    noteActivity()
+    if (view === 'guide' && step === 3) {
+      $('runSub').textContent = msg.total > 0
+        ? `${msg.phase} — ${msg.done} of ${msg.total}${msg.label ? ` · ${msg.label}` : ''}`
+        : `${msg.phase}${msg.label ? ` — ${msg.label}` : ''}…`
+    }
+    if (syncRunning) updateSyncStatus('active', `Importing — ${msg.phase}…`)
+  }
+
+  if (msg.type === 'done') {
+    importInFlight = false
+    hideProgress()
+    if (syncRunning) updateSyncStatus('active', 'Synced ✓')
+    $('exportTokensBtn').disabled = false
+    // What just landed in the file IS the connected system now — the sandbox
+    // persisted the same payload to THIS file (figma.root.pluginData), so
+    // Overview and storage agree without a re-read. Sync preferences already
+    // saved at the start of runImport()/fetchAndSync(); nothing here belongs
+    // in that user-scoped blob (see saveSettings' comment).
+    storedTokens = parsedTokens
+    lastImportAt = new Date().toISOString()
+    $('runTitle').textContent = 'Import complete'
+    $('runSub').textContent = msg.summary ? `Created: ${msg.summary}.` : 'Everything landed in this file.'
+    const btn = $('primaryBtn')
+    btn.classList.add('btn-success')
+    setTimeout(() => btn.classList.remove('btn-success'), 2500)
+    // Ask what's ACTUALLY in the file now. A phase can fail and the run still
+    // finish (see the `phase` helper in code.ts), so the summary is intent —
+    // this is evidence.
+    parent.postMessage({ pluginMessage: { type: 'report-assets' } }, '*')
+    render()
+  }
+
+  if (msg.type === 'assets') {
+    fileAssets = msg.assets
+    if (view === 'home') renderAssets()
+    maybeAutoBuild()
+  }
+
+  if (msg.type === 'error') {
+    importInFlight = false
+    hideProgress()
+    if (syncRunning) updateSyncStatus('error', 'Import failed — see log')
+    $('runTitle').textContent = 'Import failed'
+    $('runSub').textContent = 'Check the log for the failing phase, then try again.'
+    render()
+    $('footerHint').textContent = 'Import failed — see the log.'
+    $('footerHint').classList.add('error')
+  }
+
+  if (msg.type === 'pong') {
+    addLog('Plugin sandbox connected ✓', 'success')
+  }
+
+  // This file's local variables, serialized by the sandbox
+  if (msg.type === 'export-variables-data') {
+    resetExportVarsBtn()
+    if (!msg.data || !msg.total) {
+      addLog('This file has no local variables to export', 'error')
+      setAside('log')
+      return
+    }
+    const name = (slugify(msg.data.file) || 'figma') + '.variables.json'
+    downloadJson(name, msg.data)
+    addLog(`✓ Exported ${msg.total} variables → ${name}`, 'success')
+  }
+
+  // Last imported payload from clientStorage, requested by the Export button
+  if (msg.type === 'export-tokens-data') {
+    if (msg.tokens) downloadTokens(msg.tokens)
+    else addLog('Nothing to export yet — import or sync tokens first', 'error')
+  }
+
+  // Saved settings from figma.clientStorage — restore tool prefs; the sync
+  // CONNECTION itself (url/autoStart) comes from msg.fileSync instead, never
+  // from `s` — see saveFileSync's comment for why that used to leak another
+  // file's live sync into a brand-new one.
+  if (msg.type === 'settings') {
+    const s = msg.settings || {}
+    const fs = msg.fileSync || null
+    booted = true
+    if (msg.assets) fileAssets = msg.assets
+    guideDone = !!(s.guideDone || s.onboardingDismissed)
+    if (msg.hasTokens) $('exportTokensBtn').disabled = false
+    // Both derived from THIS FILE's own record (msg.tokens), never from the
+    // user-scoped settings blob — see saveSettings' comment for why that used
+    // to leak another file's state in here.
+    if (msg.tokens) {
+      storedTokens = msg.tokens
+      lastHash = hashStr(JSON.stringify(msg.tokens))
+    }
+    if (msg.tokensImportedAt) lastImportAt = msg.tokensImportedAt
+    // A file that was never synced (fs === null) keeps the field's plain
+    // default (see the input's `value` attribute) instead of inheriting
+    // whatever URL was last typed in some other file.
+    if (fs && fs.url) $('syncUrl').value = fs.url
+    if (s.interval) $('syncInterval').value = s.interval
+    if (s.options) {
+      $('optVariables').checked  = s.options.importVariables  !== false
+      $('optStyles').checked     = s.options.importStyles     !== false
+      $('optComponents').checked = s.options.importComponents !== false
+      $('optDocs').checked       = s.options.importDocs       !== false
+      // `=== true`, not `!== false`: icons default OFF, so a stored blob from
+      // before this option existed (undefined) must stay off rather than opt
+      // every returning user into the slow phase.
+      $('optIcons').checked      = s.options.importIcons      === true
+      syncScopeCards()
+    }
+    if (s.buildPrefs) {
+      buildPrefs = {
+        cover:         s.buildPrefs.cover         !== false,
+        documentation: s.buildPrefs.documentation !== false,
+        sample:        s.buildPrefs.sample        !== false,
+      }
+    }
+    // Where to land. Overview is always the entry point: a connected file
+    // shows its system, and an unconnected one shows the "no system
+    // connected yet" empty state with a way into the configurator or import.
+    goView('home')
+    maybeAutoBuild()
+
+    // Resume ONLY if THIS document is the one that started the sync — a
+    // brand-new file has no fileSync record at all, so it never reaches here.
+    if (fs && fs.autoStart && fs.url && !syncRunning) {
+      addLog('Resuming live sync from last session')
+      startSync()
+    }
+  }
+
+  if (msg.type === 'reset-file-done') {
+    storedTokens = null
+    lastImportAt = null
+    lastHash = null
+    $('syncUrl').value = ''
+    $('exportTokensBtn').disabled = true
+    addLog('File reset — no system or sync connected to this file', 'success')
+    goView('home')
+    render()
+  }
+}
+
+// ─── Close ────────────────────────────────────────────────────────────────────
+$('closeBtn').addEventListener('click', () => {
+  parent.postMessage({ pluginMessage: { type: 'close' } }, '*')
+})
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+syncScopeCards()
+setAside('tokens')
+render()
+addLog('Plugin ready — load a tokens.json to begin')
+parent.postMessage({ pluginMessage: { type: 'load-settings' } }, '*')
+</script>
+</body>
+</html>

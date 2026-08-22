@@ -1,0 +1,16 @@
+{
+  "name": "Escala DS",
+  "id": "1669997185499031318",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["https://www.escalatokens.com", "https://escalatokens.com", "https://scalable-designs.vercel.app", "https://api.iconify.design"],
+    "reasoning": "Fetches published design tokens from the Escala configurator at https://www.escalatokens.com (apex and the prior Vercel preview host stay allowlisted for older sync URLs) and icon glyphs from the Iconify API.",
+    "devAllowedDomains": ["http://localhost:5173", "http://localhost:3000"]
+  },
+  "permissions": [],
+  "enableProposedApi": false
+}
