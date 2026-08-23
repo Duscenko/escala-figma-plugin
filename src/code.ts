@@ -49,8 +49,18 @@ interface DesignTokens {
     weights: Record<string, number>
     lineHeights?: Record<string, string>     // px or unitless ratio
     letterSpacings?: Record<string, string>  // px or em
+    // v6: semantic type roles. Each aliases a family + size + weight primitive
+    // (desktop / mobile). The plugin materializes desktop as role/{key}/*
+    // variables and one text style per role.
+    roles?: Record<string, {
+      desktop: { family: string; size: string; weight: string }
+      mobile?: { family: string; size: string; weight: string }
+    }>
   }
   spacing: Record<string, string>
+  // v6: role → primitive step (inset-surface → "5"). Aliases in the same
+  // collection, nested under role/.
+  spacingRoles?: Record<string, string>
   // Per-side surface padding (top/right/bottom/left) for padded surfaces
   // (cards, tiles, panels).
   padding?: Record<string, string>
@@ -66,6 +76,12 @@ interface DesignTokens {
   gradientsDark?: Record<string, string>
   gradientAssignments?: { cover?: string | null; avatar?: string | null }
   radius: Record<string, string>
+  radiusRoles?: Record<string, string>
+  // v6 stroke primitives (none/sm/md/lg). `borders.width` is the v5 name the
+  // configurator now also emits as a copy, so an older plugin still creates
+  // the Border collection.
+  stroke?: Record<string, string>
+  strokeRoles?: Record<string, string>
   borders?: {
     width: Record<string, string>            // e.g. { default: "1px", thick: "2px" }
   }
@@ -75,7 +91,13 @@ interface DesignTokens {
   // no modes, so a differing dark CSS becomes a second effect style.
   shadowsDark?: Record<string, string>
   grid?: Record<string, string>              // columns/gutter/margin/container/breakpoint-*
+  gridFrame?: {
+    desktop?: { columns?: string; gutter?: string; margin?: string; container?: string }
+    mobile?: { columns?: string; gutter?: string; margin?: string; container?: string }
+  }
+  breakpointRoles?: Record<string, string>
   sizes?: Record<string, string>             // component heights xs–2xl
+  sizeRoles?: Record<string, string>
   icons?: {
     library?: string
     name?: string
@@ -146,6 +168,63 @@ function pxToFloat(val: string): number {
   return parseFloat(val.replace('px', '').replace('rem', '')) || 0
 }
 
+function weightKeyFromStyle(style: string): string {
+  if (style === 'Bold') return 'bold'
+  if (style === 'Semi Bold') return 'semibold'
+  if (style === 'Medium') return 'medium'
+  return 'regular'
+}
+
+function nearestTypeSizeKey(sizes: Record<string, string> | undefined, px: number): string | undefined {
+  if (!sizes || !px) return undefined
+  let best: string | undefined
+  let bestD = Infinity
+  for (const [key, val] of Object.entries(sizes)) {
+    const d = Math.abs(pxToFloat(val) - px)
+    if (d < bestD) { bestD = d; best = key }
+  }
+  return best
+}
+
+/** Bind every typography field a generated text node can carry. Missing
+ *  variables are skipped — a layer with only family bound used to be the
+ *  common case and is what "texts aren't tied" was. */
+function bindAllTextFields(
+  t: TextNode,
+  typo: Map<string, Variable>,
+  opts: { sizeKey?: string; roleKey?: string; weightKey?: string; heading?: boolean },
+) {
+  const family = opts.roleKey
+    ? (typo.get(`role/${opts.roleKey}/family`) ?? (opts.heading ? typo.get('heading-family') : undefined) ?? typo.get('family'))
+    : (opts.heading ? (typo.get('heading-family') ?? typo.get('family')) : typo.get('family'))
+  if (family) { try { t.setBoundVariable('fontFamily', family) } catch {} }
+
+  const sizeVar = (opts.roleKey ? typo.get(`role/${opts.roleKey}/size`) : undefined)
+    ?? (opts.sizeKey ? typo.get(`size/${opts.sizeKey}`) : undefined)
+  if (sizeVar) { try { t.setBoundVariable('fontSize', sizeVar) } catch {} }
+
+  const weightVar = (opts.roleKey ? typo.get(`role/${opts.roleKey}/weight`) : undefined)
+    ?? (opts.weightKey ? typo.get(`weight/${opts.weightKey}`) : undefined)
+    ?? typo.get('weight/regular')
+  if (weightVar) { try { t.setBoundVariable('fontWeight', weightVar) } catch {} }
+
+  const lh = opts.sizeKey ? typo.get(`line-height/${opts.sizeKey}`) : undefined
+  if (lh) { try { t.setBoundVariable('lineHeight', lh) } catch {} }
+  const ls = opts.sizeKey ? typo.get(`letter-spacing/${opts.sizeKey}`) : undefined
+  if (ls) { try { t.setBoundVariable('letterSpacing', ls) } catch {} }
+}
+
+async function typoVarMap(): Promise<Map<string, Variable>> {
+  const m = new Map<string, Variable>()
+  const cols = await figma.variables.getLocalVariableCollectionsAsync()
+  const col = cols.find((c) => c.name === COLLECTIONS.typography)
+  if (!col) return m
+  for (const v of await figma.variables.getLocalVariablesAsync()) {
+    if (v.variableCollectionId === col.id) m.set(v.name, v)
+  }
+  return m
+}
+
 function log(msg: string) {
   figma.ui.postMessage({ type: 'log', message: msg })
 }
@@ -202,7 +281,10 @@ function fetchWithTimeout(url: string, ms = 15000): Promise<FetchResponse> {
 //     REMOVAL, so nothing here had to change: the import is guarded
 //     (`if (tokens.opacity)`, see importVariables) and an older configurator's
 //     payload still carrying the field keeps importing its Opacity collection.
-const SUPPORTED_SCHEMA_VERSION = 5
+// v6: additive layout + type roles — typography.roles, spacingRoles,
+//     radiusRoles, sizeRoles, stroke, strokeRoles, breakpointRoles, gridFrame.
+//     Also reads `borders.width` as a fallback copy of `stroke`.
+const SUPPORTED_SCHEMA_VERSION = 6
 
 function checkSchema(tokens: DesignTokens) {
   const v = tokens.schemaVersion
@@ -232,6 +314,15 @@ const COLLECTIONS = {
 
 const PLUGIN_COLLECTION_NAMES = new Set<string>(Object.values(COLLECTIONS))
 
+// Styles used to be prefixed with the project name (`Jasdy/Type/…`). That
+// folder is what "Jasdy is still inherited" looks like after a switch — the
+// collection may be gone and the leftover still sits in the Styles panel.
+// New writes use these roots with no project folder.
+const PLUGIN_STYLE_ROOTS = new Set(['Type', 'Shadow', 'Gradient', 'Grid'])
+const INHERITED_STYLE_FOLDERS = ['Type', 'Shadow', 'Gradient', 'Grid', 'Scale', 'Semantic'] as const
+const DOCS_REV = 6
+const FILE_DOCS_REV_KEY = 'sd-docs-rev'
+
 /** Sidebar order in Figma's Variables panel. Figma has no reorder API — a
  *  collection's position is its creation order — so we create Color Semantics
  *  first, Color Primitives second, then the rest A–Z. Existing files that
@@ -239,7 +330,7 @@ const PLUGIN_COLLECTION_NAMES = new Set<string>(Object.values(COLLECTIONS))
  *  dropped and recreated (Semantics itself is kept, so color bindings survive). */
 function collectionPanelOrder(tokens: DesignTokens): string[] {
   const rest: { name: string; include: boolean }[] = [
-    { name: COLLECTIONS.border, include: !!tokens.borders?.width },
+    { name: COLLECTIONS.border, include: !!(tokens.stroke || tokens.borders?.width) },
     { name: COLLECTIONS.copy, include: !!tokens.copy },
     { name: COLLECTIONS.grid, include: !!tokens.grid },
     { name: COLLECTIONS.icons, include: !!tokens.icons?.library },
@@ -332,11 +423,11 @@ function scopesForCollection(collName: string, varName: string): VariableScope[]
     case COLLECTIONS.opacity: return ['OPACITY']
     case COLLECTIONS.grid:    return ['WIDTH_HEIGHT']
     case COLLECTIONS.typography: {
-      if (varName.startsWith('size/')) return ['FONT_SIZE']
-      if (varName.startsWith('weight/')) return ['FONT_WEIGHT']
+      if (varName.startsWith('size/') || varName.endsWith('/size')) return ['FONT_SIZE']
+      if (varName.startsWith('weight/') || varName.endsWith('/weight')) return ['FONT_WEIGHT']
       if (varName.startsWith('line-height/')) return ['LINE_HEIGHT']
       if (varName.startsWith('letter-spacing/')) return ['LETTER_SPACING']
-      if (varName === 'family' || varName === 'heading-family') return ['FONT_FAMILY']
+      if (varName === 'family' || varName === 'heading-family' || varName.endsWith('/family')) return ['FONT_FAMILY']
       return undefined
     }
     default: return undefined
@@ -879,6 +970,14 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   let count = 0
   semanticsRebuilt = false
   foundationsRebuilt = false
+  // A leftover collection / Documentation board named after a PREVIOUS system
+  // (e.g. "Jasdy") is not cleaned by the current-project sweep below. Detect
+  // the rename here so the import handler also rebuilds Cover + Docs.
+  const previousProject = readFileTokens()?.tokens.project
+  if (previousProject && tokens.project && previousProject !== tokens.project) {
+    foundationsRebuilt = true
+    log(`↻ System changed "${previousProject}" → "${tokens.project}" — leftover collections and docs will follow the new name`)
+  }
 
   // Fetch collections + variables once; both lists are mutated as we create more.
   const existingCollections = await figma.variables.getLocalVariableCollectionsAsync()
@@ -1030,6 +1129,28 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       const varName = nameOf(key)
       setDefault(col, upsertVarIn(col, cache, varName, type, scopesForCollection(collName, figmaVarName(varName))), transform(val))
     }
+  }
+
+  // Semantic layout roles alias a primitive in the SAME collection
+  // (`role/control` → `md`). Returns how many aliases were written.
+  function emitRoleAliases(
+    collName: string,
+    roles: Record<string, string> | undefined,
+    primitiveNameOf: (step: string) => string,
+  ): number {
+    if (!roles) return 0
+    const col = findOrCreateCollection(collName)
+    const cache = cacheFor(col)
+    let n = 0
+    for (const [role, step] of Object.entries(roles)) {
+      if (typeof step !== 'string' || !step) continue
+      const prim = cache.get(figmaVarName(primitiveNameOf(step)))
+      if (!prim) continue
+      const v = upsertVarIn(col, cache, `role/${role}`, 'FLOAT', scopesForCollection(collName, `role/${role}`))
+      setDefault(col, v, figma.variables.createVariableAlias(prim))
+      n++
+    }
+    return n
   }
 
   // ── Color Primitives — the raw scale, single mode ──────────────────────────
@@ -1365,11 +1486,37 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   if (tokens.typography.letterSpacings) {
     Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar(`letter-spacing/${key}`, 'FLOAT', pxToFloat(val)))
   }
+  const typeRoles = tokens.typography.roles
+  if (typeRoles) {
+    let roleCount = 0
+    for (const [key, modes] of Object.entries(typeRoles)) {
+      const d = modes?.desktop
+      if (!d) continue
+      const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`))
+      const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`))
+      const familyName = d.family === 'display' && typoCache.get('heading-family')
+        ? 'heading-family'
+        : 'family'
+      const familyPrim = typoCache.get(figmaVarName(familyName))
+      if (sizePrim) {
+        typoVar(`role/${key}/size`, 'FLOAT', figma.variables.createVariableAlias(sizePrim))
+        roleCount++
+      }
+      if (weightPrim) {
+        typoVar(`role/${key}/weight`, 'FLOAT', figma.variables.createVariableAlias(weightPrim))
+      }
+      if (familyPrim) {
+        typoVar(`role/${key}/family`, 'STRING', figma.variables.createVariableAlias(familyPrim))
+      }
+    }
+    if (roleCount > 0) log(`✓ Typography roles (${roleCount} aliased to size/weight/family)`)
+  }
   log(`✓ Typography tokens`)
 
   // ── Remaining single-mode categories ───────────────────────────────────────
   emitCollection(COLLECTIONS.spacing, Object.entries(tokens.spacing), 'FLOAT', pxToFloat)
-  log(`✓ Spacing tokens (${Object.keys(tokens.spacing).length} steps)`)
+  const spacingRoleCount = emitRoleAliases(COLLECTIONS.spacing, tokens.spacingRoles, (s) => s)
+  log(`✓ Spacing tokens (${Object.keys(tokens.spacing).length} steps${spacingRoleCount ? ` · ${spacingRoleCount} roles` : ''})`)
 
   // Per-side surface padding nests inside Spacing as "padding/top…left".
   if (tokens.padding && Object.keys(tokens.padding).length > 0) {
@@ -1378,11 +1525,16 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   }
 
   emitCollection(COLLECTIONS.radius, Object.entries(tokens.radius), 'FLOAT', pxToFloat)
-  log(`✓ Radius tokens`)
+  const radiusRoleCount = emitRoleAliases(COLLECTIONS.radius, tokens.radiusRoles, (s) => s)
+  log(`✓ Radius tokens${radiusRoleCount ? ` · ${radiusRoleCount} roles` : ''}`)
 
-  if (tokens.borders?.width) {
-    emitCollection(COLLECTIONS.border, Object.entries(tokens.borders.width), 'FLOAT', pxToFloat, (k) => `width/${k}`)
-    log(`✓ Border width tokens (${Object.keys(tokens.borders.width).length})`)
+  const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0
+  const strokeMap = strokeFromV6 ? tokens.stroke : tokens.borders?.width
+  if (strokeMap) {
+    const nameOf = strokeFromV6 ? (k: string) => k : (k: string) => `width/${k}`
+    emitCollection(COLLECTIONS.border, Object.entries(strokeMap), 'FLOAT', pxToFloat, nameOf)
+    const strokeRoleCount = emitRoleAliases(COLLECTIONS.border, tokens.strokeRoles, (s) => s)
+    log(`✓ Border width tokens (${Object.keys(strokeMap).length}${strokeRoleCount ? ` · ${strokeRoleCount} roles` : ''})`)
   }
 
   if (tokens.opacity) {
@@ -1392,12 +1544,14 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
 
   if (tokens.sizes) {
     emitCollection(COLLECTIONS.size, Object.entries(tokens.sizes), 'FLOAT', pxToFloat)
-    log(`✓ Size tokens (${Object.keys(tokens.sizes).length})`)
+    const sizeRoleCount = emitRoleAliases(COLLECTIONS.size, tokens.sizeRoles, (s) => s)
+    log(`✓ Size tokens (${Object.keys(tokens.sizes).length}${sizeRoleCount ? ` · ${sizeRoleCount} roles` : ''})`)
   }
 
   if (tokens.grid) {
     emitCollection(COLLECTIONS.grid, Object.entries(tokens.grid), 'FLOAT', pxToFloat)
-    log(`✓ Grid tokens (${Object.keys(tokens.grid).length})`)
+    const bpRoleCount = emitRoleAliases(COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`)
+    log(`✓ Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` · ${bpRoleCount} breakpoint roles` : ''})`)
   }
 
   if (tokens.icons?.library) {
@@ -1409,19 +1563,22 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     log(`✓ Copy tokens (${Object.keys(tokens.copy).length} strings)`)
   }
 
-  // ── Migration: drop the legacy single collection (old name = project) ──────
-  // The architecture collection names count as "ours" too: a system whose
-  // project is literally named "Astryx" (or any other architecture label) and
-  // is ON that architecture would otherwise have the collection this run just
-  // created deleted as if it were the legacy one.
-  const newNames = new Set<string>([...Object.values(COLLECTIONS), ...Object.values(ARCH_LABEL)])
-  const legacyName = tokens.project || 'Escala'
-  if (!newNames.has(legacyName)) {
-    const legacy = existingCollections.find((c) => c.name === legacyName)
-    if (legacy) {
-      legacy.remove()
-      log(`✓ Removed legacy "${legacyName}" collection`)
-    }
+  // ── Migration: drop leftover project-named collections ────────────────────
+  // Older plugin builds named the one collection after `tokens.project`
+  // ("Jasdy", …). Today's collections have plain names (Color Semantics, …).
+  // The sweep used to only delete a collection named after THIS payload's
+  // project — switching systems left the previous name behind forever, and
+  // Export then dumped it as if it were still the synced system.
+  const protectedNames = new Set<string>([...Object.values(COLLECTIONS), ...Object.values(ARCH_LABEL)])
+  for (const leftoverName of leftoverProjectNames(tokens.project || '')) {
+    if (protectedNames.has(leftoverName)) continue
+    const leftover = existingCollections.find((c) => c.name === leftoverName)
+    if (!leftover) continue
+    try {
+      leftover.remove()
+      existingCollections.splice(existingCollections.indexOf(leftover), 1)
+      log(`✓ Removed leftover "${leftoverName}" collection — this file now holds "${tokens.project || 'untitled'}"`)
+    } catch (e) { /* still referenced — leave it rather than fail the import */ }
   }
   log(`ℹ One design system per file — add variants as themes (modes) in "Color Semantics".`)
 
@@ -1541,7 +1698,6 @@ function assignedGradient(tokens: DesignTokens, surface: 'cover' | 'avatar'): Gr
 
 async function importStyles(tokens: DesignTokens): Promise<number> {
   let count = 0
-  const prefix     = tokens.project || 'SD'
   const fontFamily = tokens.typography.fontFamily || 'Inter'
   const headingFamily = tokens.typography.headingFontFamily || fontFamily
 
@@ -1553,12 +1709,21 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
   // system only (Color Primitives / Color Semantics). Clean up the paint
   // styles older plugin versions created so re-imports converge on
   // variables-only.
-  const stalePaints = (await figma.getLocalPaintStylesAsync()).filter(
-    (s) => s.name.startsWith(`${prefix}/Scale/`) || s.name.startsWith(`${prefix}/Semantic/`),
-  )
+  const stalePaints = (await figma.getLocalPaintStylesAsync()).filter((s) => {
+    const parts = s.name.split('/')
+    return parts.length >= 2 && (parts[1] === 'Scale' || parts[1] === 'Semantic')
+  })
   if (stalePaints.length > 0) {
     for (const s of stalePaints) { try { s.remove() } catch {} }
     log(`✓ Removed ${stalePaints.length} legacy color paint styles (colors are variables-only now)`)
+  }
+
+  // Drop every project-prefixed leftover (`Jasdy/Type/…`, `Escala/Shadow/…`).
+  // New styles live at Type/ Shadow/ Gradient/ Grid/ with no project folder,
+  // so a previous system's name cannot keep showing up in the panel.
+  const inheritedDropped = await removeInheritedStyles()
+  if (inheritedDropped > 0) {
+    log(`✓ Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? '' : 's'} prefixed with a previous project name`)
   }
 
   // ── Gradient paint styles ─────────────────────────────────────────────────
@@ -1595,7 +1760,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
       // colour-stop syntax it can't read). Name them in the log rather than
       // dropping them silently — the same gradient still paints the Cover.
       if (!paint) { unparsed.push(slug); continue }
-      upsertPaint(`${prefix}/Gradient/${slug}`, paint)
+      upsertPaint(`Gradient/${slug}`, paint)
       made++
 
       // Dark variants get their own style: a paint style has no modes, so a
@@ -1604,7 +1769,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
       const darkCss = tokens.gradientsDark?.[slug]
       if (darkCss && darkCss !== css) {
         const darkPaint = parseCssGradient(darkCss)
-        if (darkPaint) { upsertPaint(`${prefix}/Gradient/${slug} (Dark)`, darkPaint); darkMade++ }
+        if (darkPaint) { upsertPaint(`Gradient/${slug} (Dark)`, darkPaint); darkMade++ }
       }
     }
     // Which gradient drives which surface is part of the contract, and the
@@ -1670,7 +1835,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     const sizePx = pxToFloat(sizeVal)
     if (!sizePx) continue
 
-    const styleName = `${prefix}/Type/${sizeKey}`
+    const styleName = `Type/size/${sizeKey}`
     const existing  = textByName.get(styleName)
     const ts        = existing ?? figma.createTextStyle()
     if (!existing) { count++; textByName.set(styleName, ts) }
@@ -1709,12 +1874,59 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     bindTextStyle(ts, 'fontFamily',
       (isHeading ? typoVars.get('heading-family') : undefined) ?? typoVars.get('family'))
     bindTextStyle(ts, 'fontSize', typoVars.get(`size/${sizeKey}`))
-    if (lhVal) bindTextStyle(ts, 'lineHeight', typoVars.get(`line-height/${sizeKey}`))
-    if (lsVal) bindTextStyle(ts, 'letterSpacing', typoVars.get(`letter-spacing/${sizeKey}`))
+    bindTextStyle(ts, 'fontWeight', typoVars.get(`weight/${isHeading ? 'semibold' : 'regular'}`) ?? typoVars.get('weight/regular'))
+    bindTextStyle(ts, 'lineHeight', typoVars.get(`line-height/${sizeKey}`))
+    bindTextStyle(ts, 'letterSpacing', typoVars.get(`letter-spacing/${sizeKey}`))
   }
 
   if (Object.keys(tokens.typography.sizes).length > 0) {
     log(`✓ Text styles (${Object.keys(tokens.typography.sizes).length} sizes)`)
+  }
+
+  // Semantic type roles — one style per role, bound to role/{key}/* so the
+  // style tracks the alias (heading-lg → display-md / semibold), not a raw px.
+  const typeRoles = tokens.typography.roles
+  if (typeRoles) {
+    let roleStyles = 0
+    for (const [key, modes] of Object.entries(typeRoles)) {
+      const d = modes?.desktop
+      if (!d) continue
+      const sizeVal = tokens.typography.sizes[d.size]
+      const sizePx = sizeVal ? pxToFloat(sizeVal) : 0
+      if (!sizePx) continue
+      const styleName = `Type/${key}`
+      const existing = textByName.get(styleName)
+      const ts = existing ?? figma.createTextStyle()
+      if (!existing) { count++; textByName.set(styleName, ts) }
+      ts.name = styleName
+      const isHeading = d.family === 'display'
+      const wantedFamily = isHeading ? headingFamily : fontFamily
+      const fontStyle = resolvedStyle(d.weight)
+      try {
+        ts.fontName = { family: loadedFamilies.has(wantedFamily) ? wantedFamily : 'Inter', style: fontStyle }
+      } catch {
+        ts.fontName = { family: 'Inter', style: fontStyle }
+      }
+      ts.fontSize = sizePx
+      const lhVal = tokens.typography.lineHeights?.[d.size]
+      ts.lineHeight = lhVal
+        ? { value: pxToFloat(lhVal), unit: 'PIXELS' }
+        : { unit: 'AUTO' }
+      const lsVal = tokens.typography.letterSpacings?.[d.size]
+      ts.letterSpacing = lsVal
+        ? { value: pxToFloat(lsVal), unit: 'PIXELS' }
+        : { value: 0, unit: 'PIXELS' }
+      bindTextStyle(ts, 'fontFamily',
+        typoVars.get(`role/${key}/family`)
+          ?? (isHeading ? typoVars.get('heading-family') : undefined)
+          ?? typoVars.get('family'))
+      bindTextStyle(ts, 'fontSize', typoVars.get(`role/${key}/size`) ?? typoVars.get(`size/${d.size}`))
+      bindTextStyle(ts, 'fontWeight', typoVars.get(`role/${key}/weight`) ?? typoVars.get(`weight/${d.weight}`))
+      bindTextStyle(ts, 'lineHeight', typoVars.get(`line-height/${d.size}`))
+      bindTextStyle(ts, 'letterSpacing', typoVars.get(`letter-spacing/${d.size}`))
+      roleStyles++
+    }
+    if (roleStyles > 0) log(`✓ Text styles (${roleStyles} semantic roles)`)
   }
 
   // ── Effect styles: shadows ──────────────────────────────────────────────
@@ -1736,11 +1948,11 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     let darkMade = 0
     const unparsed: string[] = []
     for (const [key, css] of Object.entries(tokens.shadows)) {
-      if (upsertEffect(`${prefix}/Shadow/${key}`, css)) made++
+      if (upsertEffect(`Shadow/${key}`, css)) made++
       else unparsed.push(key)
       const darkCss = tokens.shadowsDark?.[key]
       if (darkCss && darkCss !== css) {
-        if (upsertEffect(`${prefix}/Shadow/${key} (Dark)`, darkCss)) darkMade++
+        if (upsertEffect(`Shadow/${key} (Dark)`, darkCss)) darkMade++
       }
     }
     if (made > 0) {
@@ -1753,7 +1965,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
 
   // ── Grid style: column grid from grid tokens ────────────────────────────
   if (tokens.grid?.columns) {
-    const name = `${prefix}/Grid/${tokens.grid.columns} columns`
+    const name = `Grid/${tokens.grid.columns} columns`
     const gridByName = new Map(
       (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s] as const),
     )
@@ -1803,7 +2015,11 @@ const PANEL_PAD = 32
 const PANEL_INNER = PANEL_W - PANEL_PAD * 2
 type DocFontStyle = 'Regular' | 'Medium' | 'Semi Bold' | 'Bold'
 
-function docChrome(fontFor: (style: DocFontStyle) => FontName) {
+function docChrome(
+  fontFor: (style: DocFontStyle) => FontName,
+  typo?: Map<string, Variable>,
+  sizes?: Record<string, string>,
+) {
   const docSolid = (hex: string, opacity = 1): SolidPaint => ({ type: 'SOLID', color: hexToRgb(hex), opacity })
   function docText(chars: string, size: number, style: DocFontStyle, hex: string, opacity = 1): TextNode {
     const t = figma.createText()
@@ -1811,6 +2027,13 @@ function docChrome(fontFor: (style: DocFontStyle) => FontName) {
     t.characters = chars
     t.fontSize = size
     t.fills = [docSolid(hex, opacity)]
+    if (typo && typo.size > 0) {
+      bindAllTextFields(t, typo, {
+        sizeKey: nearestTypeSizeKey(sizes, size),
+        weightKey: weightKeyFromStyle(style),
+        heading: size >= 20 && (style === 'Semi Bold' || style === 'Bold'),
+      })
+    }
     return t
   }
   function docFrame(name: string, dir: 'VERTICAL' | 'HORIZONTAL', gapPx: number): FrameNode {
@@ -5062,7 +5285,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   // and its component set, both wrapped in a Documentation-style board (rounded
   // slab + tinted section bar) — see the placement code in buildEntry. Fixed
   // light chrome; the specimens inside it are what re-theme.
-  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor)
+  const sampleTypo = await typoVarMap()
+  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes)
 
   const DOC_INTRO: Record<string, string> = {
     Button: 'The core action component of the system. It covers primary, destructive and success intents across four visual styles and the full interaction lifecycle, so a generic button never has to be rebuilt.',
@@ -5504,6 +5728,11 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
   const docSem = semLookupFor(tokens, allVars, allCols)
   const accentVar  = docSem.varFor('background-brand-solid', 'Action/primary/default', 'Action/primary.default', 'action/primary/default', 'action/primary.default', 'action/primary', 'bg/accent-solid', 'primary')
   const familyVar  = findVar(COLLECTIONS.typography, 'family')
+  const typoBind = new Map<string, Variable>()
+  {
+    const typoColVars = varsByCollection.get(COLLECTIONS.typography)
+    if (typoColVars) for (const [n, v] of typoColVars) typoBind.set(n, v)
+  }
 
   // Theme columns for the color spec tables: the first theme documents as
   // "light"; the dark theme (or second theme) fills the black panel. Roles
@@ -5547,6 +5776,15 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     return { family: 'Inter', style }
   }
 
+  function weightStyle(weightKey: string): 'Regular' | 'Medium' | 'Semi Bold' | 'Bold' {
+    const val = tokens.typography.weights?.[weightKey]
+      ?? (weightKey === 'bold' ? 700 : weightKey === 'semibold' ? 600 : weightKey === 'medium' ? 500 : 400)
+    if (val >= 700) return 'Bold'
+    if (val >= 600) return 'Semi Bold'
+    if (val >= 500) return 'Medium'
+    return 'Regular'
+  }
+
   // ── Page (wiped + rebuilt each import — generated content only) ───────────
   let page = figma.root.children.find((p) => p.name === '⬡ Documentation') as PageNode | undefined
   if (!page) {
@@ -5573,8 +5811,15 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     t.characters = chars
     t.fontSize = opts.size ?? 12
     t.fills = [boundFill(opts.colorVar, opts.colorHex ?? textHex, opts.opacity ?? 1)]
-    if (opts.bindFamily !== false && familyVar?.resolvedType === 'STRING') {
-      try { t.setBoundVariable('fontFamily', familyVar) } catch {}
+    const sizePx = opts.size ?? 12
+    const sizeKey = nearestTypeSizeKey(tokens.typography.sizes, sizePx)
+    const heading = (opts.style === 'Semi Bold' || opts.style === 'Bold') && sizePx >= 20
+    if (opts.bindFamily !== false) {
+      bindAllTextFields(t, typoBind, {
+        sizeKey,
+        weightKey: weightKeyFromStyle(opts.style ?? 'Regular'),
+        heading,
+      })
     }
     return t
   }
@@ -6213,6 +6458,38 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     body.appendChild(wRow)
     root.appendChild(card)
     sections++
+
+    const typeRoles = tokens.typography.roles
+    if (typeRoles && Object.keys(typeRoles).length > 0) {
+      const { card: roleCard, body: roleBody } = section(
+        'Type roles',
+        'Semantic text roles — each line aliases a size, weight and family primitive (desktop). Bound to Typography role/* variables.',
+      )
+      for (const [key, modes] of Object.entries(typeRoles)) {
+        const d = modes?.desktop
+        if (!d) continue
+        const px = pxToFloat(tokens.typography.sizes[d.size] ?? '')
+        if (!px) continue
+        const row = autoFrame(`role-${key}`, 'HORIZONTAL', 24)
+        row.counterAxisAlignItems = 'BASELINE'
+        const label = mkText(`${key}  →  ${d.size} / ${d.weight}`, { size: 10, colorHex: mutedHex })
+        row.appendChild(label)
+        label.resize(220, label.height)
+        ;(label as TextNode).textAutoResize = 'HEIGHT'
+        const spec = mkText('Almost before we knew it, we had left the ground.', {
+          style: weightStyle(d.weight),
+          colorHex: textHex,
+        })
+        spec.fontSize = px
+        bindField(spec, 'fontSize', bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`))
+        bindField(spec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`))
+        bindField(spec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === 'display' ? 'heading-family' : 'family'))
+        row.appendChild(spec)
+        roleBody.appendChild(row)
+      }
+      root.appendChild(roleCard)
+      sections++
+    }
   }
 
   // ── 04 · Spacing ───────────────────────────────────────────────────────────
@@ -6239,6 +6516,25 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         bindField(bar, 'width', findVar(COLLECTIONS.spacing, figmaVarName(key)) ?? findVar(COLLECTIONS.spacing, key))
         row.appendChild(bar)
         body.appendChild(row)
+      }
+      const spacingRoles = tokens.spacingRoles
+      if (spacingRoles) {
+        for (const [role, step] of Object.entries(spacingRoles)) {
+          const px = pxToFloat(tokens.spacing[step] ?? '')
+          const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
+          row.counterAxisAlignItems = 'CENTER'
+          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorHex: mutedHex })
+          row.appendChild(label)
+          label.resize(200, label.height)
+          const bar = figma.createFrame()
+          bar.name = `role-bar-${role}`
+          bar.resize(Math.max(px, 2), 14)
+          bar.cornerRadius = 3
+          bar.fills = [boundFill(accentVar, accentHex, 0.55)]
+          bindField(bar, 'width', findVar(COLLECTIONS.spacing, figmaVarName(`role/${role}`)))
+          row.appendChild(bar)
+          body.appendChild(row)
+        }
       }
       root.appendChild(card)
       sections++
@@ -6276,18 +6572,48 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         row.appendChild(cell)
       }
       body.appendChild(row)
+      const radiusRoles = tokens.radiusRoles
+      if (radiusRoles) {
+        const roleRow = autoFrame('radius-roles', 'HORIZONTAL', 24)
+        for (const [role, step] of Object.entries(radiusRoles)) {
+          const px = pxToFloat(tokens.radius[step] ?? '')
+          const cell = autoFrame(`role-${role}`, 'VERTICAL', 8)
+          cell.counterAxisAlignItems = 'CENTER'
+          const sq = figma.createFrame()
+          sq.name = `role-radius-${role}`
+          sq.resize(56, 56)
+          sq.cornerRadius = Math.min(px || 0, 28)
+          sq.fills = [boundFill(cardVar, cardHex)]
+          sq.strokes = [boundFill(accentVar, accentHex, 0.7)]
+          sq.strokeWeight = 2
+          const rv = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`)) ?? findVar(COLLECTIONS.radius, step)
+          if (rv?.resolvedType === 'FLOAT') {
+            sq.setBoundVariable('topLeftRadius', rv)
+            sq.setBoundVariable('topRightRadius', rv)
+            sq.setBoundVariable('bottomLeftRadius', rv)
+            sq.setBoundVariable('bottomRightRadius', rv)
+          }
+          cell.appendChild(sq)
+          cell.appendChild(mkText(`${role} → ${step}`, { size: 10, colorHex: mutedHex }))
+          roleRow.appendChild(cell)
+        }
+        body.appendChild(roleRow)
+      }
       root.appendChild(card)
       sections++
     }
   }
 
-  // ── 06 · Borders ───────────────────────────────────────────────────────────
+  // ── 06 · Borders / Stroke ──────────────────────────────────────────────────
   {
-    const entries = Object.entries(tokens.borders?.width ?? {})
+    const strokeMap = (tokens.stroke && Object.keys(tokens.stroke).length > 0)
+      ? tokens.stroke
+      : tokens.borders?.width
+    const entries = Object.entries(strokeMap ?? {})
     if (entries.length > 0) {
-      await newBoard('Borders')
-      root.appendChild(sectionBar('Borders'))
-      const { card, body } = section('Borders', 'Stroke widths — bound to the Border variables.')
+      await newBoard('Stroke')
+      root.appendChild(sectionBar('Stroke'))
+      const { card, body } = section('Stroke', 'Stroke widths — primitives and semantic roles, bound to the Border collection.')
       for (const [key, val] of entries) {
         const px = pxToFloat(val)
         const row = autoFrame(key, 'HORIZONTAL', 16)
@@ -6302,9 +6628,29 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         line.strokes = [boundFill(textVar, textHex, 0.85)]
         line.strokeWeight = px
         line.cornerRadius = 4
-        bindField(line, 'strokeWeight', findVar(COLLECTIONS.border, `width/${key}`))
+        bindField(line, 'strokeWeight', findVar(COLLECTIONS.border, key) ?? findVar(COLLECTIONS.border, `width/${key}`))
         row.appendChild(line)
         body.appendChild(row)
+      }
+      if (tokens.strokeRoles) {
+        for (const [role, step] of Object.entries(tokens.strokeRoles)) {
+          const px = pxToFloat((strokeMap ?? {})[step] ?? '')
+          const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
+          row.counterAxisAlignItems = 'CENTER'
+          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorHex: mutedHex })
+          row.appendChild(label)
+          label.resize(200, label.height)
+          const line = figma.createFrame()
+          line.name = `role-border-${role}`
+          line.resize(220, Math.max(px * 2, 12))
+          line.fills = []
+          line.strokes = [boundFill(accentVar, accentHex, 0.85)]
+          line.strokeWeight = px || 1
+          line.cornerRadius = 4
+          bindField(line, 'strokeWeight', findVar(COLLECTIONS.border, figmaVarName(`role/${role}`)))
+          row.appendChild(line)
+          body.appendChild(row)
+        }
       }
       root.appendChild(card)
       sections++
@@ -6401,6 +6747,24 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         bindField(bar, 'height', findVar(COLLECTIONS.size, key))
         row.appendChild(bar)
         body.appendChild(row)
+      }
+      if (tokens.sizeRoles) {
+        for (const [role, step] of Object.entries(tokens.sizeRoles)) {
+          const px = pxToFloat(tokens.sizes?.[step] ?? '')
+          const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
+          row.counterAxisAlignItems = 'CENTER'
+          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorHex: mutedHex })
+          row.appendChild(label)
+          label.resize(200, label.height)
+          const bar = figma.createFrame()
+          bar.name = `role-size-${role}`
+          bar.resize(180, Math.max(px, 8))
+          bar.cornerRadius = 6
+          bar.fills = [boundFill(accentVar, accentHex, 0.35)]
+          bindField(bar, 'height', findVar(COLLECTIONS.size, figmaVarName(`role/${role}`)))
+          row.appendChild(bar)
+          body.appendChild(row)
+        }
       }
       root.appendChild(card)
       sections++
@@ -6652,7 +7016,8 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   }
   const fontFor = (style: DocFontStyle): FontName =>
     loadedStyles.has(style) ? { family: fontFamily, style } : { family: 'Inter', style }
-  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor)
+  const iconsTypo = await typoVarMap()
+  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, iconsTypo, tokens.typography.sizes)
   try { pg.backgrounds = [docSolid(DOC.page)] } catch {}
 
   const MARGIN = 80
@@ -7099,7 +7464,7 @@ async function importCover(tokens: DesignTokens): Promise<boolean> {
   if (coverSlug && gradient) {
     // `tokens.project || 'SD'`, not this function's `project` (which falls back
     // to 'Design System') — the name has to match what importStyles created.
-    const styleName = `${tokens.project || 'SD'}/Gradient/${coverSlug}`
+    const styleName = `Gradient/${coverSlug}`
     const style = (await figma.getLocalPaintStylesAsync()).find((s) => s.name === styleName)
     if (style) { try { await frame.setFillStyleIdAsync(style.id) } catch (e) { /* keep the raw paint */ } }
   }
@@ -7112,12 +7477,18 @@ async function importCover(tokens: DesignTokens): Promise<boolean> {
   frame.counterAxisSizingMode = 'FIXED'
   page.appendChild(frame)
 
+  const coverTypo = await typoVarMap()
   function text(chars: string, font: FontName, size: number, opacity = 1): TextNode {
     const t = figma.createText()
     t.fontName = font
     t.characters = chars
     t.fontSize = size
     t.fills = [ink(opacity)]
+    bindAllTextFields(t, coverTypo, {
+      sizeKey: nearestTypeSizeKey(tokens.typography.sizes, size),
+      weightKey: font.style === 'Bold' || font.style === 'Semi Bold' ? 'semibold' : 'regular',
+      heading: size >= 28,
+    })
     return t
   }
 
@@ -7234,7 +7605,12 @@ interface ExportedVariable {
 }
 
 async function exportVariablesJson() {
-  const collections = await figma.variables.getLocalVariableCollectionsAsync()
+  const allCollections = await figma.variables.getLocalVariableCollectionsAsync()
+  const skipped = allCollections.filter((c) => !PLUGIN_COLLECTION_NAMES.has(c.name)).map((c) => c.name)
+  if (skipped.length > 0) {
+    log(`ℹ Export skipped ${skipped.length} collection${skipped.length > 1 ? 's' : ''} not from this plugin (${skipped.slice(0, 4).join(', ')}${skipped.length > 4 ? '…' : ''}) — leftover names like a previous project are not the synced system`)
+  }
+  const collections = allCollections.filter((c) => PLUGIN_COLLECTION_NAMES.has(c.name))
   const variables = await figma.variables.getLocalVariablesAsync()
   const varById = new Map<string, Variable>(variables.map((v) => [v.id, v]))
   const colById = new Map<string, VariableCollection>(collections.map((c) => [c.id, c]))
@@ -7360,6 +7736,10 @@ const SETTINGS_KEY = 'sd-sync-settings'
 // a different file's tokens. figma.root is the one node guaranteed unique to
 // this document.
 const FILE_TOKENS_KEY = 'sd-file-tokens'
+// Project names this file has imported. Used to drop leftover collections
+// and styles named after a previous system (the old plugin named one
+// collection after `tokens.project` — "Jasdy" stayed after a switch).
+const FILE_PROJECTS_KEY = 'sd-file-projects'
 
 // File-scoped, same reasoning as FILE_TOKENS_KEY but for the sync CONNECTION
 // itself rather than its last payload. Reported bug: opening a brand-new file
@@ -7391,10 +7771,125 @@ function readFileTokens(): FileTokensRecord | null {
   }
 }
 
+function readImportedProjects(): string[] {
+  try {
+    const raw = figma.root.getPluginData(FILE_PROJECTS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+  } catch {
+    return []
+  }
+}
+
+function rememberImportedProject(name: string | undefined) {
+  if (!name) return
+  const prev = readImportedProjects()
+  if (prev.includes(name)) return
+  try {
+    figma.root.setPluginData(FILE_PROJECTS_KEY, JSON.stringify([...prev, name].slice(-12)))
+  } catch { /* pluginData ceiling — remembering is best-effort */ }
+}
+
+/** Collection / style prefixes this file may still hold from earlier imports. */
+function leftoverProjectNames(currentProject: string): string[] {
+  const names = new Set<string>()
+  if (currentProject) names.add(currentProject)
+  const stored = readFileTokens()?.tokens.project
+  if (stored) names.add(stored)
+  for (const p of readImportedProjects()) names.add(p)
+  return [...names]
+}
+
+function inheritedStylePrefix(name: string): string | null {
+  const parts = name.split('/')
+  if (parts.length < 2) return null
+  if (PLUGIN_STYLE_ROOTS.has(parts[0])) return null
+  if ((INHERITED_STYLE_FOLDERS as readonly string[]).includes(parts[1])) return parts[0]
+  return null
+}
+
+async function scanInheritedStylePrefixes(): Promise<string[]> {
+  const found = new Set<string>()
+  const note = (name: string) => {
+    const p = inheritedStylePrefix(name)
+    if (p) found.add(p)
+  }
+  for (const s of await figma.getLocalTextStylesAsync()) note(s.name)
+  for (const s of await figma.getLocalPaintStylesAsync()) note(s.name)
+  for (const s of await figma.getLocalEffectStylesAsync()) note(s.name)
+  try {
+    for (const s of await figma.getLocalGridStylesAsync()) note(s.name)
+  } catch { /* grid styles API not on every plan */ }
+  return [...found]
+}
+
+async function removeInheritedStyles(): Promise<number> {
+  let dropped = 0
+  const drop = (s: { name: string; remove(): void }) => {
+    if (!inheritedStylePrefix(s.name)) return
+    try { s.remove(); dropped++ } catch { /* still referenced */ }
+  }
+  for (const s of await figma.getLocalTextStylesAsync()) drop(s)
+  for (const s of await figma.getLocalPaintStylesAsync()) drop(s)
+  for (const s of await figma.getLocalEffectStylesAsync()) drop(s)
+  try {
+    for (const s of await figma.getLocalGridStylesAsync()) drop(s)
+  } catch { /* grid styles API not on every plan */ }
+  return dropped
+}
+
+function readDocsRev(): number {
+  const n = parseInt(figma.root.getPluginData(FILE_DOCS_REV_KEY) || '0', 10)
+  return Number.isFinite(n) ? n : 0
+}
+
+function writeDocsRev() {
+  try { figma.root.setPluginData(FILE_DOCS_REV_KEY, String(DOCS_REV)) } catch { /* best-effort */ }
+}
+
+async function purgeInheritedCollections(currentProject: string) {
+  const prefixes = new Set([
+    ...leftoverProjectNames(currentProject),
+    ...(await scanInheritedStylePrefixes()),
+  ])
+  // This file has been stuck on a leftover "Jasdy" collection across several
+  // imports. If the payload is no longer that system, drop the name too.
+  if (currentProject.trim().toLowerCase() !== 'jasdy') prefixes.add('Jasdy')
+  const cols = await figma.variables.getLocalVariableCollectionsAsync()
+  const vars = await figma.variables.getLocalVariablesAsync()
+  const protectedNames = new Set<string>([...Object.values(COLLECTIONS), ...Object.values(ARCH_LABEL)])
+  for (const col of cols) {
+    if (protectedNames.has(col.name)) continue
+    const named = prefixes.has(col.name) || (LEGACY_COLLECTIONS as string[]).indexOf(col.name) !== -1
+    // Old plugin put the whole system in one collection named after the
+    // project. Detect that shape even when we never recorded the name:
+    // COLOR variables grouped Accent/01, Neutral/12, …
+    const looksLikeLegacyDump = vars.some((v) =>
+      v.variableCollectionId === col.id
+      && v.resolvedType === 'COLOR'
+      && /^(Accent|Neutral|State)\//.test(v.name),
+    )
+    if (!named && !looksLikeLegacyDump) continue
+    const mine = vars.filter((v) => v.variableCollectionId === col.id)
+    let droppedVars = 0
+    for (const v of mine) {
+      try { v.remove(); droppedVars++ } catch { /* still bound */ }
+    }
+    try {
+      col.remove()
+      log(`✓ Removed leftover "${col.name}" collection (${droppedVars} variables) after docs rebound`)
+    } catch {
+      log(`⚠ Leftover "${col.name}" still referenced — removed ${droppedVars}/${mine.length} variables`)
+    }
+  }
+}
+
 function writeFileTokens(tokens: DesignTokens) {
   try {
     const record: FileTokensRecord = { tokens, importedAt: new Date().toISOString() }
     figma.root.setPluginData(FILE_TOKENS_KEY, JSON.stringify(record))
+    rememberImportedProject(tokens.project)
   } catch (err) {
     // setPluginData has a size ceiling (~100KB) — an unusually large system
     // (many themes/custom colors) could exceed it. The import itself already
@@ -7437,6 +7932,8 @@ function writeFileSync(url: string, autoStart: boolean) {
 function resetFile() {
   figma.root.setPluginData(FILE_TOKENS_KEY, '')
   figma.root.setPluginData(FILE_SYNC_KEY, '')
+  figma.root.setPluginData(FILE_PROJECTS_KEY, '')
+  figma.root.setPluginData(FILE_DOCS_REV_KEY, '')
 }
 
 // ─── What this file actually contains ────────────────────────────────────────
@@ -7591,6 +8088,20 @@ figma.ui.onmessage = async (msg: {
     log(`― Starting import for "${tokens.project || 'Untitled'}" ―`)
     checkSchema(tokens)
 
+    // Docs used to stay frozen on Live Sync (variables-only). After a plugin
+    // update that adds Type/Spacing/Size/Stroke boards — or when this file
+    // still carries a previous project's style folder (Jasdy/Type/…) — rebuild
+    // Cover + Documentation even on a sync pass.
+    const inheritedPrefixes = await scanInheritedStylePrefixes()
+    const staleDocs = readDocsRev() < DOCS_REV
+    let docsMustRebuild = inheritedPrefixes.length > 0 || staleDocs
+    if (docsMustRebuild) {
+      const why = inheritedPrefixes.length > 0
+        ? `inherited project folder${inheritedPrefixes.length > 1 ? 's' : ''} ${inheritedPrefixes.join(', ')}`
+        : 'documentation is from an older plugin'
+      log(`↻ Documentation will rebuild — ${why}`)
+    }
+
     // Guard a malformed/partial payload (hand-edited or stale tokens.json
     // missing a required field) — without this, a missing `typography`
     // threw inside importVariables and — since every phase used to share one
@@ -7680,16 +8191,18 @@ figma.ui.onmessage = async (msg: {
         // fetch) and re-running it skips existing sets anyway, so it would cost
         // minutes and rebind nothing. Re-run Import with the Icon library
         // ticked when the icon tint needs to follow too.
-        if (semanticsRebuilt || foundationsRebuilt) {
+        if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
           const added: string[] = []
-          if (!wantComponents) { wantComponents = true; added.push('Components') }
+          if (semanticsRebuilt && !wantComponents) { wantComponents = true; added.push('Components') }
           if (!wantCover) { wantCover = true; added.push('Cover') }
           if (!wantDocumentation) { wantDocumentation = true; added.push('Documentation') }
           if (added.length > 0) {
             planned.push(...added)
             const why = semanticsRebuilt
               ? 'the new semantic variables'
-              : 'the restacked Spacing / Radius / Type collections'
+              : docsMustRebuild
+                ? 'updated documentation (roles + leftover project folders)'
+                : 'the restacked Spacing / Radius / Type collections'
             log(`↻ Recalibrating: ${added.join(', ')} rebuilt too, so everything binds to ${why}`)
           }
         }
@@ -7708,7 +8221,13 @@ figma.ui.onmessage = async (msg: {
       }
       if (wantDocumentation) {
         await phase('Documentation', async () => { totalDocs = await importDocumentation(tokens) })
+        writeDocsRev()
       }
+
+      // Leftover project-named collections (Jasdy, …) stay referenced while
+      // old docs still bind to them. Purge AFTER Cover/Docs/Components so
+      // those bindings are gone and the remove can succeed.
+      await purgeInheritedCollections(tokens.project || '')
 
       // Keep the payload for manual export and Overview — scoped to THIS file
       // (see writeFileTokens), so it survives restarts without leaking into

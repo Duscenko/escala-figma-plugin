@@ -45,6 +45,73 @@
   function pxToFloat(val) {
     return parseFloat(val.replace("px", "").replace("rem", "")) || 0;
   }
+  function weightKeyFromStyle(style) {
+    if (style === "Bold") return "bold";
+    if (style === "Semi Bold") return "semibold";
+    if (style === "Medium") return "medium";
+    return "regular";
+  }
+  function nearestTypeSizeKey(sizes, px) {
+    if (!sizes || !px) return void 0;
+    let best;
+    let bestD = Infinity;
+    for (const [key, val] of Object.entries(sizes)) {
+      const d = Math.abs(pxToFloat(val) - px);
+      if (d < bestD) {
+        bestD = d;
+        best = key;
+      }
+    }
+    return best;
+  }
+  function bindAllTextFields(t, typo, opts) {
+    var _a, _b, _c, _d, _e, _f;
+    const family = opts.roleKey ? (_b = (_a = typo.get(`role/${opts.roleKey}/family`)) != null ? _a : opts.heading ? typo.get("heading-family") : void 0) != null ? _b : typo.get("family") : opts.heading ? (_c = typo.get("heading-family")) != null ? _c : typo.get("family") : typo.get("family");
+    if (family) {
+      try {
+        t.setBoundVariable("fontFamily", family);
+      } catch (e) {
+      }
+    }
+    const sizeVar = (_d = opts.roleKey ? typo.get(`role/${opts.roleKey}/size`) : void 0) != null ? _d : opts.sizeKey ? typo.get(`size/${opts.sizeKey}`) : void 0;
+    if (sizeVar) {
+      try {
+        t.setBoundVariable("fontSize", sizeVar);
+      } catch (e) {
+      }
+    }
+    const weightVar = (_f = (_e = opts.roleKey ? typo.get(`role/${opts.roleKey}/weight`) : void 0) != null ? _e : opts.weightKey ? typo.get(`weight/${opts.weightKey}`) : void 0) != null ? _f : typo.get("weight/regular");
+    if (weightVar) {
+      try {
+        t.setBoundVariable("fontWeight", weightVar);
+      } catch (e) {
+      }
+    }
+    const lh = opts.sizeKey ? typo.get(`line-height/${opts.sizeKey}`) : void 0;
+    if (lh) {
+      try {
+        t.setBoundVariable("lineHeight", lh);
+      } catch (e) {
+      }
+    }
+    const ls = opts.sizeKey ? typo.get(`letter-spacing/${opts.sizeKey}`) : void 0;
+    if (ls) {
+      try {
+        t.setBoundVariable("letterSpacing", ls);
+      } catch (e) {
+      }
+    }
+  }
+  async function typoVarMap() {
+    const m = /* @__PURE__ */ new Map();
+    const cols = await figma.variables.getLocalVariableCollectionsAsync();
+    const col = cols.find((c) => c.name === COLLECTIONS.typography);
+    if (!col) return m;
+    for (const v of await figma.variables.getLocalVariablesAsync()) {
+      if (v.variableCollectionId === col.id) m.set(v.name, v);
+    }
+    return m;
+  }
   function log(msg) {
     figma.ui.postMessage({ type: "log", message: msg });
   }
@@ -60,7 +127,7 @@
       new Promise((_, reject) => setTimeout(() => reject(new Error(`Request timed out after ${Math.round(ms / 1e3)}s`)), ms))
     ]);
   }
-  var SUPPORTED_SCHEMA_VERSION = 5;
+  var SUPPORTED_SCHEMA_VERSION = 6;
   function checkSchema(tokens) {
     const v = tokens.schemaVersion;
     if (typeof v === "number" && v > SUPPORTED_SCHEMA_VERSION) {
@@ -81,10 +148,14 @@
     copy: "Copy"
   };
   var PLUGIN_COLLECTION_NAMES = new Set(Object.values(COLLECTIONS));
+  var PLUGIN_STYLE_ROOTS = /* @__PURE__ */ new Set(["Type", "Shadow", "Gradient", "Grid"]);
+  var INHERITED_STYLE_FOLDERS = ["Type", "Shadow", "Gradient", "Grid", "Scale", "Semantic"];
+  var DOCS_REV = 6;
+  var FILE_DOCS_REV_KEY = "sd-docs-rev";
   function collectionPanelOrder(tokens) {
     var _a, _b;
     const rest = [
-      { name: COLLECTIONS.border, include: !!((_a = tokens.borders) == null ? void 0 : _a.width) },
+      { name: COLLECTIONS.border, include: !!(tokens.stroke || ((_a = tokens.borders) == null ? void 0 : _a.width)) },
       { name: COLLECTIONS.copy, include: !!tokens.copy },
       { name: COLLECTIONS.grid, include: !!tokens.grid },
       { name: COLLECTIONS.icons, include: !!((_b = tokens.icons) == null ? void 0 : _b.library) },
@@ -166,11 +237,11 @@
       case COLLECTIONS.grid:
         return ["WIDTH_HEIGHT"];
       case COLLECTIONS.typography: {
-        if (varName.startsWith("size/")) return ["FONT_SIZE"];
-        if (varName.startsWith("weight/")) return ["FONT_WEIGHT"];
+        if (varName.startsWith("size/") || varName.endsWith("/size")) return ["FONT_SIZE"];
+        if (varName.startsWith("weight/") || varName.endsWith("/weight")) return ["FONT_WEIGHT"];
         if (varName.startsWith("line-height/")) return ["LINE_HEIGHT"];
         if (varName.startsWith("letter-spacing/")) return ["LETTER_SPACING"];
-        if (varName === "family" || varName === "heading-family") return ["FONT_FAMILY"];
+        if (varName === "family" || varName === "heading-family" || varName.endsWith("/family")) return ["FONT_FAMILY"];
         return void 0;
       }
       default:
@@ -555,10 +626,15 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     let count = 0;
     semanticsRebuilt = false;
     foundationsRebuilt = false;
+    const previousProject = (_a = readFileTokens()) == null ? void 0 : _a.tokens.project;
+    if (previousProject && tokens.project && previousProject !== tokens.project) {
+      foundationsRebuilt = true;
+      log(`\u21BB System changed "${previousProject}" \u2192 "${tokens.project}" \u2014 leftover collections and docs will follow the new name`);
+    }
     const existingCollections = await figma.variables.getLocalVariableCollectionsAsync();
     const allVars = await figma.variables.getLocalVariablesAsync();
     function findOrCreateCollection(name) {
@@ -675,6 +751,21 @@
         setDefault(col, upsertVarIn(col, cache, varName, type, scopesForCollection(collName, figmaVarName(varName))), transform(val));
       }
     }
+    function emitRoleAliases(collName, roles, primitiveNameOf) {
+      if (!roles) return 0;
+      const col = findOrCreateCollection(collName);
+      const cache = cacheFor(col);
+      let n = 0;
+      for (const [role, step] of Object.entries(roles)) {
+        if (typeof step !== "string" || !step) continue;
+        const prim = cache.get(figmaVarName(primitiveNameOf(step)));
+        if (!prim) continue;
+        const v = upsertVarIn(col, cache, `role/${role}`, "FLOAT", scopesForCollection(collName, `role/${role}`));
+        setDefault(col, v, figma.variables.createVariableAlias(prim));
+        n++;
+      }
+      return n;
+    }
     const primCol = findOrCreateCollection(COLLECTIONS.primitives);
     const primCache = cacheFor(primCol);
     for (const [name, v] of Array.from(primCache.entries())) {
@@ -741,7 +832,7 @@
     const themes = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({
       light: tokens.colors.semantic || {}
     }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const ordered = ((_a = tokens.colors.themeOrder) != null ? _a : []).filter((t) => themes[t]);
+    const ordered = ((_b = tokens.colors.themeOrder) != null ? _b : []).filter((t) => themes[t]);
     const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))];
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const arch = tokens.colors.architecture;
@@ -800,7 +891,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_b = tok.byMode[modeKey]) != null ? _b : "", lookup);
+            const rgba = archValueRgba((_c = tok.byMode[modeKey]) != null ? _c : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -861,7 +952,7 @@
       for (const [mid, value] of entry.values) v.setValueForMode(mid, value);
     }
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_c = ARCH_LABEL[arch.kind]) != null ? _c : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_d = ARCH_LABEL[arch.kind]) != null ? _d : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -892,18 +983,47 @@
     if (tokens.typography.letterSpacings) {
       Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar(`letter-spacing/${key}`, "FLOAT", pxToFloat(val)));
     }
+    const typeRoles = tokens.typography.roles;
+    if (typeRoles) {
+      let roleCount = 0;
+      for (const [key, modes] of Object.entries(typeRoles)) {
+        const d = modes == null ? void 0 : modes.desktop;
+        if (!d) continue;
+        const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`));
+        const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`));
+        const familyName = d.family === "display" && typoCache.get("heading-family") ? "heading-family" : "family";
+        const familyPrim = typoCache.get(figmaVarName(familyName));
+        if (sizePrim) {
+          typoVar(`role/${key}/size`, "FLOAT", figma.variables.createVariableAlias(sizePrim));
+          roleCount++;
+        }
+        if (weightPrim) {
+          typoVar(`role/${key}/weight`, "FLOAT", figma.variables.createVariableAlias(weightPrim));
+        }
+        if (familyPrim) {
+          typoVar(`role/${key}/family`, "STRING", figma.variables.createVariableAlias(familyPrim));
+        }
+      }
+      if (roleCount > 0) log(`\u2713 Typography roles (${roleCount} aliased to size/weight/family)`);
+    }
     log(`\u2713 Typography tokens`);
     emitCollection(COLLECTIONS.spacing, Object.entries(tokens.spacing), "FLOAT", pxToFloat);
-    log(`\u2713 Spacing tokens (${Object.keys(tokens.spacing).length} steps)`);
+    const spacingRoleCount = emitRoleAliases(COLLECTIONS.spacing, tokens.spacingRoles, (s) => s);
+    log(`\u2713 Spacing tokens (${Object.keys(tokens.spacing).length} steps${spacingRoleCount ? ` \xB7 ${spacingRoleCount} roles` : ""})`);
     if (tokens.padding && Object.keys(tokens.padding).length > 0) {
       emitCollection(COLLECTIONS.spacing, Object.entries(tokens.padding), "FLOAT", pxToFloat, (k) => `padding/${k}`);
       log(`\u2713 Surface padding tokens (${Object.keys(tokens.padding).length} sides)`);
     }
     emitCollection(COLLECTIONS.radius, Object.entries(tokens.radius), "FLOAT", pxToFloat);
-    log(`\u2713 Radius tokens`);
-    if ((_d = tokens.borders) == null ? void 0 : _d.width) {
-      emitCollection(COLLECTIONS.border, Object.entries(tokens.borders.width), "FLOAT", pxToFloat, (k) => `width/${k}`);
-      log(`\u2713 Border width tokens (${Object.keys(tokens.borders.width).length})`);
+    const radiusRoleCount = emitRoleAliases(COLLECTIONS.radius, tokens.radiusRoles, (s) => s);
+    log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""}`);
+    const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_e = tokens.borders) == null ? void 0 : _e.width;
+    if (strokeMap) {
+      const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
+      emitCollection(COLLECTIONS.border, Object.entries(strokeMap), "FLOAT", pxToFloat, nameOf);
+      const strokeRoleCount = emitRoleAliases(COLLECTIONS.border, tokens.strokeRoles, (s) => s);
+      log(`\u2713 Border width tokens (${Object.keys(strokeMap).length}${strokeRoleCount ? ` \xB7 ${strokeRoleCount} roles` : ""})`);
     }
     if (tokens.opacity) {
       emitCollection(COLLECTIONS.opacity, Object.entries(tokens.opacity), "FLOAT", (v) => (parseFloat(v) || 0) / 100);
@@ -911,26 +1031,31 @@
     }
     if (tokens.sizes) {
       emitCollection(COLLECTIONS.size, Object.entries(tokens.sizes), "FLOAT", pxToFloat);
-      log(`\u2713 Size tokens (${Object.keys(tokens.sizes).length})`);
+      const sizeRoleCount = emitRoleAliases(COLLECTIONS.size, tokens.sizeRoles, (s) => s);
+      log(`\u2713 Size tokens (${Object.keys(tokens.sizes).length}${sizeRoleCount ? ` \xB7 ${sizeRoleCount} roles` : ""})`);
     }
     if (tokens.grid) {
       emitCollection(COLLECTIONS.grid, Object.entries(tokens.grid), "FLOAT", pxToFloat);
-      log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length})`);
+      const bpRoleCount = emitRoleAliases(COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`);
+      log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_e = tokens.icons) == null ? void 0 : _e.library) {
+    if ((_f = tokens.icons) == null ? void 0 : _f.library) {
       emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
     }
     if (tokens.copy) {
       emitCollection(COLLECTIONS.copy, Object.entries(tokens.copy), "STRING", (v) => v);
       log(`\u2713 Copy tokens (${Object.keys(tokens.copy).length} strings)`);
     }
-    const newNames = /* @__PURE__ */ new Set([...Object.values(COLLECTIONS), ...Object.values(ARCH_LABEL)]);
-    const legacyName = tokens.project || "Escala";
-    if (!newNames.has(legacyName)) {
-      const legacy = existingCollections.find((c) => c.name === legacyName);
-      if (legacy) {
-        legacy.remove();
-        log(`\u2713 Removed legacy "${legacyName}" collection`);
+    const protectedNames = /* @__PURE__ */ new Set([...Object.values(COLLECTIONS), ...Object.values(ARCH_LABEL)]);
+    for (const leftoverName of leftoverProjectNames(tokens.project || "")) {
+      if (protectedNames.has(leftoverName)) continue;
+      const leftover = existingCollections.find((c) => c.name === leftoverName);
+      if (!leftover) continue;
+      try {
+        leftover.remove();
+        existingCollections.splice(existingCollections.indexOf(leftover), 1);
+        log(`\u2713 Removed leftover "${leftoverName}" collection \u2014 this file now holds "${tokens.project || "untitled"}"`);
+      } catch (e) {
       }
     }
     log(`\u2139 One design system per file \u2014 add variants as themes (modes) in "Color Semantics".`);
@@ -1037,17 +1162,17 @@
     return css ? parseCssGradient(css) : null;
   }
   async function importStyles(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
     let count = 0;
-    const prefix = tokens.project || "SD";
     const fontFamily = tokens.typography.fontFamily || "Inter";
     const headingFamily = tokens.typography.headingFontFamily || fontFamily;
     const textByName = new Map(
       (await figma.getLocalTextStylesAsync()).map((s) => [s.name, s])
     );
-    const stalePaints = (await figma.getLocalPaintStylesAsync()).filter(
-      (s) => s.name.startsWith(`${prefix}/Scale/`) || s.name.startsWith(`${prefix}/Semantic/`)
-    );
+    const stalePaints = (await figma.getLocalPaintStylesAsync()).filter((s) => {
+      const parts = s.name.split("/");
+      return parts.length >= 2 && (parts[1] === "Scale" || parts[1] === "Semantic");
+    });
     if (stalePaints.length > 0) {
       for (const s of stalePaints) {
         try {
@@ -1056,6 +1181,10 @@
         }
       }
       log(`\u2713 Removed ${stalePaints.length} legacy color paint styles (colors are variables-only now)`);
+    }
+    const inheritedDropped = await removeInheritedStyles();
+    if (inheritedDropped > 0) {
+      log(`\u2713 Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? "" : "s"} prefixed with a previous project name`);
     }
     const gradients = (_a = tokens.gradients) != null ? _a : {};
     if (Object.keys(gradients).length > 0) {
@@ -1082,13 +1211,13 @@
           unparsed.push(slug);
           continue;
         }
-        upsertPaint(`${prefix}/Gradient/${slug}`, paint);
+        upsertPaint(`Gradient/${slug}`, paint);
         made++;
         const darkCss = (_c = tokens.gradientsDark) == null ? void 0 : _c[slug];
         if (darkCss && darkCss !== css) {
           const darkPaint = parseCssGradient(darkCss);
           if (darkPaint) {
-            upsertPaint(`${prefix}/Gradient/${slug} (Dark)`, darkPaint);
+            upsertPaint(`Gradient/${slug} (Dark)`, darkPaint);
             darkMade++;
           }
         }
@@ -1149,7 +1278,7 @@
     for (const [sizeKey, sizeVal] of Object.entries(tokens.typography.sizes)) {
       const sizePx = pxToFloat(sizeVal);
       if (!sizePx) continue;
-      const styleName = `${prefix}/Type/${sizeKey}`;
+      const styleName = `Type/size/${sizeKey}`;
       const existing = textByName.get(styleName);
       const ts = existing != null ? existing : figma.createTextStyle();
       if (!existing) {
@@ -1176,11 +1305,55 @@
         (_g = isHeading ? typoVars.get("heading-family") : void 0) != null ? _g : typoVars.get("family")
       );
       bindTextStyle(ts, "fontSize", typoVars.get(`size/${sizeKey}`));
-      if (lhVal) bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${sizeKey}`));
-      if (lsVal) bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${sizeKey}`));
+      bindTextStyle(ts, "fontWeight", (_h = typoVars.get(`weight/${isHeading ? "semibold" : "regular"}`)) != null ? _h : typoVars.get("weight/regular"));
+      bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${sizeKey}`));
+      bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${sizeKey}`));
     }
     if (Object.keys(tokens.typography.sizes).length > 0) {
       log(`\u2713 Text styles (${Object.keys(tokens.typography.sizes).length} sizes)`);
+    }
+    const typeRoles = tokens.typography.roles;
+    if (typeRoles) {
+      let roleStyles = 0;
+      for (const [key, modes] of Object.entries(typeRoles)) {
+        const d = modes == null ? void 0 : modes.desktop;
+        if (!d) continue;
+        const sizeVal = tokens.typography.sizes[d.size];
+        const sizePx = sizeVal ? pxToFloat(sizeVal) : 0;
+        if (!sizePx) continue;
+        const styleName = `Type/${key}`;
+        const existing = textByName.get(styleName);
+        const ts = existing != null ? existing : figma.createTextStyle();
+        if (!existing) {
+          count++;
+          textByName.set(styleName, ts);
+        }
+        ts.name = styleName;
+        const isHeading = d.family === "display";
+        const wantedFamily = isHeading ? headingFamily : fontFamily;
+        const fontStyle = resolvedStyle(d.weight);
+        try {
+          ts.fontName = { family: loadedFamilies.has(wantedFamily) ? wantedFamily : "Inter", style: fontStyle };
+        } catch (e) {
+          ts.fontName = { family: "Inter", style: fontStyle };
+        }
+        ts.fontSize = sizePx;
+        const lhVal = (_i = tokens.typography.lineHeights) == null ? void 0 : _i[d.size];
+        ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
+        const lsVal = (_j = tokens.typography.letterSpacings) == null ? void 0 : _j[d.size];
+        ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
+        bindTextStyle(
+          ts,
+          "fontFamily",
+          (_l = (_k = typoVars.get(`role/${key}/family`)) != null ? _k : isHeading ? typoVars.get("heading-family") : void 0) != null ? _l : typoVars.get("family")
+        );
+        bindTextStyle(ts, "fontSize", (_m = typoVars.get(`role/${key}/size`)) != null ? _m : typoVars.get(`size/${d.size}`));
+        bindTextStyle(ts, "fontWeight", (_n = typoVars.get(`role/${key}/weight`)) != null ? _n : typoVars.get(`weight/${d.weight}`));
+        bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${d.size}`));
+        bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${d.size}`));
+        roleStyles++;
+      }
+      if (roleStyles > 0) log(`\u2713 Text styles (${roleStyles} semantic roles)`);
     }
     if (tokens.shadows && Object.keys(tokens.shadows).length > 0) {
       const effectByName = new Map(
@@ -1203,11 +1376,11 @@
       let darkMade = 0;
       const unparsed = [];
       for (const [key, css] of Object.entries(tokens.shadows)) {
-        if (upsertEffect(`${prefix}/Shadow/${key}`, css)) made++;
+        if (upsertEffect(`Shadow/${key}`, css)) made++;
         else unparsed.push(key);
-        const darkCss = (_h = tokens.shadowsDark) == null ? void 0 : _h[key];
+        const darkCss = (_o = tokens.shadowsDark) == null ? void 0 : _o[key];
         if (darkCss && darkCss !== css) {
-          if (upsertEffect(`${prefix}/Shadow/${key} (Dark)`, darkCss)) darkMade++;
+          if (upsertEffect(`Shadow/${key} (Dark)`, darkCss)) darkMade++;
         }
       }
       if (made > 0) {
@@ -1217,8 +1390,8 @@
         log(`\u26A0 ${unparsed.length} shadow${unparsed.length > 1 ? "s" : ""} couldn't be converted to a Figma effect (${unparsed.join(", ")}) \u2014 unsupported CSS box-shadow form`);
       }
     }
-    if ((_i = tokens.grid) == null ? void 0 : _i.columns) {
-      const name = `${prefix}/Grid/${tokens.grid.columns} columns`;
+    if ((_p = tokens.grid) == null ? void 0 : _p.columns) {
+      const name = `Grid/${tokens.grid.columns} columns`;
       const gridByName = new Map(
         (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s])
       );
@@ -1230,8 +1403,8 @@
         pattern: "COLUMNS",
         alignment: "STRETCH",
         count: parseInt(tokens.grid.columns) || 12,
-        gutterSize: pxToFloat((_j = tokens.grid.gutter) != null ? _j : "24px"),
-        offset: pxToFloat((_k = tokens.grid.margin) != null ? _k : "32px")
+        gutterSize: pxToFloat((_q = tokens.grid.gutter) != null ? _q : "24px"),
+        offset: pxToFloat((_r = tokens.grid.margin) != null ? _r : "32px")
       }];
       log(`\u2713 Grid style (${name})`);
     }
@@ -1258,7 +1431,7 @@
   var PANEL_W = 380;
   var PANEL_PAD = 32;
   var PANEL_INNER = PANEL_W - PANEL_PAD * 2;
-  function docChrome(fontFor) {
+  function docChrome(fontFor, typo, sizes) {
     const docSolid = (hex, opacity = 1) => ({ type: "SOLID", color: hexToRgb(hex), opacity });
     function docText(chars, size, style, hex, opacity = 1) {
       const t = figma.createText();
@@ -1266,6 +1439,13 @@
       t.characters = chars;
       t.fontSize = size;
       t.fills = [docSolid(hex, opacity)];
+      if (typo && typo.size > 0) {
+        bindAllTextFields(t, typo, {
+          sizeKey: nearestTypeSizeKey(sizes, size),
+          weightKey: weightKeyFromStyle(style),
+          heading: size >= 20 && (style === "Semi Bold" || style === "Bold")
+        });
+      }
       return t;
     }
     function docFrame(name, dir, gapPx) {
@@ -4296,7 +4476,8 @@
     let boardIndex = 0;
     const cursorByPage = /* @__PURE__ */ new Map();
     let firstBuiltPage;
-    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor);
+    const sampleTypo = await typoVarMap();
+    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes);
     const DOC_INTRO = {
       Button: "The core action component of the system. It covers primary, destructive and success intents across four visual styles and the full interaction lifecycle, so a generic button never has to be rebuilt.",
       Input: "The core text entry component. It covers every common input context out of the box \u2014 plain text, e-mail, password, search, phone number and website \u2014 each variant shipping with the exact inner layout its context demands, across three sizes and the full input lifecycle with token-mapped styling at every step.",
@@ -4613,7 +4794,7 @@
     return builtVariants;
   }
   async function importDocumentation(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
     const colNameById = new Map(allCols.map((c) => [c.id, c.name]));
@@ -4669,6 +4850,11 @@
     const docSem = semLookupFor(tokens, allVars, allCols);
     const accentVar = docSem.varFor("background-brand-solid", "Action/primary/default", "Action/primary.default", "action/primary/default", "action/primary.default", "action/primary", "bg/accent-solid", "primary");
     const familyVar = findVar(COLLECTIONS.typography, "family");
+    const typoBind = /* @__PURE__ */ new Map();
+    {
+      const typoColVars = varsByCollection.get(COLLECTIONS.typography);
+      if (typoColVars) for (const [n, v] of typoColVars) typoBind.set(n, v);
+    }
     const themesMap = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({ light: sem }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
     const themeOrdered = ((_b = tokens.colors.themeOrder) != null ? _b : []).filter((t) => themesMap[t]);
     const themeNames = [...themeOrdered, ...Object.keys(themesMap).filter((t) => !themeOrdered.includes(t))];
@@ -4703,6 +4889,14 @@
       if (loadedStyles.has(style)) return { family: fontFamily, style };
       return { family: "Inter", style };
     }
+    function weightStyle(weightKey) {
+      var _a2, _b2;
+      const val = (_b2 = (_a2 = tokens.typography.weights) == null ? void 0 : _a2[weightKey]) != null ? _b2 : weightKey === "bold" ? 700 : weightKey === "semibold" ? 600 : weightKey === "medium" ? 500 : 400;
+      if (val >= 700) return "Bold";
+      if (val >= 600) return "Semi Bold";
+      if (val >= 500) return "Medium";
+      return "Regular";
+    }
     let page = figma.root.children.find((p) => p.name === "\u2B21 Documentation");
     if (!page) {
       page = figma.createPage();
@@ -4716,17 +4910,21 @@
     } catch (e) {
     }
     function mkText(chars, opts = {}) {
-      var _a2, _b2, _c2, _d2;
+      var _a2, _b2, _c2, _d2, _e2, _f2;
       const t = figma.createText();
       t.fontName = fontFor((_a2 = opts.style) != null ? _a2 : "Regular");
       t.characters = chars;
       t.fontSize = (_b2 = opts.size) != null ? _b2 : 12;
       t.fills = [boundFill(opts.colorVar, (_c2 = opts.colorHex) != null ? _c2 : textHex, (_d2 = opts.opacity) != null ? _d2 : 1)];
-      if (opts.bindFamily !== false && (familyVar == null ? void 0 : familyVar.resolvedType) === "STRING") {
-        try {
-          t.setBoundVariable("fontFamily", familyVar);
-        } catch (e) {
-        }
+      const sizePx = (_e2 = opts.size) != null ? _e2 : 12;
+      const sizeKey = nearestTypeSizeKey(tokens.typography.sizes, sizePx);
+      const heading = (opts.style === "Semi Bold" || opts.style === "Bold") && sizePx >= 20;
+      if (opts.bindFamily !== false) {
+        bindAllTextFields(t, typoBind, {
+          sizeKey,
+          weightKey: weightKeyFromStyle((_f2 = opts.style) != null ? _f2 : "Regular"),
+          heading
+        });
       }
       return t;
     }
@@ -5298,6 +5496,37 @@
       body.appendChild(wRow);
       root.appendChild(card);
       sections++;
+      const typeRoles = tokens.typography.roles;
+      if (typeRoles && Object.keys(typeRoles).length > 0) {
+        const { card: roleCard, body: roleBody } = section(
+          "Type roles",
+          "Semantic text roles \u2014 each line aliases a size, weight and family primitive (desktop). Bound to Typography role/* variables."
+        );
+        for (const [key, modes] of Object.entries(typeRoles)) {
+          const d = modes == null ? void 0 : modes.desktop;
+          if (!d) continue;
+          const px = pxToFloat((_i = tokens.typography.sizes[d.size]) != null ? _i : "");
+          if (!px) continue;
+          const row = autoFrame(`role-${key}`, "HORIZONTAL", 24);
+          row.counterAxisAlignItems = "BASELINE";
+          const label = mkText(`${key}  \u2192  ${d.size} / ${d.weight}`, { size: 10, colorHex: mutedHex });
+          row.appendChild(label);
+          label.resize(220, label.height);
+          label.textAutoResize = "HEIGHT";
+          const spec = mkText("Almost before we knew it, we had left the ground.", {
+            style: weightStyle(d.weight),
+            colorHex: textHex
+          });
+          spec.fontSize = px;
+          bindField(spec, "fontSize", bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`));
+          bindField(spec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`));
+          bindField(spec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === "display" ? "heading-family" : "family"));
+          row.appendChild(spec);
+          roleBody.appendChild(row);
+        }
+        root.appendChild(roleCard);
+        sections++;
+      }
     }
     {
       const entries = Object.entries(tokens.spacing).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
@@ -5316,16 +5545,35 @@
           bar.resize(Math.max(px, 2), 14);
           bar.cornerRadius = 3;
           bar.fills = [boundFill(accentVar, accentHex, 0.9)];
-          bindField(bar, "width", (_i = findVar(COLLECTIONS.spacing, figmaVarName(key))) != null ? _i : findVar(COLLECTIONS.spacing, key));
+          bindField(bar, "width", (_j = findVar(COLLECTIONS.spacing, figmaVarName(key))) != null ? _j : findVar(COLLECTIONS.spacing, key));
           row.appendChild(bar);
           body.appendChild(row);
+        }
+        const spacingRoles = tokens.spacingRoles;
+        if (spacingRoles) {
+          for (const [role, step] of Object.entries(spacingRoles)) {
+            const px = pxToFloat((_k = tokens.spacing[step]) != null ? _k : "");
+            const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
+            row.counterAxisAlignItems = "CENTER";
+            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorHex: mutedHex });
+            row.appendChild(label);
+            label.resize(200, label.height);
+            const bar = figma.createFrame();
+            bar.name = `role-bar-${role}`;
+            bar.resize(Math.max(px, 2), 14);
+            bar.cornerRadius = 3;
+            bar.fills = [boundFill(accentVar, accentHex, 0.55)];
+            bindField(bar, "width", findVar(COLLECTIONS.spacing, figmaVarName(`role/${role}`)));
+            row.appendChild(bar);
+            body.appendChild(row);
+          }
         }
         root.appendChild(card);
         sections++;
       }
     }
     {
-      const entries = Object.entries((_j = tokens.radius) != null ? _j : {});
+      const entries = Object.entries((_l = tokens.radius) != null ? _l : {});
       if (entries.length > 0) {
         await newBoard("Border Radius");
         root.appendChild(sectionBar("Border Radius"));
@@ -5354,16 +5602,44 @@
           row.appendChild(cell);
         }
         body.appendChild(row);
+        const radiusRoles = tokens.radiusRoles;
+        if (radiusRoles) {
+          const roleRow = autoFrame("radius-roles", "HORIZONTAL", 24);
+          for (const [role, step] of Object.entries(radiusRoles)) {
+            const px = pxToFloat((_m = tokens.radius[step]) != null ? _m : "");
+            const cell = autoFrame(`role-${role}`, "VERTICAL", 8);
+            cell.counterAxisAlignItems = "CENTER";
+            const sq = figma.createFrame();
+            sq.name = `role-radius-${role}`;
+            sq.resize(56, 56);
+            sq.cornerRadius = Math.min(px || 0, 28);
+            sq.fills = [boundFill(cardVar, cardHex)];
+            sq.strokes = [boundFill(accentVar, accentHex, 0.7)];
+            sq.strokeWeight = 2;
+            const rv = (_n = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`))) != null ? _n : findVar(COLLECTIONS.radius, step);
+            if ((rv == null ? void 0 : rv.resolvedType) === "FLOAT") {
+              sq.setBoundVariable("topLeftRadius", rv);
+              sq.setBoundVariable("topRightRadius", rv);
+              sq.setBoundVariable("bottomLeftRadius", rv);
+              sq.setBoundVariable("bottomRightRadius", rv);
+            }
+            cell.appendChild(sq);
+            cell.appendChild(mkText(`${role} \u2192 ${step}`, { size: 10, colorHex: mutedHex }));
+            roleRow.appendChild(cell);
+          }
+          body.appendChild(roleRow);
+        }
         root.appendChild(card);
         sections++;
       }
     }
     {
-      const entries = Object.entries((_l = (_k = tokens.borders) == null ? void 0 : _k.width) != null ? _l : {});
+      const strokeMap = tokens.stroke && Object.keys(tokens.stroke).length > 0 ? tokens.stroke : (_o = tokens.borders) == null ? void 0 : _o.width;
+      const entries = Object.entries(strokeMap != null ? strokeMap : {});
       if (entries.length > 0) {
-        await newBoard("Borders");
-        root.appendChild(sectionBar("Borders"));
-        const { card, body } = section("Borders", "Stroke widths \u2014 bound to the Border variables.");
+        await newBoard("Stroke");
+        root.appendChild(sectionBar("Stroke"));
+        const { card, body } = section("Stroke", "Stroke widths \u2014 primitives and semantic roles, bound to the Border collection.");
         for (const [key, val] of entries) {
           const px = pxToFloat(val);
           const row = autoFrame(key, "HORIZONTAL", 16);
@@ -5378,16 +5654,36 @@
           line.strokes = [boundFill(textVar, textHex, 0.85)];
           line.strokeWeight = px;
           line.cornerRadius = 4;
-          bindField(line, "strokeWeight", findVar(COLLECTIONS.border, `width/${key}`));
+          bindField(line, "strokeWeight", (_p = findVar(COLLECTIONS.border, key)) != null ? _p : findVar(COLLECTIONS.border, `width/${key}`));
           row.appendChild(line);
           body.appendChild(row);
+        }
+        if (tokens.strokeRoles) {
+          for (const [role, step] of Object.entries(tokens.strokeRoles)) {
+            const px = pxToFloat((_q = (strokeMap != null ? strokeMap : {})[step]) != null ? _q : "");
+            const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
+            row.counterAxisAlignItems = "CENTER";
+            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorHex: mutedHex });
+            row.appendChild(label);
+            label.resize(200, label.height);
+            const line = figma.createFrame();
+            line.name = `role-border-${role}`;
+            line.resize(220, Math.max(px * 2, 12));
+            line.fills = [];
+            line.strokes = [boundFill(accentVar, accentHex, 0.85)];
+            line.strokeWeight = px || 1;
+            line.cornerRadius = 4;
+            bindField(line, "strokeWeight", findVar(COLLECTIONS.border, figmaVarName(`role/${role}`)));
+            row.appendChild(line);
+            body.appendChild(row);
+          }
         }
         root.appendChild(card);
         sections++;
       }
     }
     {
-      const entries = Object.entries((_m = tokens.opacity) != null ? _m : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
+      const entries = Object.entries((_r = tokens.opacity) != null ? _r : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
       if (entries.length > 0) {
         await newBoard("Opacity");
         root.appendChild(sectionBar("Opacity"));
@@ -5413,7 +5709,7 @@
       }
     }
     {
-      const entries = Object.entries((_n = tokens.shadows) != null ? _n : {});
+      const entries = Object.entries((_s = tokens.shadows) != null ? _s : {});
       if (entries.length > 0) {
         await newBoard("Shadows");
         root.appendChild(sectionBar("Shadows"));
@@ -5440,8 +5736,8 @@
       }
     }
     {
-      const grid = (_o = tokens.grid) != null ? _o : {};
-      const sizes = Object.entries((_p = tokens.sizes) != null ? _p : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      const grid = (_t = tokens.grid) != null ? _t : {};
+      const sizes = Object.entries((_u = tokens.sizes) != null ? _u : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
       if (Object.keys(grid).length > 0 || sizes.length > 0) {
         await newBoard("Grid & Sizes");
         root.appendChild(sectionBar("Grid & Sizes"));
@@ -5467,17 +5763,35 @@
           row.appendChild(bar);
           body.appendChild(row);
         }
+        if (tokens.sizeRoles) {
+          for (const [role, step] of Object.entries(tokens.sizeRoles)) {
+            const px = pxToFloat((_w = (_v = tokens.sizes) == null ? void 0 : _v[step]) != null ? _w : "");
+            const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
+            row.counterAxisAlignItems = "CENTER";
+            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorHex: mutedHex });
+            row.appendChild(label);
+            label.resize(200, label.height);
+            const bar = figma.createFrame();
+            bar.name = `role-size-${role}`;
+            bar.resize(180, Math.max(px, 8));
+            bar.cornerRadius = 6;
+            bar.fills = [boundFill(accentVar, accentHex, 0.35)];
+            bindField(bar, "height", findVar(COLLECTIONS.size, figmaVarName(`role/${role}`)));
+            row.appendChild(bar);
+            body.appendChild(row);
+          }
+        }
         root.appendChild(card);
         sections++;
       }
     }
     {
-      const entries = Object.entries((_q = tokens.gradients) != null ? _q : {});
+      const entries = Object.entries((_x = tokens.gradients) != null ? _x : {});
       if (entries.length > 0) {
         await newBoard("Gradients");
         root.appendChild(sectionBar("Gradients"));
         const { card, body } = section("Gradients", 'Named gradients from the configurator. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
-        const assigned = (_r = tokens.gradientAssignments) != null ? _r : {};
+        const assigned = (_y = tokens.gradientAssignments) != null ? _y : {};
         const row = autoFrame("gradients", "HORIZONTAL", 24);
         row.layoutWrap = "WRAP";
         row.counterAxisSpacing = 24;
@@ -5689,7 +6003,8 @@
       }
     }
     const fontFor = (style) => loadedStyles.has(style) ? { family: fontFamily, style } : { family: "Inter", style };
-    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor);
+    const iconsTypo = await typoVarMap();
+    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, iconsTypo, tokens.typography.sizes);
     try {
       pg.backgrounds = [docSolid(DOC.page)];
     } catch (e) {
@@ -6099,7 +6414,7 @@
     frame.fills = [bg];
     const coverSlug = (_c = tokens.gradientAssignments) == null ? void 0 : _c.cover;
     if (coverSlug && gradient) {
-      const styleName = `${tokens.project || "SD"}/Gradient/${coverSlug}`;
+      const styleName = `Gradient/${coverSlug}`;
       const style = (await figma.getLocalPaintStylesAsync()).find((s) => s.name === styleName);
       if (style) {
         try {
@@ -6118,12 +6433,18 @@
     frame.primaryAxisSizingMode = "FIXED";
     frame.counterAxisSizingMode = "FIXED";
     page.appendChild(frame);
+    const coverTypo = await typoVarMap();
     function text(chars, font, size, opacity = 1) {
       const t = figma.createText();
       t.fontName = font;
       t.characters = chars;
       t.fontSize = size;
       t.fills = [ink(opacity)];
+      bindAllTextFields(t, coverTypo, {
+        sizeKey: nearestTypeSizeKey(tokens.typography.sizes, size),
+        weightKey: font.style === "Bold" || font.style === "Semi Bold" ? "semibold" : "regular",
+        heading: size >= 28
+      });
       return t;
     }
     const top = figma.createFrame();
@@ -6215,7 +6536,12 @@
     return a >= 1 ? base : `${base}${to(a)}`;
   }
   async function exportVariablesJson() {
-    const collections = await figma.variables.getLocalVariableCollectionsAsync();
+    const allCollections = await figma.variables.getLocalVariableCollectionsAsync();
+    const skipped = allCollections.filter((c) => !PLUGIN_COLLECTION_NAMES.has(c.name)).map((c) => c.name);
+    if (skipped.length > 0) {
+      log(`\u2139 Export skipped ${skipped.length} collection${skipped.length > 1 ? "s" : ""} not from this plugin (${skipped.slice(0, 4).join(", ")}${skipped.length > 4 ? "\u2026" : ""}) \u2014 leftover names like a previous project are not the synced system`);
+    }
+    const collections = allCollections.filter((c) => PLUGIN_COLLECTION_NAMES.has(c.name));
     const variables = await figma.variables.getLocalVariablesAsync();
     const varById = new Map(variables.map((v) => [v.id, v]));
     const colById = new Map(collections.map((c) => [c.id, c]));
@@ -6306,6 +6632,7 @@
   ensureFoundationPageOrder();
   var SETTINGS_KEY = "sd-sync-settings";
   var FILE_TOKENS_KEY = "sd-file-tokens";
+  var FILE_PROJECTS_KEY = "sd-file-projects";
   var FILE_SYNC_KEY = "sd-file-sync";
   function readFileTokens() {
     try {
@@ -6317,10 +6644,123 @@
       return null;
     }
   }
+  function readImportedProjects() {
+    try {
+      const raw = figma.root.getPluginData(FILE_PROJECTS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string" && x.length > 0) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function rememberImportedProject(name) {
+    if (!name) return;
+    const prev = readImportedProjects();
+    if (prev.includes(name)) return;
+    try {
+      figma.root.setPluginData(FILE_PROJECTS_KEY, JSON.stringify([...prev, name].slice(-12)));
+    } catch (e) {
+    }
+  }
+  function leftoverProjectNames(currentProject) {
+    var _a;
+    const names = /* @__PURE__ */ new Set();
+    if (currentProject) names.add(currentProject);
+    const stored = (_a = readFileTokens()) == null ? void 0 : _a.tokens.project;
+    if (stored) names.add(stored);
+    for (const p of readImportedProjects()) names.add(p);
+    return [...names];
+  }
+  function inheritedStylePrefix(name) {
+    const parts = name.split("/");
+    if (parts.length < 2) return null;
+    if (PLUGIN_STYLE_ROOTS.has(parts[0])) return null;
+    if (INHERITED_STYLE_FOLDERS.includes(parts[1])) return parts[0];
+    return null;
+  }
+  async function scanInheritedStylePrefixes() {
+    const found = /* @__PURE__ */ new Set();
+    const note = (name) => {
+      const p = inheritedStylePrefix(name);
+      if (p) found.add(p);
+    };
+    for (const s of await figma.getLocalTextStylesAsync()) note(s.name);
+    for (const s of await figma.getLocalPaintStylesAsync()) note(s.name);
+    for (const s of await figma.getLocalEffectStylesAsync()) note(s.name);
+    try {
+      for (const s of await figma.getLocalGridStylesAsync()) note(s.name);
+    } catch (e) {
+    }
+    return [...found];
+  }
+  async function removeInheritedStyles() {
+    let dropped = 0;
+    const drop = (s) => {
+      if (!inheritedStylePrefix(s.name)) return;
+      try {
+        s.remove();
+        dropped++;
+      } catch (e) {
+      }
+    };
+    for (const s of await figma.getLocalTextStylesAsync()) drop(s);
+    for (const s of await figma.getLocalPaintStylesAsync()) drop(s);
+    for (const s of await figma.getLocalEffectStylesAsync()) drop(s);
+    try {
+      for (const s of await figma.getLocalGridStylesAsync()) drop(s);
+    } catch (e) {
+    }
+    return dropped;
+  }
+  function readDocsRev() {
+    const n = parseInt(figma.root.getPluginData(FILE_DOCS_REV_KEY) || "0", 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function writeDocsRev() {
+    try {
+      figma.root.setPluginData(FILE_DOCS_REV_KEY, String(DOCS_REV));
+    } catch (e) {
+    }
+  }
+  async function purgeInheritedCollections(currentProject) {
+    const prefixes = /* @__PURE__ */ new Set([
+      ...leftoverProjectNames(currentProject),
+      ...await scanInheritedStylePrefixes()
+    ]);
+    if (currentProject.trim().toLowerCase() !== "jasdy") prefixes.add("Jasdy");
+    const cols = await figma.variables.getLocalVariableCollectionsAsync();
+    const vars = await figma.variables.getLocalVariablesAsync();
+    const protectedNames = /* @__PURE__ */ new Set([...Object.values(COLLECTIONS), ...Object.values(ARCH_LABEL)]);
+    for (const col of cols) {
+      if (protectedNames.has(col.name)) continue;
+      const named = prefixes.has(col.name) || LEGACY_COLLECTIONS.indexOf(col.name) !== -1;
+      const looksLikeLegacyDump = vars.some(
+        (v) => v.variableCollectionId === col.id && v.resolvedType === "COLOR" && /^(Accent|Neutral|State)\//.test(v.name)
+      );
+      if (!named && !looksLikeLegacyDump) continue;
+      const mine = vars.filter((v) => v.variableCollectionId === col.id);
+      let droppedVars = 0;
+      for (const v of mine) {
+        try {
+          v.remove();
+          droppedVars++;
+        } catch (e) {
+        }
+      }
+      try {
+        col.remove();
+        log(`\u2713 Removed leftover "${col.name}" collection (${droppedVars} variables) after docs rebound`);
+      } catch (e) {
+        log(`\u26A0 Leftover "${col.name}" still referenced \u2014 removed ${droppedVars}/${mine.length} variables`);
+      }
+    }
+  }
   function writeFileTokens(tokens) {
     try {
       const record = { tokens, importedAt: (/* @__PURE__ */ new Date()).toISOString() };
       figma.root.setPluginData(FILE_TOKENS_KEY, JSON.stringify(record));
+      rememberImportedProject(tokens.project);
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       log(`\u26A0 Could not save this file's system for later (${m}) \u2014 the import itself is unaffected.`);
@@ -6348,6 +6788,8 @@
   function resetFile() {
     figma.root.setPluginData(FILE_TOKENS_KEY, "");
     figma.root.setPluginData(FILE_SYNC_KEY, "");
+    figma.root.setPluginData(FILE_PROJECTS_KEY, "");
+    figma.root.setPluginData(FILE_DOCS_REV_KEY, "");
   }
   async function reportFileAssets() {
     const names = new Set(figma.root.children.map((p) => p.name.trim()));
@@ -6436,6 +6878,13 @@
       if (!tokens || !options) return;
       log(`\u2015 Starting import for "${tokens.project || "Untitled"}" \u2015`);
       checkSchema(tokens);
+      const inheritedPrefixes = await scanInheritedStylePrefixes();
+      const staleDocs = readDocsRev() < DOCS_REV;
+      let docsMustRebuild = inheritedPrefixes.length > 0 || staleDocs;
+      if (docsMustRebuild) {
+        const why = inheritedPrefixes.length > 0 ? `inherited project folder${inheritedPrefixes.length > 1 ? "s" : ""} ${inheritedPrefixes.join(", ")}` : "documentation is from an older plugin";
+        log(`\u21BB Documentation will rebuild \u2014 ${why}`);
+      }
       if (!tokens.typography || typeof tokens.typography !== "object") {
         log(`\u26A0 Payload is missing "typography" \u2014 using a fallback (Inter, no custom sizes/weights).`);
         tokens.typography = { fontFamily: "Inter", sizes: {}, weights: {} };
@@ -6481,9 +6930,9 @@
           await phase("Variables", async () => {
             totalVars = await importVariables(tokens);
           });
-          if (semanticsRebuilt || foundationsRebuilt) {
+          if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
             const added = [];
-            if (!wantComponents) {
+            if (semanticsRebuilt && !wantComponents) {
               wantComponents = true;
               added.push("Components");
             }
@@ -6497,7 +6946,7 @@
             }
             if (added.length > 0) {
               planned.push(...added);
-              const why = semanticsRebuilt ? "the new semantic variables" : "the restacked Spacing / Radius / Type collections";
+              const why = semanticsRebuilt ? "the new semantic variables" : docsMustRebuild ? "updated documentation (roles + leftover project folders)" : "the restacked Spacing / Radius / Type collections";
               log(`\u21BB Recalibrating: ${added.join(", ")} rebuilt too, so everything binds to ${why}`);
             }
           }
@@ -6526,7 +6975,9 @@
           await phase("Documentation", async () => {
             totalDocs = await importDocumentation(tokens);
           });
+          writeDocsRev();
         }
+        await purgeInheritedCollections(tokens.project || "");
         writeFileTokens(tokens);
         const summary = [
           totalVars > 0 ? `${totalVars} variables` : null,

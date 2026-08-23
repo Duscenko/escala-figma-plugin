@@ -68,14 +68,14 @@ primitives and semantics.
 | `colors.background` | **Color Primitives** | `Background` COLOR variable — the page background every ramp was generated against |
 | `colors.themes` (light / dark / custom) + `colors.architecture` | **Color Semantics** | The system's semantic tier, **one collection**, always under this name. Its CONTENT is the architecture the user picked when the payload carries one — Astryx's `Accent/*`, `Background/*`, `Text/*`, `Icon/*`, `Status/*`, `Utility/*`, `Border/*`; Categorical's `Content/*`, `Action/*`, `Surface/*`, `Status/*`, `Border/*` with nested keys as `/` groups (`Action/primary/default`, never a `.` — Figma rejects dots in variable names) — and the flat role catalogue (`background/*`, `content/*`, `border/*`; v2 `bg/*`/`fg/*` still import) only when it doesn't. **One mode (column) per theme**, ordered by `colors.themeOrder`. Variables only — no paint styles. |
 | `colors.panelBackground` | **Color Semantics** | `panel-background` STRING variable (`solid` / `translucent` / `page`) — Radix-style surface-1 treatment |
-| `typography` | **Typography** | `size/*`, `weight/*`, `family`, `heading-family`, `line-height/*`, `letter-spacing/*` (+ one text style per size, **bound to these variables** — fontFamily → `family`/`heading-family` for display/heading sizes, fontSize/lineHeight/letterSpacing → their `*/{key}` variables — so styles and variables always match; if the font isn't available in Figma the import warns instead of silently falling back) |
-| `spacing` | **Spacing** | Numeric steps land as `step/{key}` (`step/1` … `step/16`) because a variable name cannot start with a digit; padding is `padding/{top,right,bottom,left}` |
+| `typography` | **Typography** | `size/*`, `weight/*`, `family`, `heading-family`, `line-height/*`, `letter-spacing/*`, plus v6 `role/{key}/{size,weight,family}` aliases (+ one text style per size **and** one per semantic role, bound to those variables) |
+| `spacing` + `spacingRoles` | **Spacing** | Numeric steps land as `step/{key}` (`step/1` … `step/16`) because a variable name cannot start with a digit; padding is `padding/{top,right,bottom,left}`; roles are `role/{key}` aliases |
 | `padding` | **Spacing** | `padding/{top,right,bottom,left}` FLOAT variables — per-side surface padding |
-| `radius` | **Radius** | `{key}` FLOAT variables |
-| `borders` | **Border** | `width/*` FLOAT variables — *plugin-ready; not yet emitted by the configurator* |
+| `radius` + `radiusRoles` | **Radius** | `{key}` FLOAT primitives + `role/{key}` aliases |
+| `stroke` + `strokeRoles` (or `borders.width`) | **Border** | Stroke steps (`none`/`sm`/`md`/`lg`) + `role/{divider,control,focus}` aliases. `borders.width` is the v5 fallback the configurator still emits as a copy of `stroke` |
 | `opacity` | **Opacity** | `{key}` FLOAT variables (0–1 ratio) |
-| `sizes` | **Size** | `{key}` FLOAT variables |
-| `grid` | **Grid** | `{key}` FLOAT variables (+ a column Grid Style) |
+| `sizes` + `sizeRoles` | **Size** | `{key}` FLOAT primitives + `role/{compact,control,touch,hit,fab}` aliases |
+| `grid` + `breakpointRoles` | **Grid** | `{key}` FLOAT variables (+ a column Grid Style); breakpoint roles alias `breakpoint-{step}` |
 | `shadows` (+ `shadowsDark`) | — | Effect Styles (multi-layer drop shadows); a differing dark CSS becomes `… (Dark)` |
 | `icons.library` | **Icons** | `library` STRING variable, **plus** the library's core UI glyphs (~95 across navigation, actions, communication, people, media, files, status, commerce, security, tech and layout) fetched from the Iconify API and generated as `icon/<library>/<name>` **variant sets — Size: Large 24 / Medium 20 / Small 16** — on "⬡ Icons", tinted with the `text/primary` variable so they re-theme. Works for Lucide, Heroicons, Phosphor, Radix and Material Symbols; needs network access to `api.iconify.design` (declared in the manifest) — without it, the import logs a warning and continues. Loose single-component icons from older imports upgrade in place to the Large variant. |
 | `icons.custom` | — | Components on the "⬡ Icons" page (kept untinted — brand marks may be multicolor) |
