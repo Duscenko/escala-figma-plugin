@@ -7,6 +7,28 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  /* Register chrome colors so a theme switch interpolates the tokens
+     themselves — unregistered custom properties snap, which is why light ↔
+     dark used to flash. Syntax is <color> so the engine interpolates in a
+     perceptually even space instead of through raw RGB. */
+  @property --bg           { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+  @property --surface      { syntax: '<color>'; inherits: true; initial-value: #f5f5f6; }
+  @property --surface2     { syntax: '<color>'; inherits: true; initial-value: #ebebed; }
+  @property --border       { syntax: '<color>'; inherits: true; initial-value: #ebebed; }
+  @property --border2      { syntax: '<color>'; inherits: true; initial-value: #d0d0d4; }
+  @property --text         { syntax: '<color>'; inherits: true; initial-value: #18181b; }
+  @property --text-sub     { syntax: '<color>'; inherits: true; initial-value: #52525b; }
+  @property --text-dim     { syntax: '<color>'; inherits: true; initial-value: #737373; }
+  @property --text-on-tint { syntax: '<color>'; inherits: true; initial-value: #39393d; }
+  @property --success      { syntax: '<color>'; inherits: true; initial-value: #68ca9e; }
+  @property --error        { syntax: '<color>'; inherits: true; initial-value: #f97969; }
+  @property --success-tint { syntax: '<color>'; inherits: true; initial-value: #edfcf4; }
+  @property --accent        { syntax: '<color>'; inherits: true; initial-value: #a172fa; }
+  @property --accent-strong { syntax: '<color>'; inherits: true; initial-value: #8a38f5; }
+  @property --accent-soft   { syntax: '<color>'; inherits: true; initial-value: #f7f1ff; }
+  @property --accent-ring   { syntax: '<color>'; inherits: true; initial-value: #b594fe; }
+  @property --on-accent     { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+
   /* Full Escala semantic palette (light + dark), wired 1:1 to the plugin's
      chrome — this REPLACES the earlier approach of reading Figma's own
      --figma-color-* vars for background/border/text; those are now used
@@ -71,9 +93,15 @@
     --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
     --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    /* Theme crossfade — a state change, not a micro-interaction. Quint-out
+       (same curve as --ease) so the last third settles instead of linear-fading
+       through the low-contrast midpoint. */
+    --dur-theme: 280ms;
 
     --rail-w: 52px;
     --aside-w: 336px;
+
+    color-scheme: light;
   }
 
   /* Dark theme — Escala's *-dark scale, built for dark surfaces rather than
@@ -122,9 +150,11 @@
       --accent-strong: #8a38f5;   /* background-brand-solid-hover — accent/9, brighten on hover */
       --accent-soft:   #161122;   /* background-brand-primary — accent-dark/2 */
       --accent-ring:   #532d8e;   /* border-brand — accent-dark/7 */
+      color-scheme: dark;
     }
   }
   :root[data-theme="dark"] {
+    color-scheme: dark;
     --bg:           #0f0f12;
     --surface:      #131314;
     --surface2:     #181819;
@@ -142,7 +172,57 @@
     --accent:        #6933b8;
     --accent-strong: #8a38f5;
     --accent-soft:   #161122;
-    --accent-ring:   #532d8e;
+      --accent-ring:   #532d8e;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  html {
+    background: var(--bg);
+    color: var(--text);
+    height: 100%;
+  }
+
+  /* Live theme switch — interpolate the registered tokens (fallback) and
+     crossfade the painted UI via View Transitions (preferred). Gated on
+     .theme-switching so hover/focus 140ms transitions stay snappy and the
+     first paint never animates. */
+  html.theme-switching {
+    transition:
+      --bg var(--dur-theme) var(--ease),
+      --surface var(--dur-theme) var(--ease),
+      --surface2 var(--dur-theme) var(--ease),
+      --border var(--dur-theme) var(--ease),
+      --border2 var(--dur-theme) var(--ease),
+      --text var(--dur-theme) var(--ease),
+      --text-sub var(--dur-theme) var(--ease),
+      --text-dim var(--dur-theme) var(--ease),
+      --text-on-tint var(--dur-theme) var(--ease),
+      --success var(--dur-theme) var(--ease),
+      --error var(--dur-theme) var(--ease),
+      --success-tint var(--dur-theme) var(--ease),
+      --accent var(--dur-theme) var(--ease),
+      --accent-strong var(--dur-theme) var(--ease),
+      --accent-soft var(--dur-theme) var(--ease),
+      --accent-ring var(--dur-theme) var(--ease),
+      --on-accent var(--dur-theme) var(--ease),
+      background-color var(--dur-theme) var(--ease),
+      color var(--dur-theme) var(--ease),
+      color-scheme 0s;
+  }
+  /* Children would otherwise lag the token fade on their own 140ms
+     color/background transitions (hover leftovers). Tokens own this beat. */
+  html.theme-switching *,
+  html.theme-switching *::before,
+  html.theme-switching *::after {
+    transition: none !important;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: var(--dur-theme);
+    animation-timing-function: var(--ease);
   }
 
   body {
@@ -758,6 +838,8 @@
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; animation: none !important; }
+    ::view-transition-old(root),
+    ::view-transition-new(root) { animation: none !important; }
   }
 </style>
 <script>
@@ -766,8 +848,13 @@
 // would be circular to read here) rather than trusting prefers-color-scheme,
 // which tracks the OS/browser and can disagree with Figma's own light/dark
 // setting. Runs here, before <body>, so [data-theme] is set before first
-// paint (no flash).
+// paint (no flash). showUI({ themeColors: true }) updates that var LIVE when
+// the editor theme flips, so we watch it and crossfade instead of snapping.
 ;(function () {
+  var painted = false
+  var lastRaw = null
+  var themeTimer = 0
+
   function luminance(color) {
     if (!color) return null
     color = color.trim()
@@ -786,7 +873,7 @@
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255
   }
 
-  function applyTheme() {
+  function detectTheme() {
     var raw = getComputedStyle(document.documentElement).getPropertyValue('--figma-color-bg')
     var l = luminance(raw)
     if (l === null) {
@@ -795,14 +882,76 @@
       // still looks reasonable instead of always defaulting to light.
       l = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 0 : 1
     }
-    document.documentElement.setAttribute('data-theme', l < 0.5 ? 'dark' : 'light')
+    return l < 0.5 ? 'dark' : 'light'
+  }
+
+  function prefersReducedMotion() {
+    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  }
+
+  function commitTheme(next) {
+    var html = document.documentElement
+    html.setAttribute('data-theme', next)
+    html.style.colorScheme = next
+    painted = true
+  }
+
+  function finishTokenFade(html) {
+    window.clearTimeout(themeTimer)
+    themeTimer = window.setTimeout(function () {
+      html.classList.remove('theme-switching')
+    }, 340)
+  }
+
+  function applyTheme() {
+    var next = detectTheme()
+    var html = document.documentElement
+    var current = html.getAttribute('data-theme')
+    if (current === next) {
+      painted = true
+      return
+    }
+
+    // First paint, or the user asked for no motion: commit, don't choreograph.
+    if (!painted || prefersReducedMotion()) {
+      commitTheme(next)
+      return
+    }
+
+    // Preferred: snapshot the current UI and crossfade to the new one so
+    // contrast stays valid the whole way (interpolating ink through mid-gray
+    // would dip under AA for ~140ms). Fallback: interpolate the registered
+    // color tokens when View Transitions aren't available.
+    if (typeof document.startViewTransition === 'function') {
+      try {
+        document.startViewTransition(function () { commitTheme(next) })
+        return
+      } catch (e) { /* fall through to token fade */ }
+    }
+
+    html.classList.add('theme-switching')
+    commitTheme(next)
+    finishTokenFade(html)
   }
 
   applyTheme()
-  // Figma's own theme can't change mid-session for an already-open plugin,
-  // but re-check once more after full parse in case --figma-color-bg landed
-  // after this early pass (belt and suspenders, not a live theme switcher).
   document.addEventListener('DOMContentLoaded', applyTheme)
+
+  // Figma writes --figma-color-bg without mutating attributes, so there is
+  // nothing to observe — compare the computed value. 180ms is below a frame
+  // of the 280ms fade and cheap (one getComputedStyle).
+  window.setInterval(function () {
+    var raw = getComputedStyle(document.documentElement).getPropertyValue('--figma-color-bg').trim()
+    if (raw === lastRaw) return
+    lastRaw = raw
+    applyTheme()
+  }, 180)
+
+  if (window.matchMedia) {
+    var scheme = window.matchMedia('(prefers-color-scheme: dark)')
+    if (scheme.addEventListener) scheme.addEventListener('change', applyTheme)
+    else if (scheme.addListener) scheme.addListener(applyTheme)
+  }
 })()
 </script>
 </head>

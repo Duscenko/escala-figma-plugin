@@ -1,6 +1,6 @@
-# Scalable Designs Sync — Figma plugin
+# Escala Figma plugin
 
-Companion plugin for the [Scalable Designs configurator](https://escalatokens.com).
+Companion plugin for the [Escala Tokens configurator](https://escalatokens.com).
 Imports the design tokens you build on the web into Figma — as Variables, Styles,
 component stubs and icon components — and keeps them in sync.
 
