@@ -127,7 +127,7 @@
       new Promise((_, reject) => setTimeout(() => reject(new Error(`Request timed out after ${Math.round(ms / 1e3)}s`)), ms))
     ]);
   }
-  var SUPPORTED_SCHEMA_VERSION = 6;
+  var SUPPORTED_SCHEMA_VERSION = 7;
   function checkSchema(tokens) {
     const v = tokens.schemaVersion;
     if (typeof v === "number" && v > SUPPORTED_SCHEMA_VERSION) {
@@ -152,6 +152,7 @@
   var INHERITED_STYLE_FOLDERS = ["Type", "Shadow", "Gradient", "Grid", "Scale", "Semantic"];
   var DOCS_REV = 6;
   var FILE_DOCS_REV_KEY = "sd-docs-rev";
+  var FILE_PRIMITIVES_HIDDEN_KEY = "sd-primitives-hidden-v1";
   function collectionPanelOrder(tokens) {
     var _a, _b;
     const rest = [
@@ -375,13 +376,13 @@
     }
   };
   var ARCH_REF_RE = /^\{([a-z0-9-]+)\.(\d+)\}$/;
-  function archRefHex(node, themeKey, primitive) {
+  function archRefHex(node, themeKey, tokens) {
     var _a, _b;
     if (!node) return void 0;
     const raw = ((_b = (_a = node[themeKey]) != null ? _a : Object.values(node)[0]) != null ? _b : "").trim();
     if (!raw) return void 0;
     const m = ARCH_REF_RE.exec(raw);
-    if (m) return primitive[`${m[1]}-${m[2]}`];
+    if (m) return primitiveRefHex(tokens, m[1], m[2]);
     if (/^#?[0-9a-f]{6}([0-9a-f]{2})?$/i.test(raw)) return raw.startsWith("#") ? raw : `#${raw}`;
     return void 0;
   }
@@ -402,7 +403,7 @@
     const hit = ARCH_ROLE_MAP[kind][roleKey];
     if (!hit) return void 0;
     const t = (_b = tokens.colors.architecture) == null ? void 0 : _b.tokens;
-    return archRefHex((_c = t == null ? void 0 : t[hit[0]]) == null ? void 0 : _c[hit[1]], theme, tokens.colors.primitive);
+    return archRefHex((_c = t == null ? void 0 : t[hit[0]]) == null ? void 0 : _c[hit[1]], theme, tokens);
   }
   function resolveVarRgb(v, modeId, byId, defaultModeOf, depth = 0) {
     const val = v.valuesByMode[modeId];
@@ -454,6 +455,34 @@
         return hex ? byHex.get(normHex(hex)) : void 0;
       }
     };
+  }
+  function docChromeVarsFrom(sem) {
+    return {
+      text: sem.varFor("content-primary", "Content/primary", "content/primary", "text/primary", "text"),
+      secondary: sem.varFor("content-secondary", "Content/secondary", "content/secondary", "text/secondary"),
+      muted: sem.varFor("content-tertiary", "Content/subtle", "content/subtle", "Content/tertiary", "content/tertiary", "text/tertiary", "Content/secondary", "content/secondary"),
+      border: sem.varFor("border-default", "Border/default", "border/default", "border/primary", "border"),
+      borderStrong: sem.varFor("border-strong", "Border/strong", "border/strong"),
+      board: sem.varFor("background-primary", "Surface/page", "surface/page", "background/primary", "surface/0"),
+      card: sem.varFor("background-tertiary", "Surface/layer-2", "surface/layer-2", "background/tertiary", "surface/2"),
+      accentText: sem.varFor("content-brand", "Content/accent", "content/accent", "Content/brand", "content/brand", "text/brand-secondary"),
+      accentBorder: sem.varFor("border-brand", "Border/accent", "border/accent", "border/brand")
+    };
+  }
+  function docModePin(tokens, allCols) {
+    var _a, _b, _c;
+    const collection = allCols.find((c) => c.name === COLLECTIONS.semantics);
+    if (!collection) return void 0;
+    const firstTheme = (_b = ((_a = tokens.colors.themeOrder) != null ? _a : ["light"])[0]) != null ? _b : "light";
+    const mode = (_c = collection.modes.find((m) => m.name.toLowerCase() === firstTheme.toLowerCase())) != null ? _c : collection.modes[0];
+    return mode ? { collection, modeId: mode.modeId } : void 0;
+  }
+  function pinToLightMode(node, pin) {
+    if (!pin) return;
+    try {
+      node.setExplicitVariableModeForCollection(pin.collection, pin.modeId);
+    } catch (e) {
+    }
   }
   var ARCH_LABEL = {
     astryx: "Astryx",
@@ -603,6 +632,14 @@
     };
   }
   var RGB_FN_RE = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.]+)\s*)?\)$/i;
+  function primitiveRefHex(tokens, fam, tone) {
+    var _a;
+    const solid = tokens.colors.primitive[`${fam}-${tone}`];
+    if (solid) return solid;
+    const alpha = tokens.colors.primitiveAlpha;
+    if (!alpha) return void 0;
+    return (_a = alpha[`${fam}-${tone}`]) != null ? _a : fam.endsWith("-a") ? alpha[`${fam.slice(0, -2)}-${tone}`] : void 0;
+  }
   function archValueRgba(raw, lookup) {
     const val = (raw != null ? raw : "").trim();
     if (!val) return void 0;
@@ -701,6 +738,12 @@
       if (scopes) {
         try {
           created.scopes = scopes;
+        } catch (e) {
+        }
+      }
+      if (collection.name === COLLECTIONS.primitives) {
+        try {
+          created.hiddenFromPublishing = true;
         } catch (e) {
         }
       }
@@ -820,6 +863,23 @@
     if (tokens.colors.background) {
       setDefault(primCol, upsertVarIn(primCol, primCache, "Background", "COLOR"), __spreadProps(__spreadValues({}, hexToRgb(tokens.colors.background)), { a: 1 }));
     }
+    if (figma.root.getPluginData(FILE_PRIMITIVES_HIDDEN_KEY) !== "1") {
+      let hidden = 0;
+      for (const v of primCache.values()) {
+        if (!v.hiddenFromPublishing) {
+          try {
+            v.hiddenFromPublishing = true;
+            hidden++;
+          } catch (e) {
+          }
+        }
+      }
+      try {
+        figma.root.setPluginData(FILE_PRIMITIVES_HIDDEN_KEY, "1");
+      } catch (e) {
+      }
+      if (hidden > 0) log(`\u2713 Hid ${hidden} primitive${hidden > 1 ? "s" : ""} from publishing \u2014 consume "${COLLECTIONS.semantics}" instead; toggle a variable's eye icon in Figma to expose it again`);
+    }
     const primByHex = /* @__PURE__ */ new Map();
     for (const [key, hex] of Object.entries(tokens.colors.primitive)) {
       if (!hex) continue;
@@ -883,7 +943,7 @@
       const lookup = arch.kind === "tonal" ? (fam, tone) => {
         var _a2;
         return (_a2 = palettes == null ? void 0 : palettes[fam]) == null ? void 0 : _a2[tone];
-      } : (fam, tone) => tokens.colors.primitive[`${fam}-${tone}`];
+      } : (fam, tone) => primitiveRefHex(tokens, fam, tone);
       for (const group of norm.groups) {
         for (const tok of group.tokens) {
           const resolved = [];
@@ -1431,14 +1491,18 @@
   var PANEL_W = 380;
   var PANEL_PAD = 32;
   var PANEL_INNER = PANEL_W - PANEL_PAD * 2;
-  function docChrome(fontFor, typo, sizes) {
-    const docSolid = (hex, opacity = 1) => ({ type: "SOLID", color: hexToRgb(hex), opacity });
-    function docText(chars, size, style, hex, opacity = 1) {
+  function docChrome(fontFor, typo, sizes, chrome, modePin) {
+    const docSolid = (hex, opacity = 1, v) => {
+      let paint = { type: "SOLID", color: hexToRgb(hex), opacity };
+      if ((v == null ? void 0 : v.resolvedType) === "COLOR") paint = figma.variables.setBoundVariableForPaint(paint, "color", v);
+      return paint;
+    };
+    function docText(chars, size, style, hex, opacity = 1, v) {
       const t = figma.createText();
       t.fontName = fontFor(style);
       t.characters = chars;
       t.fontSize = size;
-      t.fills = [docSolid(hex, opacity)];
+      t.fills = [docSolid(hex, opacity, v)];
       if (typo && typo.size > 0) {
         bindAllTextFields(t, typo, {
           sizeKey: nearestTypeSizeKey(sizes, size),
@@ -1474,17 +1538,17 @@
       chipF.paddingRight = 8;
       chipF.paddingTop = 3;
       chipF.paddingBottom = 3;
-      chipF.strokes = [docSolid(DOC.text, 0.8)];
+      chipF.strokes = [docSolid(DOC.text, 0.8, chrome == null ? void 0 : chrome.borderStrong)];
       chipF.strokeWeight = 1;
       chipF.cornerRadius = 4;
-      const t = docText(label, 9, "Medium", DOC.text);
+      const t = docText(label, 9, "Medium", DOC.text, 1, chrome == null ? void 0 : chrome.text);
       t.letterSpacing = { value: 1, unit: "PIXELS" };
       chipF.appendChild(t);
       r.appendChild(chipF);
       const line = figma.createFrame();
       line.name = "line";
       line.resize(10, 1);
-      line.fills = [docSolid(DOC.border)];
+      line.fills = [docSolid(DOC.border, 1, chrome == null ? void 0 : chrome.border)];
       r.appendChild(line);
       line.layoutSizingHorizontal = "FILL";
       line.layoutSizingVertical = "FIXED";
@@ -1492,18 +1556,19 @@
     }
     function docBullet(parent, title, desc) {
       const b = docFrame(`spec-${title.toLowerCase().replace(/\s+/g, "-")}`, "VERTICAL", 4);
-      b.appendChild(docText(title, 12, "Medium", DOC.text));
-      b.appendChild(wrapText(docText(desc, 11, "Regular", DOC.muted), PANEL_INNER));
+      b.appendChild(docText(title, 12, "Medium", DOC.text, 1, chrome == null ? void 0 : chrome.text));
+      b.appendChild(wrapText(docText(desc, 11, "Regular", DOC.muted, 1, chrome == null ? void 0 : chrome.muted), PANEL_INNER));
       parent.appendChild(b);
     }
     function docBoard(name, barLabel, project, contentW) {
       const b = docFrame(name, "VERTICAL", 24);
-      b.fills = [docSolid(DOC.board)];
+      b.fills = [docSolid(DOC.board, 1, chrome == null ? void 0 : chrome.board)];
       b.cornerRadius = 24;
       b.paddingTop = 48;
       b.paddingBottom = 48;
       b.paddingLeft = 48;
       b.paddingRight = 48;
+      pinToLightMode(b, modePin);
       const bar = docFrame(`\xA7 ${barLabel}`, "HORIZONTAL", 8);
       bar.fills = [docSolid(DOC.bar)];
       bar.cornerRadius = 12;
@@ -1514,8 +1579,8 @@
       bar.counterAxisAlignItems = "CENTER";
       bar.paddingLeft = 24;
       bar.paddingRight = 24;
-      bar.appendChild(docText(barLabel, 12, "Medium", DOC.barText));
-      bar.appendChild(docText(`\u2B21 ${project}`, 12, "Semi Bold", DOC.barText));
+      bar.appendChild(docText(barLabel, 12, "Medium", DOC.barText, 1, chrome == null ? void 0 : chrome.text));
+      bar.appendChild(docText(`\u2B21 ${project}`, 12, "Semi Bold", DOC.barText, 1, chrome == null ? void 0 : chrome.text));
       b.appendChild(bar);
       return b;
     }
@@ -3397,13 +3462,13 @@
         seg.layoutSizingVertical = "FIXED";
       }
       c.appendChild(meter);
-      const caption = txt(
+      const caption2 = txt(
         strength === "Weak" ? "Weak \u2014 add more characters" : strength === "Fair" ? "Fair \u2014 add a symbol or number" : "Strong password",
         { size: 12, sizeVar: sizeXs, colorP: strength === "Weak" ? p.textError : strength === "Fair" ? p.textWarning : p.textSuccess }
       );
-      caption.name = "caption";
-      c.appendChild(caption);
-      out.push({ node: caption, prop: "Caption", def: caption.characters });
+      caption2.name = "caption";
+      c.appendChild(caption2);
+      out.push({ node: caption2, prop: "Caption", def: caption2.characters });
     }
     function buildRating(c, out, interactive) {
       c.layoutMode = "HORIZONTAL";
@@ -4477,7 +4542,9 @@
     const cursorByPage = /* @__PURE__ */ new Map();
     let firstBuiltPage;
     const sampleTypo = await typoVarMap();
-    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes);
+    const sampleChrome = docChromeVarsFrom(semLookup);
+    const sampleModePin = docModePin(tokens, allCols);
+    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes, sampleChrome, sampleModePin);
     const DOC_INTRO = {
       Button: "The core action component of the system. It covers primary, destructive and success intents across four visual styles and the full interaction lifecycle, so a generic button never has to be rebuilt.",
       Input: "The core text entry component. It covers every common input context out of the box \u2014 plain text, e-mail, password, search, phone number and website \u2014 each variant shipping with the exact inner layout its context demands, across three sizes and the full input lifecycle with token-mapped styling at every step.",
@@ -4520,8 +4587,8 @@
     function buildDocPanel(entry, spec, category, propNames, toggleNames = []) {
       var _a2;
       const panel = docFrame(`docs/${entry.set}-panel`, "VERTICAL", 20);
-      panel.fills = [docSolid(DOC.card)];
-      panel.strokes = [docSolid(DOC.border)];
+      panel.fills = [docSolid(DOC.card, 1, sampleChrome.board)];
+      panel.strokes = [docSolid(DOC.border, 1, sampleChrome.border)];
       panel.strokeWeight = 1;
       panel.cornerRadius = 16;
       panel.paddingTop = PANEL_PAD;
@@ -4536,11 +4603,11 @@
       crumb.resize(PANEL_INNER, 18);
       crumb.primaryAxisAlignItems = "SPACE_BETWEEN";
       crumb.counterAxisAlignItems = "CENTER";
-      crumb.appendChild(docText(`Components  /  ${category}  /  ${entry.page}`, 9, "Regular", DOC.muted));
-      crumb.appendChild(docText("v1.0 \u2013 LAUNCH", 8, "Medium", DOC.muted, 0.9));
+      crumb.appendChild(docText(`Components  /  ${category}  /  ${entry.page}`, 9, "Regular", DOC.muted, 1, sampleChrome.secondary));
+      crumb.appendChild(docText("v1.0 \u2013 LAUNCH", 8, "Medium", DOC.muted, 0.9, sampleChrome.secondary));
       panel.appendChild(crumb);
-      panel.appendChild(wrapText(docText(entry.page, 26, "Semi Bold", DOC.text), PANEL_INNER));
-      const intro = wrapText(docText(docIntro(entry), 12, "Regular", DOC.muted), PANEL_INNER);
+      panel.appendChild(wrapText(docText(entry.page, 26, "Semi Bold", DOC.text, 1, sampleChrome.text), PANEL_INNER));
+      const intro = wrapText(docText(docIntro(entry), 12, "Regular", DOC.muted, 1, sampleChrome.muted), PANEL_INNER);
       intro.lineHeight = { value: 150, unit: "PERCENT" };
       panel.appendChild(intro);
       panel.appendChild(docDivider("SPECS"));
@@ -4583,16 +4650,16 @@
           chipF.paddingTop = 4;
           chipF.paddingBottom = 4;
           chipF.cornerRadius = 999;
-          chipF.strokes = [docSolid(accent, 0.45)];
+          chipF.strokes = [docSolid(accent, 0.45, sampleChrome.accentBorder)];
           chipF.strokeWeight = 1;
-          chipF.appendChild(docText(f, 9, "Medium", accent));
+          chipF.appendChild(docText(f, 9, "Medium", accent, 1, sampleChrome.accentText));
           rw.appendChild(chipF);
         }
         panel.appendChild(rw);
       }
       const hint = docFrame("insert-hint", "VERTICAL", 6);
-      hint.fills = [docSolid(DOC.faint)];
-      hint.strokes = [docSolid(DOC.border)];
+      hint.fills = [docSolid(DOC.faint, 1, sampleChrome.card)];
+      hint.strokes = [docSolid(DOC.border, 1, sampleChrome.border)];
       hint.strokeWeight = 1;
       hint.cornerRadius = 10;
       hint.paddingTop = 14;
@@ -4601,10 +4668,152 @@
       hint.paddingRight = 16;
       hint.counterAxisSizingMode = "FIXED";
       hint.resize(PANEL_INNER, 60);
-      hint.appendChild(wrapText(docText("Insert components easily to your canvas", 12, "Medium", DOC.text), PANEL_INNER - 32));
-      hint.appendChild(wrapText(docText(`hold \u21E7 Shift + I, search \u201C${entry.set}\u201D and press insert \u2014 or drag it from Assets to the canvas`, 10.5, "Regular", DOC.muted), PANEL_INNER - 32));
+      hint.appendChild(wrapText(docText("Insert components easily to your canvas", 12, "Medium", DOC.text, 1, sampleChrome.text), PANEL_INNER - 32));
+      hint.appendChild(wrapText(docText(`hold \u21E7 Shift + I, search \u201C${entry.set}\u201D and press insert \u2014 or drag it from Assets to the canvas`, 10.5, "Regular", DOC.muted, 1, sampleChrome.muted), PANEL_INNER - 32));
       panel.appendChild(hint);
       return panel;
+    }
+    const MATRIX_INK = "#9747FF";
+    function computeDisplayAxes(variants) {
+      const order = [];
+      const seen = /* @__PURE__ */ new Map();
+      for (const v of variants) {
+        for (const [k, val] of Object.entries(v.props)) {
+          if (!seen.has(k)) {
+            seen.set(k, []);
+            order.push(k);
+          }
+          const arr = seen.get(k);
+          if (!arr.includes(val)) arr.push(val);
+        }
+      }
+      return order.map((k) => ({ key: k, values: seen.get(k) }));
+    }
+    function buildVariantMatrix(entry, spec, nodes, set) {
+      var _a2;
+      const axes = computeDisplayAxes(spec.variants);
+      const colAxis = axes.length > 0 ? axes[axes.length - 1] : void 0;
+      const rowAxes = axes.slice(0, Math.max(0, axes.length - 1));
+      const colValues = colAxis ? colAxis.values : [""];
+      const rowCombos = [];
+      if (rowAxes.length === 0) {
+        rowCombos.push({ sub: "", values: {} });
+      } else if (rowAxes.length === 1) {
+        for (const v of rowAxes[0].values) rowCombos.push({ sub: v, values: { [rowAxes[0].key]: v } });
+      } else {
+        const outer = rowAxes[0];
+        const inner = rowAxes.slice(1);
+        for (const ov of outer.values) {
+          let combos = [{}];
+          for (const ax of inner) {
+            const next = [];
+            for (const c of combos) for (const val of ax.values) next.push(__spreadProps(__spreadValues({}, c), { [ax.key]: val }));
+            combos = next;
+          }
+          for (const c of combos) {
+            rowCombos.push({ group: ov, sub: inner.map((ax) => c[ax.key]).join(" \xB7 "), values: __spreadValues({ [outer.key]: ov }, c) });
+          }
+        }
+      }
+      function findVariant(rowValues, colVal) {
+        const want = colAxis ? __spreadProps(__spreadValues({}, rowValues), { [colAxis.key]: colVal }) : rowValues;
+        const idx = spec.variants.findIndex((vd) => Object.entries(want).every(([k, v]) => vd.props[k] === v));
+        return idx >= 0 ? nodes[idx] : void 0;
+      }
+      const cellW = Math.max(...nodes.map((n) => n.width)) + 50;
+      const cellH = Math.max(...nodes.map((n) => n.height)) + 40;
+      const hasGroups = rowAxes.length >= 2;
+      const GROUP_W = hasGroups ? 56 : 0;
+      const ROWLBL_W = rowAxes.length > 0 ? 76 : 0;
+      const HEADER_H = colAxis ? 32 : 0;
+      const gridX = GROUP_W + ROWLBL_W;
+      const gridW = gridX + colValues.length * cellW;
+      const gridH = HEADER_H + rowCombos.length * cellH;
+      const wrapper = figma.createFrame();
+      wrapper.name = `\u2756 ${entry.page}`;
+      wrapper.layoutMode = "NONE";
+      wrapper.fills = [];
+      wrapper.resize(gridW, gridH);
+      wrapper.appendChild(set);
+      set.x = 0;
+      set.y = 0;
+      set.visible = false;
+      if (colAxis) {
+        colValues.forEach((cv, j) => {
+          const cell = docFrame(`col-${cv}`, "HORIZONTAL", 0);
+          cell.primaryAxisAlignItems = "CENTER";
+          cell.counterAxisAlignItems = "CENTER";
+          cell.primaryAxisSizingMode = "FIXED";
+          cell.counterAxisSizingMode = "FIXED";
+          cell.resize(cellW, HEADER_H);
+          cell.appendChild(docText(cv, 12, "Medium", MATRIX_INK));
+          wrapper.appendChild(cell);
+          cell.x = gridX + j * cellW;
+          cell.y = 0;
+        });
+      }
+      rowCombos.forEach((rc, i) => {
+        const y = HEADER_H + i * cellH;
+        if (rc.sub) {
+          const lbl = docFrame(`row-${rc.sub}`, "HORIZONTAL", 0);
+          lbl.primaryAxisAlignItems = "CENTER";
+          lbl.counterAxisAlignItems = "CENTER";
+          lbl.primaryAxisSizingMode = "FIXED";
+          lbl.counterAxisSizingMode = "FIXED";
+          lbl.resize(ROWLBL_W, cellH);
+          lbl.appendChild(docText(rc.sub, 11, "Medium", MATRIX_INK));
+          wrapper.appendChild(lbl);
+          lbl.x = GROUP_W;
+          lbl.y = y;
+        }
+        colValues.forEach((cv, j) => {
+          const cellFrame = figma.createFrame();
+          cellFrame.name = `cell-${rc.sub || "x"}-${cv || "x"}`;
+          cellFrame.layoutMode = "NONE";
+          cellFrame.fills = [];
+          cellFrame.strokes = [docSolid(MATRIX_INK, 0.4)];
+          cellFrame.strokeWeight = 1;
+          try {
+            cellFrame.dashPattern = [3, 3];
+          } catch (e) {
+          }
+          cellFrame.resize(cellW, cellH);
+          wrapper.appendChild(cellFrame);
+          cellFrame.x = gridX + j * cellW;
+          cellFrame.y = y;
+          const variant = findVariant(rc.values, cv);
+          if (variant) {
+            const inst = variant.createInstance();
+            wrapper.appendChild(inst);
+            inst.x = cellFrame.x + (cellW - inst.width) / 2;
+            inst.y = cellFrame.y + (cellH - inst.height) / 2;
+          }
+        });
+      });
+      if (hasGroups) {
+        let runStart = 0;
+        for (let i = 1; i <= rowCombos.length; i++) {
+          const boundary = i === rowCombos.length || rowCombos[i].group !== rowCombos[runStart].group;
+          if (!boundary) continue;
+          const runEnd = i - 1;
+          const yTop = HEADER_H + runStart * cellH;
+          const yBot = HEADER_H + (runEnd + 1) * cellH;
+          const spine = figma.createFrame();
+          spine.name = "group-spine";
+          spine.layoutMode = "NONE";
+          spine.fills = [docSolid(MATRIX_INK, 0.6)];
+          spine.resize(1.5, Math.max(1, yBot - yTop - 20));
+          wrapper.appendChild(spine);
+          spine.x = GROUP_W - 14;
+          spine.y = yTop + 10;
+          const label = docText((_a2 = rowCombos[runStart].group) != null ? _a2 : "", 11, "Medium", MATRIX_INK);
+          wrapper.appendChild(label);
+          label.x = 0;
+          label.y = yTop + (yBot - yTop) / 2 - label.height / 2;
+          runStart = i;
+        }
+      }
+      return wrapper;
     }
     function applyPendingProps(owner, pending) {
       var _a2;
@@ -4640,6 +4849,7 @@
       const isVariantSet = spec.variants.length > 1;
       const cursorY = (_a2 = cursorByPage.get(pg.id)) != null ? _a2 : 120;
       let placedNode;
+      let variantNodes;
       if (isVariantSet) {
         const existingSet = existingSets.get(entry.set);
         const childByName = /* @__PURE__ */ new Map();
@@ -4707,6 +4917,7 @@
         set.y = cursorY;
         applyPendingProps(set, pending);
         placedNode = set;
+        variantNodes = nodes;
       } else {
         let comp = existingSingles.get(entry.set);
         if (comp) {
@@ -4738,22 +4949,375 @@
       const propNames = [...new Set(pending.filter((pp) => typeof pp.def === "string").map((pp) => pp.prop))];
       const toggleNames = [...new Set(pending.filter((pp) => typeof pp.def === "boolean").map((pp) => pp.prop))];
       const panel = buildDocPanel(entry, spec, category, propNames, toggleNames);
-      const contentW = Math.max(Math.ceil(panel.width), Math.ceil(placedNode.width));
+      const barW = Math.ceil(panel.width);
+      const bar = docFrame(`\xA7 ${category}  /  ${entry.page}`, "HORIZONTAL", 8);
+      bar.fills = [docSolid(DOC.bar)];
+      bar.cornerRadius = 12;
+      bar.primaryAxisSizingMode = "FIXED";
+      bar.counterAxisSizingMode = "FIXED";
+      bar.resize(barW, 56);
+      bar.primaryAxisAlignItems = "SPACE_BETWEEN";
+      bar.counterAxisAlignItems = "CENTER";
+      bar.paddingLeft = 24;
+      bar.paddingRight = 24;
+      bar.appendChild(docText(`${category}  /  ${entry.page}`, 12, "Medium", DOC.barText, 1, sampleChrome.text));
+      bar.appendChild(docText(`\u2B21 ${tokens.project || "Design System"}`, 12, "Semi Bold", DOC.barText, 1, sampleChrome.text));
+      const leftCol = docFrame("leftCol", "VERTICAL", 24);
+      leftCol.appendChild(bar);
+      leftCol.appendChild(panel);
+      const rightContent = isVariantSet && variantNodes ? buildVariantMatrix(entry, spec, variantNodes, placedNode) : placedNode;
       const idx = String(++boardIndex).padStart(2, "0");
-      const board = docBoard(
-        `${idx} \xB7 ${entry.page}`,
-        `${category}  /  ${entry.page}`,
-        tokens.project || "Design System",
-        contentW
-      );
+      const board = docFrame(`${idx} \xB7 ${entry.page}`, "HORIZONTAL", 24);
+      board.fills = [docSolid(DOC.board, 1, sampleChrome.board)];
+      board.cornerRadius = 24;
+      board.paddingTop = 48;
+      board.paddingBottom = 48;
+      board.paddingLeft = 48;
+      board.paddingRight = 48;
+      board.counterAxisAlignItems = "MIN";
+      pinToLightMode(board, sampleModePin);
       pg.appendChild(board);
-      board.appendChild(panel);
-      board.appendChild(placedNode);
-      const boardW = Math.max(Math.ceil(board.width), contentW + 96);
+      board.appendChild(leftCol);
+      board.appendChild(rightContent);
       board.x = boardX;
       board.y = 0;
-      boardX += boardW + BOARD_GAP;
+      boardX += Math.ceil(board.width) + BOARD_GAP;
       builtAtoms++;
+    }
+    const ARTEFACTS_PAGE = "\u2B21 Artefacts";
+    const PHONE_W = 360;
+    function fillW(n) {
+      try {
+        n.layoutSizingHorizontal = "FILL";
+      } catch (e) {
+      }
+    }
+    function phoneFrame() {
+      var _a2, _b2;
+      const f = figma.createFrame();
+      f.name = "phone";
+      f.layoutMode = "VERTICAL";
+      f.primaryAxisSizingMode = "AUTO";
+      f.counterAxisSizingMode = "FIXED";
+      f.resize(PHONE_W, 100);
+      f.cornerRadius = 32;
+      f.clipsContent = true;
+      f.fills = [fillP(p.surface0)];
+      f.strokes = [fillP(p.borderDefault)];
+      f.strokeWeight = 1;
+      tryBind(f, "strokeWeight", borderWidthVar());
+      const marginPx = pxToFloat((_b2 = (_a2 = tokens.grid) == null ? void 0 : _a2.margin) != null ? _b2 : "16px") || 16;
+      pad(f, marginPx, marginPx, marginPx, marginPx);
+      gap(f, 24);
+      return f;
+    }
+    function heading(chars) {
+      const t = txt(chars, { style: "Semi Bold", size: 22, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary });
+      t.textAutoResize = "HEIGHT";
+      return t;
+    }
+    function subtext(chars) {
+      const t = txt(chars, { size: 14, sizeVar: sizeSm, colorP: p.textSecondary });
+      t.textAutoResize = "HEIGHT";
+      return t;
+    }
+    function caption(chars) {
+      return txt(chars, { size: 11, colorP: p.textTertiary });
+    }
+    function screenButton(name, color, style, label, full = true) {
+      const btn = figma.createComponent();
+      btn.name = name;
+      const pend = [];
+      buildButton(btn, pend, color, style, "Default", "MD", "None");
+      const lbl = pend.find((pp) => pp.prop === "Label");
+      if (lbl) lbl.node.characters = label;
+      if (full) btn.primaryAxisAlignItems = "CENTER";
+      return btn;
+    }
+    function screenField(name, type, state = "Default", overrides) {
+      const f = figma.createComponent();
+      f.name = name;
+      buildInputField(f, [], "MD", type, state);
+      if (overrides == null ? void 0 : overrides.label) {
+        const n = f.findOne((c) => c.name === "label");
+        if ((n == null ? void 0 : n.type) === "TEXT") n.characters = overrides.label;
+      }
+      if (overrides == null ? void 0 : overrides.value) {
+        const n = f.findOne((c) => c.name === "value" || c.name === "placeholder");
+        if ((n == null ? void 0 : n.type) === "TEXT") n.characters = overrides.value;
+      }
+      return f;
+    }
+    function screenTextLink(name, label, state = "Default") {
+      const l = figma.createComponent();
+      l.name = name;
+      const pend = [];
+      buildTextLink(l, pend, state);
+      const lbl = pend.find((pp) => pp.prop === "Label");
+      if (lbl) lbl.node.characters = label;
+      return l;
+    }
+    function inlineLinkRow(name, lead, linkLabel) {
+      const r = row(name, 4);
+      r.appendChild(txt(lead, { size: 13, sizeVar: sizeSm, colorP: p.textTertiary }));
+      r.appendChild(screenTextLink(`${name}-link`, linkLabel));
+      r.primaryAxisAlignItems = "CENTER";
+      return r;
+    }
+    function featureRow(name, label) {
+      const r = row(name, 8);
+      r.counterAxisAlignItems = "CENTER";
+      r.appendChild(txt("\u2713", { style: "Semi Bold", size: 13, weightVar: wSemibold, colorP: p.textSuccess }));
+      r.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textSecondary }));
+      return r;
+    }
+    function summaryRow(name, label, value, bold = false) {
+      const r = row(name, 0);
+      r.primaryAxisAlignItems = "SPACE_BETWEEN";
+      r.appendChild(txt(label, { style: bold ? "Semi Bold" : "Regular", size: 13, sizeVar: sizeSm, weightVar: bold ? wSemibold : wRegular, colorP: bold ? p.textPrimary : p.textSecondary }));
+      r.appendChild(txt(value, { style: "Semi Bold", size: 13, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary }));
+      return r;
+    }
+    function appendDivider(container) {
+      const d = figma.createFrame();
+      d.name = "divider";
+      d.fills = [fillP(p.borderDefault)];
+      d.resize(10, 1);
+      container.appendChild(d);
+      fillW(d);
+      d.layoutSizingVertical = "FIXED";
+    }
+    function buildLoginScreen() {
+      const content = col("content", 20);
+      const title = heading("Welcome back");
+      content.appendChild(title);
+      fillW(title);
+      const sub = subtext("Sign in to keep building your system.");
+      content.appendChild(sub);
+      fillW(sub);
+      const email = screenField("Email", "E-Mail");
+      content.appendChild(email);
+      fillW(email);
+      const password = screenField("Password", "Password");
+      content.appendChild(password);
+      fillW(password);
+      const forgot = row("forgot-row", 0);
+      forgot.primaryAxisAlignItems = "MAX";
+      content.appendChild(forgot);
+      fillW(forgot);
+      forgot.appendChild(screenTextLink("forgot-link", "Forgot password?"));
+      const cta = screenButton("Button \xB7 Sign in", "Brand", "Solid", "Sign in");
+      content.appendChild(cta);
+      fillW(cta);
+      appendDivider(content);
+      const social = col("social", 10);
+      content.appendChild(social);
+      fillW(social);
+      const g = figma.createComponent();
+      g.name = "Google SSO";
+      buildSocial(g, [], "Google", "Default", "MD");
+      social.appendChild(g);
+      fillW(g);
+      const a = figma.createComponent();
+      a.name = "Apple SSO";
+      buildSocial(a, [], "Apple", "Default", "MD");
+      social.appendChild(a);
+      fillW(a);
+      content.appendChild(inlineLinkRow("signup-row", "Don't have an account?", "Sign up"));
+      const phone = phoneFrame();
+      phone.appendChild(content);
+      fillW(content);
+      return phone;
+    }
+    function buildVerifyScreen() {
+      const content = col("content", 20);
+      const title = heading("Verify your identity");
+      content.appendChild(title);
+      fillW(title);
+      const sub = subtext("Enter the code we just sent to your email.");
+      content.appendChild(sub);
+      fillW(sub);
+      const otp = figma.createComponent();
+      otp.name = "Input OTP";
+      buildOtp(otp, [], "Filled", "MD");
+      content.appendChild(otp);
+      const alert = figma.createComponent();
+      alert.name = "InlineAlert \xB7 Error";
+      const pend = [];
+      buildInlineAlert(alert, pend, "Error");
+      const msg = pend.find((pp) => pp.prop === "Message");
+      if (msg) msg.node.characters = "That code expired. Request a new one below.";
+      content.appendChild(alert);
+      fillW(alert);
+      const cta = screenButton("Button \xB7 Verify", "Brand", "Solid", "Verify");
+      content.appendChild(cta);
+      fillW(cta);
+      content.appendChild(inlineLinkRow("resend-row", "Didn't get a code?", "Resend"));
+      const phone = phoneFrame();
+      phone.appendChild(content);
+      fillW(content);
+      return phone;
+    }
+    function buildPricingScreen() {
+      const content = col("content", 20);
+      const title = heading("Choose your plan");
+      content.appendChild(title);
+      fillW(title);
+      const sub = subtext("Upgrade any time \u2014 cancel whenever.");
+      content.appendChild(sub);
+      fillW(sub);
+      const badge = figma.createComponent();
+      badge.name = "Badge \xB7 Most popular";
+      const bpend = [];
+      buildBadge(badge, bpend, "Solid", "Brand", "SM", "None");
+      const blbl = bpend.find((pp) => pp.prop === "Label");
+      if (blbl) blbl.node.characters = "Most popular";
+      content.appendChild(badge);
+      const card = figma.createComponent();
+      card.name = "Card \xB7 Pro plan";
+      const cpend = [];
+      buildCard(card, cpend);
+      const cardTitle = cpend.find((pp) => pp.prop === "Title");
+      if (cardTitle) cardTitle.node.characters = "Pro";
+      const desc = cpend.find((pp) => pp.prop === "Description");
+      if (desc) desc.node.characters = "$29/month, billed annually";
+      content.appendChild(card);
+      fillW(card);
+      const f1 = featureRow("feature-1", "Unlimited design systems");
+      card.appendChild(f1);
+      fillW(f1);
+      const f2 = featureRow("feature-2", "Figma + code + AI export");
+      card.appendChild(f2);
+      fillW(f2);
+      const f3 = featureRow("feature-3", "GitHub sync");
+      card.appendChild(f3);
+      fillW(f3);
+      const planCta = screenButton("Button \xB7 Get started", "Brand", "Solid", "Get started");
+      card.appendChild(planCta);
+      fillW(planCta);
+      const phone = phoneFrame();
+      phone.appendChild(content);
+      fillW(content);
+      return phone;
+    }
+    function buildCheckoutScreen() {
+      const content = col("content", 20);
+      const title = heading("Checkout");
+      content.appendChild(title);
+      fillW(title);
+      const alert = figma.createComponent();
+      alert.name = "InlineAlert \xB7 Success";
+      const pend = [];
+      buildInlineAlert(alert, pend, "Success");
+      const msg = pend.find((pp) => pp.prop === "Message");
+      if (msg) msg.node.characters = "Payment method verified \u2014 you\u2019re all set.";
+      content.appendChild(alert);
+      fillW(alert);
+      const nameField = screenField("Name on card", "Default", "Filled", { label: "Name on card", value: "Jordan Silva" });
+      content.appendChild(nameField);
+      fillW(nameField);
+      const cardField = screenField("Card number", "Default", "Filled", { label: "Card number", value: "\u2022\u2022\u2022\u2022 \u2022\u2022\u2022\u2022 \u2022\u2022\u2022\u2022 4242" });
+      content.appendChild(cardField);
+      fillW(cardField);
+      const summary = col("summary", 8);
+      content.appendChild(summary);
+      fillW(summary);
+      const rowSubtotal = summaryRow("subtotal", "Subtotal", "$29.00");
+      summary.appendChild(rowSubtotal);
+      fillW(rowSubtotal);
+      const rowTax = summaryRow("tax", "Tax", "$0.00");
+      summary.appendChild(rowTax);
+      fillW(rowTax);
+      appendDivider(summary);
+      const rowTotal = summaryRow("total", "Total", "$29.00", true);
+      summary.appendChild(rowTotal);
+      fillW(rowTotal);
+      const cta = screenButton("Button \xB7 Pay now", "Brand", "Solid", "Pay now");
+      content.appendChild(cta);
+      fillW(cta);
+      const phone = phoneFrame();
+      phone.appendChild(content);
+      fillW(content);
+      return phone;
+    }
+    function buildProfileScreen() {
+      const content = col("content", 24);
+      const title = heading("Profile");
+      content.appendChild(title);
+      fillW(title);
+      const avatar = figma.createComponent();
+      avatar.name = "Avatar";
+      const apend = [];
+      buildAvatar(avatar, apend, "LG");
+      const initials = apend.find((pp) => pp.prop === "Initials");
+      if (initials) initials.node.characters = "JS";
+      const identity = col("identity", 2);
+      identity.appendChild(txt("Jordan Silva", { style: "Semi Bold", size: 15, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary }));
+      identity.appendChild(txt("jordan@escalatokens.com", { size: 12, sizeVar: sizeXs, colorP: p.textTertiary }));
+      const header = row("profile-header", 12);
+      header.counterAxisAlignItems = "CENTER";
+      header.appendChild(avatar);
+      header.appendChild(identity);
+      content.appendChild(header);
+      appendDivider(content);
+      const switchGroup = figma.createComponent();
+      switchGroup.name = "SwitchGroup \xB7 Notifications";
+      buildSwitchGroup(switchGroup, []);
+      content.appendChild(switchGroup);
+      appendDivider(content);
+      const danger = screenButton("Button \xB7 Delete account", "Danger", "Outline", "Delete account");
+      content.appendChild(danger);
+      fillW(danger);
+      const phone = phoneFrame();
+      phone.appendChild(content);
+      fillW(content);
+      return phone;
+    }
+    async function buildArtefactsPage() {
+      let page = figma.root.children.find((pg) => pg.name === ARTEFACTS_PAGE);
+      if (!page) {
+        page = figma.createPage();
+        page.name = ARTEFACTS_PAGE;
+      } else {
+        await page.loadAsync();
+        for (const child of [...page.children]) child.remove();
+      }
+      try {
+        page.backgrounds = [{ type: "SOLID", color: hexToRgb(DOC.page) }];
+      } catch (e) {
+      }
+      const screens = [
+        { label: "Login", build: buildLoginScreen },
+        { label: "Verify code", build: buildVerifyScreen },
+        { label: "Pricing", build: buildPricingScreen },
+        { label: "Checkout", build: buildCheckoutScreen },
+        { label: "Profile", build: buildProfileScreen }
+      ];
+      let x = 0;
+      let built = 0;
+      for (const s of screens) {
+        progress("Artefacts", built, screens.length, s.label);
+        await yieldToUI();
+        const col_ = figma.createFrame();
+        col_.name = `${String(built + 1).padStart(2, "0")} \xB7 ${s.label}`;
+        col_.layoutMode = "VERTICAL";
+        col_.primaryAxisSizingMode = "AUTO";
+        col_.counterAxisSizingMode = "AUTO";
+        col_.fills = [];
+        col_.itemSpacing = 16;
+        const cap = caption(`Artefact \xB7 ${s.label} \xB7 true size \xB7 page margin from Grid`);
+        col_.appendChild(cap);
+        const phone = s.build();
+        col_.appendChild(phone);
+        page.appendChild(col_);
+        col_.x = x;
+        col_.y = 0;
+        x += col_.width + 96;
+        built++;
+      }
+      progress("Artefacts", screens.length, screens.length);
+      log(`\u2713 Artefacts (${built} screens) \u2014 every control bound to the same color, border and text tokens as Components Overview`);
+      return built;
     }
     const planned = SAMPLE.map((e) => ({ entry: e, spec: sampleSpec(e) })).filter((x) => x.spec !== void 0);
     const plannedTotal = planned.length;
@@ -4771,6 +5335,7 @@
       samplePage.backgrounds = [docSolid(DOC.page)];
     } catch (e) {
     }
+    pinToLightMode(samplePage, sampleModePin);
     firstBuiltPage = samplePage;
     for (const { entry, spec } of planned) {
       progress("Components", plannedDone, plannedTotal, entry.page);
@@ -4791,6 +5356,7 @@
       if (placed.length > 0) figma.viewport.scrollAndZoomIntoView(placed);
     }
     log(`\u2713 Components Overview \u2014 ${builtAtoms} elements (${builtVariants} variants), every fill, radius, spacing and text bound to your tokens`);
+    await buildArtefactsPage();
     return builtVariants;
   }
   async function importDocumentation(tokens) {
@@ -4841,14 +5407,16 @@
     const borderHex = "#E9E9EC";
     const inkHex = "#0A0A0B";
     const accentHex = archHexFor(tokens, "background-brand-solid", ((_a = tokens.colors.themeOrder) != null ? _a : ["light"])[0]) || sem["background-brand-solid"] || sem["content-brand"] || sem["action-primary"] || sem["bg-accent-solid"] || sem.primary || "#3B82F6";
-    const surfaceVar = void 0;
-    const cardVar = void 0;
-    const textVar = void 0;
-    const mutedVar = void 0;
-    const borderVar = void 0;
     const S = COLLECTIONS.semantics;
     const docSem = semLookupFor(tokens, allVars, allCols);
     const accentVar = docSem.varFor("background-brand-solid", "Action/primary/default", "Action/primary.default", "action/primary/default", "action/primary.default", "action/primary", "bg/accent-solid", "primary");
+    const docChromeVars = docChromeVarsFrom(docSem);
+    const docModeVars = docModePin(tokens, allCols);
+    const surfaceVar = docChromeVars.board;
+    const cardVar = docChromeVars.card;
+    const textVar = docChromeVars.text;
+    const mutedVar = docChromeVars.muted;
+    const borderVar = docChromeVars.border;
     const familyVar = findVar(COLLECTIONS.typography, "family");
     const typoBind = /* @__PURE__ */ new Map();
     {
@@ -4909,6 +5477,7 @@
       page.backgrounds = [{ type: "SOLID", color: hexToRgb(DOC.page) }];
     } catch (e) {
     }
+    pinToLightMode(page, docModeVars);
     function mkText(chars, opts = {}) {
       var _a2, _b2, _c2, _d2, _e2, _f2;
       const t = figma.createText();
@@ -4947,8 +5516,8 @@
     }
     function section(title, subtitle) {
       const card = autoFrame(title, "VERTICAL", 24);
-      card.fills = [solid(cardHex)];
-      card.strokes = [solid(borderHex)];
+      card.fills = [boundFill(cardVar, cardHex)];
+      card.strokes = [boundFill(borderVar, borderHex)];
       card.strokeWeight = 1;
       card.cornerRadius = 16;
       card.paddingTop = 36;
@@ -4958,8 +5527,8 @@
       card.counterAxisSizingMode = "FIXED";
       card.resize(CARD_W, 100);
       const head = autoFrame(`${title}__head`, "VERTICAL", 8);
-      head.appendChild(mkText(title, { size: 24, style: "Semi Bold", colorHex: textHex }));
-      const sub = mkText(subtitle, { size: 12, colorHex: mutedHex });
+      head.appendChild(mkText(title, { size: 24, style: "Semi Bold", colorVar: textVar, colorHex: textHex }));
+      const sub = mkText(subtitle, { size: 12, colorVar: mutedVar, colorHex: mutedHex });
       sub.resize(INNER_W, sub.height);
       sub.textAutoResize = "HEIGHT";
       head.appendChild(sub);
@@ -4979,8 +5548,8 @@
       bar.counterAxisAlignItems = "CENTER";
       bar.paddingLeft = 24;
       bar.paddingRight = 24;
-      bar.appendChild(mkText(label, { size: 12, style: "Medium", colorHex: "#26262E" }));
-      bar.appendChild(mkText(`\u2B21 ${tokens.project || "Design System"}`, { size: 12, style: "Semi Bold", colorHex: "#26262E" }));
+      bar.appendChild(mkText(label, { size: 12, style: "Medium", colorVar: textVar, colorHex: "#26262E" }));
+      bar.appendChild(mkText(`\u2B21 ${tokens.project || "Design System"}`, { size: 12, style: "Semi Bold", colorVar: textVar, colorHex: "#26262E" }));
       return bar;
     }
     let sections = 0;
@@ -4995,12 +5564,13 @@
       await yieldToUI();
       const idx = String(boards.length + 1).padStart(2, "0");
       const b = autoFrame(`${idx} \xB7 ${label}`, "VERTICAL", 24);
-      b.fills = [solid(surfaceHex)];
+      b.fills = [boundFill(surfaceVar, surfaceHex)];
       b.paddingTop = 48;
       b.paddingBottom = 96;
       b.paddingLeft = 48;
       b.paddingRight = 48;
       b.cornerRadius = 24;
+      pinToLightMode(b, docModeVars);
       docPage.appendChild(b);
       b.x = boardX;
       b.y = 0;
@@ -5043,8 +5613,8 @@
       }
       const steps = Math.max(0, ...famTones.values());
       const cover = autoFrame("cover", "VERTICAL", 0);
-      cover.fills = [solid(cardHex)];
-      cover.strokes = [solid(borderHex)];
+      cover.fills = [boundFill(cardVar, cardHex)];
+      cover.strokes = [boundFill(borderVar, borderHex)];
       cover.strokeWeight = 1;
       cover.cornerRadius = 16;
       cover.clipsContent = true;
@@ -5084,19 +5654,19 @@
       cover.appendChild(cols);
       const main = coverCol2("cover__intro", 590);
       main.paddingLeft = 40;
-      main.appendChild(mkText("Foundations  /  Color System  /  Tokens", { size: 10, colorHex: mutedHex }));
-      main.appendChild(mkText("Color System", { size: 30, style: "Semi Bold", colorHex: textHex }));
+      main.appendChild(mkText("Foundations  /  Color System  /  Tokens", { size: 10, colorVar: mutedVar, colorHex: mutedHex }));
+      main.appendChild(mkText("Color System", { size: 30, style: "Semi Bold", colorVar: textVar, colorHex: textHex }));
       const para = mkText(
         `${project}'s color foundation is built on primitive ramps \u2014 raw, unopinionated values that feed every semantic token in the system. Primitives never appear in components directly; they exist solely as the source of truth that the semantic layer references.`,
-        { size: 13, colorHex: mutedHex }
+        { size: 13, colorVar: mutedVar, colorHex: mutedHex }
       );
       para.resize(500, para.height);
       para.textAutoResize = "HEIGHT";
       para.lineHeight = { value: 150, unit: "PERCENT" };
       main.appendChild(para);
       const midCol = coverCol2("cover__primitives", 295, "#FAFAFB");
-      midCol.appendChild(mkText("Primitive Colors", { size: 18, style: "Semi Bold", colorHex: textHex }));
-      const midSub = mkText("The raw ramps \u2014 every family, every step.", { size: 11, colorHex: mutedHex });
+      midCol.appendChild(mkText("Primitive Colors", { size: 18, style: "Semi Bold", colorVar: textVar, colorHex: textHex }));
+      const midSub = mkText("The raw ramps \u2014 every family, every step.", { size: 11, colorVar: mutedVar, colorHex: mutedHex });
       midSub.resize(231, midSub.height);
       midSub.textAutoResize = "HEIGHT";
       midCol.appendChild(midSub);
@@ -5121,7 +5691,7 @@
       btn.resize(231, 40);
       btn.primaryAxisAlignItems = "CENTER";
       btn.counterAxisAlignItems = "CENTER";
-      btn.appendChild(mkText("Open configurator \u2197", { size: 11, style: "Medium", colorHex: textHex }));
+      btn.appendChild(mkText("Open configurator \u2197", { size: 11, style: "Medium", colorVar: textVar, colorHex: textHex }));
       inkCol.appendChild(btn);
     }
     {
@@ -5193,7 +5763,7 @@
         const lookup = docArch.kind === "tonal" ? (fam, tone) => {
           var _a3;
           return (_a3 = palettes == null ? void 0 : palettes[fam]) == null ? void 0 : _a3[tone];
-        } : (fam, tone) => tokens.colors.primitive[`${fam}-${tone}`];
+        } : (fam, tone) => primitiveRefHex(tokens, fam, tone);
         const modeKeys = docNorm.modes.map(([k]) => k);
         const lightKey = modeKeys[0];
         const darkKey = modeKeys.indexOf("dark") > 0 ? "dark" : modeKeys[1];
@@ -5253,7 +5823,7 @@
         c.primaryAxisSizingMode = "FIXED";
         c.resize(width, 14);
         c.paddingLeft = padLeft;
-        const t = mkText(label, { size: 9, style: "Medium", colorHex: mutedHex });
+        const t = mkText(label, { size: 9, style: "Medium", colorVar: mutedVar, colorHex: mutedHex });
         t.letterSpacing = { value: 0.8, unit: "PIXELS" };
         c.appendChild(t);
         return c;
@@ -5323,7 +5893,7 @@
           dot.strokes = [solid("#000000", 0.1)];
           dot.strokeWeight = 1;
           cell.appendChild(dot);
-          cell.appendChild(mkText(e.label, { size: 11, style: "Medium", colorHex: textHex }));
+          cell.appendChild(mkText(e.label, { size: 11, style: "Medium", colorVar: textVar, colorHex: textHex }));
           names.appendChild(cell);
           const lightKey = primKeyByHex.get(normHex(e.light));
           prims.appendChild(chip2(e.light, lightKey != null ? lightKey : "\u2014", W.prim, false, primByHex.get(normHex(e.light))));
@@ -5508,21 +6078,30 @@
           const px = pxToFloat((_i = tokens.typography.sizes[d.size]) != null ? _i : "");
           if (!px) continue;
           const row = autoFrame(`role-${key}`, "HORIZONTAL", 24);
-          row.counterAxisAlignItems = "BASELINE";
-          const label = mkText(`${key}  \u2192  ${d.size} / ${d.weight}`, { size: 10, colorHex: mutedHex });
+          row.counterAxisAlignItems = "CENTER";
+          const label = mkText(`${key}  \u2192  ${d.size} / ${d.weight}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
           row.appendChild(label);
           label.resize(220, label.height);
           label.textAutoResize = "HEIGHT";
+          label.layoutSizingHorizontal = "FIXED";
+          label.layoutSizingVertical = "HUG";
           const spec = mkText("Almost before we knew it, we had left the ground.", {
             style: weightStyle(d.weight),
+            colorVar: textVar,
             colorHex: textHex
           });
           spec.fontSize = px;
+          spec.lineHeight = { value: 120, unit: "PERCENT" };
+          spec.textAutoResize = "WIDTH_AND_HEIGHT";
           bindField(spec, "fontSize", bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`));
           bindField(spec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`));
           bindField(spec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === "display" ? "heading-family" : "family"));
           row.appendChild(spec);
+          spec.layoutSizingHorizontal = "HUG";
+          spec.layoutSizingVertical = "HUG";
           roleBody.appendChild(row);
+          row.layoutSizingHorizontal = "HUG";
+          row.layoutSizingVertical = "HUG";
         }
         root.appendChild(roleCard);
         sections++;
@@ -5555,7 +6134,7 @@
             const px = pxToFloat((_k = tokens.spacing[step]) != null ? _k : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
-            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorHex: mutedHex });
+            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
             row.appendChild(label);
             label.resize(200, label.height);
             const bar = figma.createFrame();
@@ -5624,7 +6203,7 @@
               sq.setBoundVariable("bottomRightRadius", rv);
             }
             cell.appendChild(sq);
-            cell.appendChild(mkText(`${role} \u2192 ${step}`, { size: 10, colorHex: mutedHex }));
+            cell.appendChild(mkText(`${role} \u2192 ${step}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex }));
             roleRow.appendChild(cell);
           }
           body.appendChild(roleRow);
@@ -5663,7 +6242,7 @@
             const px = pxToFloat((_q = (strokeMap != null ? strokeMap : {})[step]) != null ? _q : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
-            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorHex: mutedHex });
+            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
             row.appendChild(label);
             label.resize(200, label.height);
             const line = figma.createFrame();
@@ -5768,7 +6347,7 @@
             const px = pxToFloat((_w = (_v = tokens.sizes) == null ? void 0 : _v[step]) != null ? _w : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
-            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorHex: mutedHex });
+            const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
             row.appendChild(label);
             label.resize(200, label.height);
             const bar = figma.createFrame();
@@ -5806,12 +6385,12 @@
           sw.name = `gradient-${slug}`;
           sw.resize(248, 140);
           sw.cornerRadius = 12;
-          sw.strokes = [solid(borderHex)];
+          sw.strokes = [boundFill(borderVar, borderHex)];
           sw.strokeWeight = 1;
           sw.fills = [paint];
           cell.appendChild(sw);
           const tags = ["cover", "avatar"].filter((s) => assigned[s] === slug);
-          cell.appendChild(mkText(slug + (tags.length ? `  \xB7  ${tags.join(" + ")}` : ""), { size: 11, style: "Medium", colorHex: textHex }));
+          cell.appendChild(mkText(slug + (tags.length ? `  \xB7  ${tags.join(" + ")}` : ""), { size: 11, style: "Medium", colorVar: textVar, colorHex: textHex }));
           row.appendChild(cell);
         }
         body.appendChild(row);
@@ -6004,11 +6583,16 @@
     }
     const fontFor = (style) => loadedStyles.has(style) ? { family: fontFamily, style } : { family: "Inter", style };
     const iconsTypo = await typoVarMap();
-    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, iconsTypo, tokens.typography.sizes);
+    const iconsAllVars = await figma.variables.getLocalVariablesAsync();
+    const iconsAllCols = await figma.variables.getLocalVariableCollectionsAsync();
+    const iconsChrome = docChromeVarsFrom(semLookupFor(tokens, iconsAllVars, iconsAllCols));
+    const iconsModePin = docModePin(tokens, iconsAllCols);
+    const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, iconsTypo, tokens.typography.sizes, iconsChrome, iconsModePin);
     try {
       pg.backgrounds = [docSolid(DOC.page)];
     } catch (e) {
     }
+    pinToLightMode(pg, iconsModePin);
     const MARGIN = 80;
     const TOP = 120;
     const SHOWCASE_X = MARGIN + (PANEL_W + 96) + 60;
@@ -6039,12 +6623,12 @@
         card.cornerRadius = 16;
         pg.appendChild(card);
       }
-      card.fills = [docSolid(DOC.card)];
-      card.strokes = [docSolid(DOC.border)];
+      card.fills = [docSolid(DOC.card, 1, iconsChrome.card)];
+      card.strokes = [docSolid(DOC.border, 1, iconsChrome.border)];
       card.strokeWeight = 1;
       const oldLabel = card.children.find((n) => n.type === "TEXT" && n.name === "label");
       if (oldLabel) oldLabel.remove();
-      const lbl = docText(label.toUpperCase(), 10, "Medium", DOC.muted);
+      const lbl = docText(label.toUpperCase(), 10, "Medium", DOC.muted, 1, iconsChrome.muted);
       lbl.name = "label";
       lbl.letterSpacing = { value: 1, unit: "PIXELS" };
       card.insertChild(0, lbl);
@@ -6233,8 +6817,8 @@
       y += cardF.height + 40;
     }
     const panel = docFrame("docs/icons-panel", "VERTICAL", 20);
-    panel.fills = [docSolid(DOC.card)];
-    panel.strokes = [docSolid(DOC.border)];
+    panel.fills = [docSolid(DOC.card, 1, iconsChrome.board)];
+    panel.strokes = [docSolid(DOC.border, 1, iconsChrome.border)];
     panel.strokeWeight = 1;
     panel.cornerRadius = 16;
     panel.paddingTop = PANEL_PAD;
@@ -6249,15 +6833,17 @@
     crumb.resize(PANEL_INNER, 18);
     crumb.primaryAxisAlignItems = "SPACE_BETWEEN";
     crumb.counterAxisAlignItems = "CENTER";
-    crumb.appendChild(docText("Foundations  /  Icons", 9, "Regular", DOC.muted));
-    crumb.appendChild(docText("v1.0 \u2013 LAUNCH", 8, "Medium", DOC.muted, 0.9));
+    crumb.appendChild(docText("Foundations  /  Icons", 9, "Regular", DOC.muted, 1, iconsChrome.secondary));
+    crumb.appendChild(docText("v1.0 \u2013 LAUNCH", 8, "Medium", DOC.muted, 0.9, iconsChrome.secondary));
     panel.appendChild(crumb);
-    panel.appendChild(wrapText(docText("Icons", 26, "Semi Bold", DOC.text), PANEL_INNER));
+    panel.appendChild(wrapText(docText("Icons", 26, "Semi Bold", DOC.text, 1, iconsChrome.text), PANEL_INNER));
     const intro = wrapText(docText(
       `${libName || "The icon set"} is the icon language of this design system. The core UI set is imported straight from the official collection, normalized to a 24px grid and tinted through the text/primary variable \u2014 custom brand glyphs live alongside it.`,
       12,
       "Regular",
-      DOC.muted
+      DOC.muted,
+      1,
+      iconsChrome.muted
     ), PANEL_INNER);
     intro.lineHeight = { value: 150, unit: "PERCENT" };
     panel.appendChild(intro);
@@ -6306,16 +6892,16 @@
         chipF.paddingTop = 4;
         chipF.paddingBottom = 4;
         chipF.cornerRadius = 999;
-        chipF.strokes = [docSolid(accent, 0.45)];
+        chipF.strokes = [docSolid(accent, 0.45, iconsChrome.accentBorder)];
         chipF.strokeWeight = 1;
-        chipF.appendChild(docText(f, 9, "Medium", accent));
+        chipF.appendChild(docText(f, 9, "Medium", accent, 1, iconsChrome.accentText));
         rw.appendChild(chipF);
       }
       panel.appendChild(rw);
     }
     const hint = docFrame("insert-hint", "VERTICAL", 6);
-    hint.fills = [docSolid(DOC.faint)];
-    hint.strokes = [docSolid(DOC.border)];
+    hint.fills = [docSolid(DOC.faint, 1, iconsChrome.card)];
+    hint.strokes = [docSolid(DOC.border, 1, iconsChrome.border)];
     hint.strokeWeight = 1;
     hint.cornerRadius = 10;
     hint.paddingTop = 14;
@@ -6324,8 +6910,8 @@
     hint.paddingRight = 16;
     hint.counterAxisSizingMode = "FIXED";
     hint.resize(PANEL_INNER, 60);
-    hint.appendChild(wrapText(docText("Insert icons easily to your canvas", 12, "Medium", DOC.text), PANEL_INNER - 32));
-    hint.appendChild(wrapText(docText("hold \u21E7 Shift + I, search \u201Cicon/\u201D and press insert \u2014 or drag any glyph from Assets to the canvas", 10.5, "Regular", DOC.muted), PANEL_INNER - 32));
+    hint.appendChild(wrapText(docText("Insert icons easily to your canvas", 12, "Medium", DOC.text, 1, iconsChrome.text), PANEL_INNER - 32));
+    hint.appendChild(wrapText(docText("hold \u21E7 Shift + I, search \u201Cicon/\u201D and press insert \u2014 or drag any glyph from Assets to the canvas", 10.5, "Regular", DOC.muted, 1, iconsChrome.muted), PANEL_INNER - 32));
     panel.appendChild(hint);
     const board = docBoard(
       "docs/board \xB7 Icons",
@@ -6624,7 +7210,7 @@
   figma.showUI(__html__, { width: 880, height: 620, themeColors: true });
   function ensureFoundationPageOrder() {
     let idx = 0;
-    for (const name of ["\u2B21 Cover", "\u2B21 Documentation", "\u2B21 Components Overview", "\u2B21 Icons"]) {
+    for (const name of ["\u2B21 Cover", "\u2B21 Documentation", "\u2B21 Components Overview", "\u2B21 Artefacts", "\u2B21 Icons"]) {
       const foundation = figma.root.children.find((p) => p.name === name);
       if (foundation) figma.root.insertChild(idx++, foundation);
     }
@@ -6804,6 +7390,7 @@
       cover: names.has("\u2B21 Cover"),
       documentation: names.has("\u2B21 Documentation"),
       sample: names.has("\u2B21 Components Overview"),
+      artefacts: names.has("\u2B21 Artefacts"),
       icons: names.has("\u2B21 Icons"),
       variables,
       collections

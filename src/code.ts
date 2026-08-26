@@ -284,7 +284,17 @@ function fetchWithTimeout(url: string, ms = 15000): Promise<FetchResponse> {
 // v6: additive layout + type roles — typography.roles, spacingRoles,
 //     radiusRoles, sizeRoles, stroke, strokeRoles, breakpointRoles, gridFrame.
 //     Also reads `borders.width` as a fallback copy of `stroke`.
-const SUPPORTED_SCHEMA_VERSION = 6
+// v7: semantic colours in `colors.architecture.tokens` may be TRANSLUCENT
+//     (8-digit `#rrggbbaa`) — the 16 roles backed by an alpha primitive
+//     (ghost washes, status tints, surface.selected, focus halos, the scrim,
+//     border.rim-highlight). Already handled: `archValueRgba` routes hex
+//     through `hexToRgba`, whose regex has always accepted the 8-digit form,
+//     and Figma COLOR variables carry alpha natively — so these import as
+//     genuinely translucent variables rather than being flattened. The
+//     `{family.tone}` fallback path DID need fixing (see `primitiveRefHex`):
+//     it looked only in `colors.primitive`, where no alpha key has ever
+//     existed. `colors.primitive` and `colors.themes` stay fully opaque.
+const SUPPORTED_SCHEMA_VERSION = 7
 
 function checkSchema(tokens: DesignTokens) {
   const v = tokens.schemaVersion
@@ -322,6 +332,15 @@ const PLUGIN_STYLE_ROOTS = new Set(['Type', 'Shadow', 'Gradient', 'Grid'])
 const INHERITED_STYLE_FOLDERS = ['Type', 'Shadow', 'Gradient', 'Grid', 'Scale', 'Semantic'] as const
 const DOCS_REV = 6
 const FILE_DOCS_REV_KEY = 'sd-docs-rev'
+// One-time sweep: files created before primitives defaulted to hidden-from-
+// publishing (see upsertVarIn) never get that default applied retroactively —
+// only NEWLY created variables are hidden, so an existing file's primitives
+// stay exactly as visible as they were. This key gates ONE forced pass over
+// every existing "Color Primitives" variable so upgrading the plugin doesn't
+// leave old files behind. After it runs once, the file is on its own: further
+// syncs never touch hiddenFromPublishing again, so a user who manually
+// re-exposes a ramp keeps that choice forever.
+const FILE_PRIMITIVES_HIDDEN_KEY = 'sd-primitives-hidden-v1'
 
 /** Sidebar order in Figma's Variables panel. Figma has no reorder API — a
  *  collection's position is its creation order — so we create Color Semantics
@@ -628,12 +647,15 @@ const ARCH_REF_RE = /^\{([a-z0-9-]+)\.(\d+)\}$/
  *  a few lines below ("no mode reads as empty") — a theme name the node
  *  doesn't carry (e.g. Vibrancy/Tonal columns don't grow with new themes,
  *  though this function is never called for those two) still gets a value. */
-function archRefHex(node: Record<string, string> | undefined, themeKey: string, primitive: ColorScale): string | undefined {
+function archRefHex(node: Record<string, string> | undefined, themeKey: string, tokens: DesignTokens): string | undefined {
   if (!node) return undefined
   const raw = (node[themeKey] ?? Object.values(node)[0] ?? '').trim()
   if (!raw) return undefined
   const m = ARCH_REF_RE.exec(raw)
-  if (m) return primitive[`${m[1]}-${m[2]}`]
+  // Alpha families included — see primitiveRefHex. Takes the whole payload
+  // rather than just `colors.primitive` because an alpha ref resolves out of
+  // a different map.
+  if (m) return primitiveRefHex(tokens, m[1], m[2])
   // tokens.json ships resolved hex (resolveCuratedForExport), not `{family.tone}`.
   if (/^#?[0-9a-f]{6}([0-9a-f]{2})?$/i.test(raw)) return raw.startsWith('#') ? raw : `#${raw}`
   return undefined
@@ -680,7 +702,7 @@ function archHexFor(tokens: DesignTokens, roleKey: string, theme: string): strin
   const hit = ARCH_ROLE_MAP[kind as keyof typeof ARCH_ROLE_MAP][roleKey]
   if (!hit) return undefined
   const t = tokens.colors.architecture?.tokens as ArchTokens | undefined
-  return archRefHex(t?.[hit[0]]?.[hit[1]], theme, tokens.colors.primitive)
+  return archRefHex(t?.[hit[0]]?.[hit[1]], theme, tokens)
 }
 
 /** A variable's colour in one mode, following aliases to their target's own
@@ -748,6 +770,62 @@ function semLookupFor(tokens: DesignTokens, allVars: Variable[], allCols: Variab
       return hex ? byHex.get(normHex(hex)) : undefined
     },
   }
+}
+
+// ─── Documentation chrome — variable lookups ─────────────────────────────────
+// The editorial chrome (Components Overview panels, the ⬡ Documentation
+// boards, ⬡ Icons) used to paint its ink/borders/surfaces from fixed hex —
+// "chrome must stay readable in every mode" was the reasoning, and it's still
+// correct, but it doesn't require staying UNBOUND: it requires staying pinned
+// to ONE mode (see docModePin below). Everything the chrome paints with — text,
+// hairlines, the board/card surfaces, the accent used on chips — now binds to
+// the same "Color Semantics" roles the components themselves bind to, so
+// selecting a layer in Figma shows a real token name (Content/primary,
+// Border/default, Surface/page…) instead of a flat, unnamed fill, and editing
+// that role in the configurator moves the docs along with everything else.
+interface DocChromeVars {
+  text?: Variable          // headings, strong labels — content-primary
+  secondary?: Variable     // breadcrumbs, meta labels — content-secondary
+  muted?: Variable         // body copy, descriptions, hints — content-tertiary
+  border?: Variable        // hairlines, panel/card strokes — border-default
+  borderStrong?: Variable  // the SPECS/FEATURES divider chip's outline — border-strong
+  board?: Variable         // the outer rounded slab — background-primary (Surface/page)
+  card?: Variable          // inner cards / swatch chips — background-tertiary (Surface/layer-2)
+  accentText?: Variable    // FEATURES chip label ink — content-brand (Content/accent)
+  accentBorder?: Variable  // FEATURES chip outline — border-brand (Border/accent)
+}
+function docChromeVarsFrom(sem: SemLookup): DocChromeVars {
+  return {
+    text:         sem.varFor('content-primary',    'Content/primary', 'content/primary', 'text/primary', 'text'),
+    secondary:    sem.varFor('content-secondary',  'Content/secondary', 'content/secondary', 'text/secondary'),
+    muted:        sem.varFor('content-tertiary',   'Content/subtle', 'content/subtle', 'Content/tertiary', 'content/tertiary', 'text/tertiary', 'Content/secondary', 'content/secondary'),
+    border:       sem.varFor('border-default',     'Border/default', 'border/default', 'border/primary', 'border'),
+    borderStrong: sem.varFor('border-strong',      'Border/strong', 'border/strong'),
+    board:        sem.varFor('background-primary', 'Surface/page', 'surface/page', 'background/primary', 'surface/0'),
+    card:         sem.varFor('background-tertiary','Surface/layer-2', 'surface/layer-2', 'background/tertiary', 'surface/2'),
+    accentText:   sem.varFor('content-brand',      'Content/accent', 'content/accent', 'Content/brand', 'content/brand', 'text/brand-secondary'),
+    accentBorder: sem.varFor('border-brand',       'Border/accent', 'border/accent', 'border/brand'),
+  }
+}
+
+// The doc chrome is always painted as a LIGHT editorial surface, on purpose —
+// it's the one thing on these pages that must stay readable no matter which
+// mode the rest of the file happens to be sitting in. Binding its fills to
+// real semantic variables (above) would otherwise let an ambient dark mode
+// paint white boards with near-white "Content/primary" text. The fix is the
+// same one Figma ships for exactly this: pin the board's OWN resolved mode to
+// the system's first theme, so every bound chrome fill resolves against that
+// theme regardless of what mode the page or file is in.
+function docModePin(tokens: DesignTokens, allCols: VariableCollection[]): { collection: VariableCollection; modeId: string } | undefined {
+  const collection = allCols.find((c) => c.name === COLLECTIONS.semantics)
+  if (!collection) return undefined
+  const firstTheme = (tokens.colors.themeOrder ?? ['light'])[0] ?? 'light'
+  const mode = collection.modes.find((m) => m.name.toLowerCase() === firstTheme.toLowerCase()) ?? collection.modes[0]
+  return mode ? { collection, modeId: mode.modeId } : undefined
+}
+function pinToLightMode(node: SceneNode | PageNode, pin: { collection: VariableCollection; modeId: string } | undefined) {
+  if (!pin) return
+  try { node.setExplicitVariableModeForCollection(pin.collection, pin.modeId) } catch {}
 }
 
 // ── Architecture labels ──────────────────────────────────────────────────────
@@ -931,6 +1009,34 @@ const RGB_FN_RE = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*(
  * nothing resolves, so an unresolvable token is skipped instead of shipped as
  * a wrong colour.
  */
+/**
+ * Resolve a `{family.tone}` ref against the payload's primitive maps.
+ *
+ * Solid families live in `colors.primitive` under `accent-9`. ALPHA families
+ * are addressed in refs with an `-a` suffix (`{accent-a.3}`, `{black-a.8}`)
+ * and live in `colors.primitiveAlpha` — but under TWO different key shapes,
+ * because the two kinds of alpha primitive were added at different times and
+ * the earlier one is a shipped contract this must not rename:
+ *
+ *   • a family's alpha TWIN is keyed by the bare family (`accent-3`), since
+ *     the `primitiveAlpha` bucket already disambiguates it from the solid;
+ *   • `black-a`/`white-a` (the fixed opacity ladder) carry the `-a` in the
+ *     key itself (`black-a-1`), having no solid counterpart to collide with.
+ *
+ * Both are tried. In practice the configurator resolves every ref to hex
+ * before export (`resolveCuratedForExport`), so this is the fallback path for
+ * a symbolic payload — but it used to look ONLY in `colors.primitive`, where
+ * no alpha key has ever existed, so every alpha-backed role would have
+ * resolved `undefined` and been skipped as unresolvable.
+ */
+function primitiveRefHex(tokens: DesignTokens, fam: string, tone: string): string | undefined {
+  const solid = tokens.colors.primitive[`${fam}-${tone}`]
+  if (solid) return solid
+  const alpha = tokens.colors.primitiveAlpha
+  if (!alpha) return undefined
+  return alpha[`${fam}-${tone}`] ?? (fam.endsWith('-a') ? alpha[`${fam.slice(0, -2)}-${tone}`] : undefined)
+}
+
 function archValueRgba(raw: string, lookup: (family: string, tone: string) => string | undefined): RGBA | undefined {
   const val = (raw ?? '').trim()
   if (!val) return undefined
@@ -1054,6 +1160,19 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     }
     count++
     if (scopes) { try { created.scopes = scopes } catch { /* plan may reject a scope */ } }
+    // Primitives exist to be consumed THROUGH Color Semantics, not picked
+    // directly — a designer applying "Accent 7" instead of "Content/accent"
+    // is exactly the drift the semantic layer exists to prevent. New primitive
+    // variables are hidden from publishing by default, so a file consuming
+    // this as a library only surfaces the semantic layer in its variable
+    // picker; Color Semantics itself is never touched here and stays fully
+    // visible. This runs ONLY on first creation — a re-import/sync must never
+    // re-hide a ramp the user has since exposed manually via Figma's own
+    // "show hidden variables" toggle, or a manual override would get silently
+    // reverted on the next sync.
+    if (collection.name === COLLECTIONS.primitives) {
+      try { created.hiddenFromPublishing = true } catch { /* plan may reject this */ }
+    }
     cache.set(safe, created)
     allVars.push(created)
     return created
@@ -1226,6 +1345,22 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     setDefault(primCol, upsertVarIn(primCol, primCache, 'Background', 'COLOR'), { ...hexToRgb(tokens.colors.background), a: 1 })
   }
 
+  // One-time forced sweep for files imported before primitives defaulted to
+  // hidden — see FILE_PRIMITIVES_HIDDEN_KEY. `primCache` holds every variable
+  // in "Color Primitives" at this point, old and new alike, so this is the one
+  // place that can reach variables the create-time default in upsertVarIn
+  // never touched.
+  if (figma.root.getPluginData(FILE_PRIMITIVES_HIDDEN_KEY) !== '1') {
+    let hidden = 0
+    for (const v of primCache.values()) {
+      if (!v.hiddenFromPublishing) {
+        try { v.hiddenFromPublishing = true; hidden++ } catch { /* plan may reject this */ }
+      }
+    }
+    try { figma.root.setPluginData(FILE_PRIMITIVES_HIDDEN_KEY, '1') } catch { /* best-effort */ }
+    if (hidden > 0) log(`✓ Hid ${hidden} primitive${hidden > 1 ? 's' : ''} from publishing — consume "${COLLECTIONS.semantics}" instead; toggle a variable's eye icon in Figma to expose it again`)
+  }
+
   // Hex → primitive variable, so semantic tokens can alias (link to) the
   // primitive instead of duplicating the raw color. Keyed by lowercase hex;
   // first family wins when two primitives share a hex.
@@ -1347,7 +1482,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     const palettes = arch.palettes as Record<string, Record<string, string>> | undefined
     const lookup = arch.kind === 'tonal'
       ? (fam: string, tone: string) => palettes?.[fam]?.[tone]
-      : (fam: string, tone: string) => tokens.colors.primitive[`${fam}-${tone}`]
+      : (fam: string, tone: string) => primitiveRefHex(tokens, fam, tone)
 
     for (const group of norm.groups) {
       for (const tok of group.tokens) {
@@ -2019,14 +2154,20 @@ function docChrome(
   fontFor: (style: DocFontStyle) => FontName,
   typo?: Map<string, Variable>,
   sizes?: Record<string, string>,
+  chrome?: DocChromeVars,
+  modePin?: { collection: VariableCollection; modeId: string },
 ) {
-  const docSolid = (hex: string, opacity = 1): SolidPaint => ({ type: 'SOLID', color: hexToRgb(hex), opacity })
-  function docText(chars: string, size: number, style: DocFontStyle, hex: string, opacity = 1): TextNode {
+  const docSolid = (hex: string, opacity = 1, v?: Variable): SolidPaint => {
+    let paint: SolidPaint = { type: 'SOLID', color: hexToRgb(hex), opacity }
+    if (v?.resolvedType === 'COLOR') paint = figma.variables.setBoundVariableForPaint(paint, 'color', v)
+    return paint
+  }
+  function docText(chars: string, size: number, style: DocFontStyle, hex: string, opacity = 1, v?: Variable): TextNode {
     const t = figma.createText()
     t.fontName = fontFor(style)
     t.characters = chars
     t.fontSize = size
-    t.fills = [docSolid(hex, opacity)]
+    t.fills = [docSolid(hex, opacity, v)]
     if (typo && typo.size > 0) {
       bindAllTextFields(t, typo, {
         sizeKey: nearestTypeSizeKey(sizes, size),
@@ -2060,17 +2201,19 @@ function docChrome(
     const chipF = docFrame('chip', 'HORIZONTAL', 0)
     chipF.paddingLeft = 8; chipF.paddingRight = 8
     chipF.paddingTop = 3; chipF.paddingBottom = 3
-    chipF.strokes = [docSolid(DOC.text, 0.8)]
+    // A stroke, not text — bind it to the border role that actually means
+    // "strong outline" rather than reusing the text ink at reduced opacity.
+    chipF.strokes = [docSolid(DOC.text, 0.8, chrome?.borderStrong)]
     chipF.strokeWeight = 1
     chipF.cornerRadius = 4
-    const t = docText(label, 9, 'Medium', DOC.text)
+    const t = docText(label, 9, 'Medium', DOC.text, 1, chrome?.text)
     t.letterSpacing = { value: 1, unit: 'PIXELS' }
     chipF.appendChild(t)
     r.appendChild(chipF)
     const line = figma.createFrame()
     line.name = 'line'
     line.resize(10, 1)
-    line.fills = [docSolid(DOC.border)]
+    line.fills = [docSolid(DOC.border, 1, chrome?.border)]
     r.appendChild(line)
     line.layoutSizingHorizontal = 'FILL'
     line.layoutSizingVertical = 'FIXED'
@@ -2078,8 +2221,8 @@ function docChrome(
   }
   function docBullet(parent: FrameNode, title: string, desc: string) {
     const b = docFrame(`spec-${title.toLowerCase().replace(/\s+/g, '-')}`, 'VERTICAL', 4)
-    b.appendChild(docText(title, 12, 'Medium', DOC.text))
-    b.appendChild(wrapText(docText(desc, 11, 'Regular', DOC.muted), PANEL_INNER))
+    b.appendChild(docText(title, 12, 'Medium', DOC.text, 1, chrome?.text))
+    b.appendChild(wrapText(docText(desc, 11, 'Regular', DOC.muted, 1, chrome?.muted), PANEL_INNER))
     parent.appendChild(b)
   }
   // Documentation-style board: rounded surface slab opened by a tinted section
@@ -2088,10 +2231,13 @@ function docChrome(
   // start with "docs/" so re-imports clean and rebuild it.
   function docBoard(name: string, barLabel: string, project: string, contentW: number): FrameNode {
     const b = docFrame(name, 'VERTICAL', 24)
-    b.fills = [docSolid(DOC.board)]
+    b.fills = [docSolid(DOC.board, 1, chrome?.board)]
     b.cornerRadius = 24
     b.paddingTop = 48; b.paddingBottom = 48
     b.paddingLeft = 48; b.paddingRight = 48
+    // Pinned to the system's first theme so the bound fills above always read
+    // as a light editorial board, no matter which mode the file is sitting in.
+    pinToLightMode(b, modePin)
     const bar = docFrame(`§ ${barLabel}`, 'HORIZONTAL', 8)
     bar.fills = [docSolid(DOC.bar)]
     bar.cornerRadius = 12
@@ -2101,8 +2247,8 @@ function docChrome(
     bar.primaryAxisAlignItems = 'SPACE_BETWEEN'
     bar.counterAxisAlignItems = 'CENTER'
     bar.paddingLeft = 24; bar.paddingRight = 24
-    bar.appendChild(docText(barLabel, 12, 'Medium', DOC.barText))
-    bar.appendChild(docText(`⬡ ${project}`, 12, 'Semi Bold', DOC.barText))
+    bar.appendChild(docText(barLabel, 12, 'Medium', DOC.barText, 1, chrome?.text))
+    bar.appendChild(docText(`⬡ ${project}`, 12, 'Semi Bold', DOC.barText, 1, chrome?.text))
     b.appendChild(bar)
     return b
   }
@@ -5286,7 +5432,9 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   // slab + tinted section bar) — see the placement code in buildEntry. Fixed
   // light chrome; the specimens inside it are what re-theme.
   const sampleTypo = await typoVarMap()
-  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes)
+  const sampleChrome = docChromeVarsFrom(semLookup)
+  const sampleModePin = docModePin(tokens, allCols)
+  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes, sampleChrome, sampleModePin)
 
   const DOC_INTRO: Record<string, string> = {
     Button: 'The core action component of the system. It covers primary, destructive and success intents across four visual styles and the full interaction lifecycle, so a generic button never has to be rebuilt.',
@@ -5329,8 +5477,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
 
   function buildDocPanel(entry: CatalogEntry, spec: AtomSpec, category: string, propNames: string[], toggleNames: string[] = []): FrameNode {
     const panel = docFrame(`docs/${entry.set}-panel`, 'VERTICAL', 20)
-    panel.fills = [docSolid(DOC.card)]
-    panel.strokes = [docSolid(DOC.border)]
+    panel.fills = [docSolid(DOC.card, 1, sampleChrome.board)]
+    panel.strokes = [docSolid(DOC.border, 1, sampleChrome.border)]
     panel.strokeWeight = 1
     panel.cornerRadius = 16
     panel.paddingTop = PANEL_PAD; panel.paddingBottom = PANEL_PAD
@@ -5344,12 +5492,12 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     crumb.resize(PANEL_INNER, 18)
     crumb.primaryAxisAlignItems = 'SPACE_BETWEEN'
     crumb.counterAxisAlignItems = 'CENTER'
-    crumb.appendChild(docText(`Components  /  ${category}  /  ${entry.page}`, 9, 'Regular', DOC.muted))
-    crumb.appendChild(docText('v1.0 – LAUNCH', 8, 'Medium', DOC.muted, 0.9))
+    crumb.appendChild(docText(`Components  /  ${category}  /  ${entry.page}`, 9, 'Regular', DOC.muted, 1, sampleChrome.secondary))
+    crumb.appendChild(docText('v1.0 – LAUNCH', 8, 'Medium', DOC.muted, 0.9, sampleChrome.secondary))
     panel.appendChild(crumb)
 
-    panel.appendChild(wrapText(docText(entry.page, 26, 'Semi Bold', DOC.text), PANEL_INNER))
-    const intro = wrapText(docText(docIntro(entry), 12, 'Regular', DOC.muted), PANEL_INNER)
+    panel.appendChild(wrapText(docText(entry.page, 26, 'Semi Bold', DOC.text, 1, sampleChrome.text), PANEL_INNER))
+    const intro = wrapText(docText(docIntro(entry), 12, 'Regular', DOC.muted, 1, sampleChrome.muted), PANEL_INNER)
     intro.lineHeight = { value: 150, unit: 'PERCENT' }
     panel.appendChild(intro)
 
@@ -5394,9 +5542,9 @@ async function importSample(tokens: DesignTokens): Promise<number> {
         chipF.paddingLeft = 8; chipF.paddingRight = 8
         chipF.paddingTop = 4; chipF.paddingBottom = 4
         chipF.cornerRadius = 999
-        chipF.strokes = [docSolid(accent, 0.45)]
+        chipF.strokes = [docSolid(accent, 0.45, sampleChrome.accentBorder)]
         chipF.strokeWeight = 1
-        chipF.appendChild(docText(f, 9, 'Medium', accent))
+        chipF.appendChild(docText(f, 9, 'Medium', accent, 1, sampleChrome.accentText))
         rw.appendChild(chipF)
       }
       panel.appendChild(rw)
@@ -5404,18 +5552,190 @@ async function importSample(tokens: DesignTokens): Promise<number> {
 
     // Insert hint card
     const hint = docFrame('insert-hint', 'VERTICAL', 6)
-    hint.fills = [docSolid(DOC.faint)]
-    hint.strokes = [docSolid(DOC.border)]
+    hint.fills = [docSolid(DOC.faint, 1, sampleChrome.card)]
+    hint.strokes = [docSolid(DOC.border, 1, sampleChrome.border)]
     hint.strokeWeight = 1
     hint.cornerRadius = 10
     hint.paddingTop = 14; hint.paddingBottom = 14
     hint.paddingLeft = 16; hint.paddingRight = 16
     hint.counterAxisSizingMode = 'FIXED'
     hint.resize(PANEL_INNER, 60)
-    hint.appendChild(wrapText(docText('Insert components easily to your canvas', 12, 'Medium', DOC.text), PANEL_INNER - 32))
-    hint.appendChild(wrapText(docText(`hold ⇧ Shift + I, search “${entry.set}” and press insert — or drag it from Assets to the canvas`, 10.5, 'Regular', DOC.muted), PANEL_INNER - 32))
+    hint.appendChild(wrapText(docText('Insert components easily to your canvas', 12, 'Medium', DOC.text, 1, sampleChrome.text), PANEL_INNER - 32))
+    hint.appendChild(wrapText(docText(`hold ⇧ Shift + I, search “${entry.set}” and press insert — or drag it from Assets to the canvas`, 10.5, 'Regular', DOC.muted, 1, sampleChrome.muted), PANEL_INNER - 32))
     panel.appendChild(hint)
     return panel
+  }
+
+  // ── Labeled variant matrix — reproduces the reference file's "❖ <Component>"
+  // spec sheet: a permanent, always-visible grid (column headers, row labels,
+  // bracket-grouped outer axis, dashed cell borders) instead of relying on
+  // Figma's own variant-grouping overlay, which only shows on hover/selection.
+  // Sits beside the doc panel, same board, same grammar the reference used.
+  const MATRIX_INK = '#9747FF' // Figma's own "component" purple — this is
+  // annotation chrome (like DOC.*), not a design token, so it stays fixed.
+  interface AxisInfo { key: string; values: string[] }
+  // Axes in FIRST-SEEN key order (matches each spec's own `props` literal
+  // order) — the same order buildDocPanel's own SPECS bullet already reads,
+  // so "which axis reads as columns" can't disagree between the panel copy
+  // and the matrix itself.
+  function computeDisplayAxes(variants: { props: Record<string, string> }[]): AxisInfo[] {
+    const order: string[] = []
+    const seen = new Map<string, string[]>()
+    for (const v of variants) {
+      for (const [k, val] of Object.entries(v.props)) {
+        if (!seen.has(k)) { seen.set(k, []); order.push(k) }
+        const arr = seen.get(k)!
+        if (!arr.includes(val)) arr.push(val)
+      }
+    }
+    return order.map((k) => ({ key: k, values: seen.get(k)! }))
+  }
+
+  function buildVariantMatrix(entry: CatalogEntry, spec: AtomSpec, nodes: ComponentNode[], set: ComponentSetNode): FrameNode {
+    const axes = computeDisplayAxes(spec.variants)
+    // Last axis reads as COLUMNS — in every SPECS definition, State (when
+    // present) is the last key written in the variant's `props` literal, and
+    // interaction state is the one axis that genuinely reads left-to-right as
+    // a progression (Default → Hover → Disabled). Everything else stacks as
+    // rows, outermost axis first (bracket-grouped) if there's more than one.
+    const colAxis: AxisInfo | undefined = axes.length > 0 ? axes[axes.length - 1] : undefined
+    const rowAxes = axes.slice(0, Math.max(0, axes.length - 1))
+    const colValues = colAxis ? colAxis.values : ['']
+
+    interface RowCombo { group?: string; sub: string; values: Record<string, string> }
+    const rowCombos: RowCombo[] = []
+    if (rowAxes.length === 0) {
+      rowCombos.push({ sub: '', values: {} })
+    } else if (rowAxes.length === 1) {
+      for (const v of rowAxes[0].values) rowCombos.push({ sub: v, values: { [rowAxes[0].key]: v } })
+    } else {
+      const outer = rowAxes[0]
+      const inner = rowAxes.slice(1)
+      for (const ov of outer.values) {
+        let combos: Record<string, string>[] = [{}]
+        for (const ax of inner) {
+          const next: Record<string, string>[] = []
+          for (const c of combos) for (const val of ax.values) next.push({ ...c, [ax.key]: val })
+          combos = next
+        }
+        for (const c of combos) {
+          rowCombos.push({ group: ov, sub: inner.map((ax) => c[ax.key]).join(' · '), values: { [outer.key]: ov, ...c } })
+        }
+      }
+    }
+
+    function findVariant(rowValues: Record<string, string>, colVal: string): ComponentNode | undefined {
+      const want = colAxis ? { ...rowValues, [colAxis.key]: colVal } : rowValues
+      const idx = spec.variants.findIndex((vd) => Object.entries(want).every(([k, v]) => vd.props[k] === v))
+      return idx >= 0 ? nodes[idx] : undefined
+    }
+
+    const cellW = Math.max(...nodes.map((n) => n.width)) + 50
+    const cellH = Math.max(...nodes.map((n) => n.height)) + 40
+    const hasGroups = rowAxes.length >= 2
+    const GROUP_W = hasGroups ? 56 : 0
+    const ROWLBL_W = rowAxes.length > 0 ? 76 : 0
+    const HEADER_H = colAxis ? 32 : 0
+    const gridX = GROUP_W + ROWLBL_W
+    const gridW = gridX + colValues.length * cellW
+    const gridH = HEADER_H + rowCombos.length * cellH
+
+    const wrapper = figma.createFrame()
+    wrapper.name = `❖ ${entry.page}`
+    wrapper.layoutMode = 'NONE'
+    wrapper.fills = []
+    wrapper.resize(gridW, gridH)
+
+    // The real ComponentSet stays parented here (Figma still needs a master
+    // it can insert from Assets) but hidden — instances below are what's
+    // actually shown, laid out on the SEMANTIC grid rather than whatever
+    // physical wrap `spec.cols` used to build the set itself.
+    wrapper.appendChild(set)
+    set.x = 0; set.y = 0
+    set.visible = false
+
+    // Column headers
+    if (colAxis) {
+      colValues.forEach((cv, j) => {
+        const cell = docFrame(`col-${cv}`, 'HORIZONTAL', 0)
+        cell.primaryAxisAlignItems = 'CENTER'
+        cell.counterAxisAlignItems = 'CENTER'
+        cell.primaryAxisSizingMode = 'FIXED'
+        cell.counterAxisSizingMode = 'FIXED'
+        cell.resize(cellW, HEADER_H)
+        cell.appendChild(docText(cv, 12, 'Medium', MATRIX_INK))
+        wrapper.appendChild(cell)
+        cell.x = gridX + j * cellW
+        cell.y = 0
+      })
+    }
+
+    // Rows: sub-label + cells (dashed border, instance centered)
+    rowCombos.forEach((rc, i) => {
+      const y = HEADER_H + i * cellH
+      if (rc.sub) {
+        const lbl = docFrame(`row-${rc.sub}`, 'HORIZONTAL', 0)
+        lbl.primaryAxisAlignItems = 'CENTER'
+        lbl.counterAxisAlignItems = 'CENTER'
+        lbl.primaryAxisSizingMode = 'FIXED'
+        lbl.counterAxisSizingMode = 'FIXED'
+        lbl.resize(ROWLBL_W, cellH)
+        lbl.appendChild(docText(rc.sub, 11, 'Medium', MATRIX_INK))
+        wrapper.appendChild(lbl)
+        lbl.x = GROUP_W
+        lbl.y = y
+      }
+      colValues.forEach((cv, j) => {
+        const cellFrame = figma.createFrame()
+        cellFrame.name = `cell-${rc.sub || 'x'}-${cv || 'x'}`
+        cellFrame.layoutMode = 'NONE'
+        cellFrame.fills = []
+        cellFrame.strokes = [docSolid(MATRIX_INK, 0.4)]
+        cellFrame.strokeWeight = 1
+        try { (cellFrame as unknown as { dashPattern: number[] }).dashPattern = [3, 3] } catch {}
+        cellFrame.resize(cellW, cellH)
+        wrapper.appendChild(cellFrame)
+        cellFrame.x = gridX + j * cellW
+        cellFrame.y = y
+
+        const variant = findVariant(rc.values, cv)
+        if (variant) {
+          const inst = variant.createInstance()
+          wrapper.appendChild(inst)
+          inst.x = cellFrame.x + (cellW - inst.width) / 2
+          inst.y = cellFrame.y + (cellH - inst.height) / 2
+        }
+      })
+    })
+
+    // Bracket-grouped outer axis label — a simple spine (not a true bracket
+    // glyph; the label beside it already carries the meaning) spanning every
+    // contiguous run of rows that share the same group value.
+    if (hasGroups) {
+      let runStart = 0
+      for (let i = 1; i <= rowCombos.length; i++) {
+        const boundary = i === rowCombos.length || rowCombos[i].group !== rowCombos[runStart].group
+        if (!boundary) continue
+        const runEnd = i - 1
+        const yTop = HEADER_H + runStart * cellH
+        const yBot = HEADER_H + (runEnd + 1) * cellH
+        const spine = figma.createFrame()
+        spine.name = 'group-spine'
+        spine.layoutMode = 'NONE'
+        spine.fills = [docSolid(MATRIX_INK, 0.6)]
+        spine.resize(1.5, Math.max(1, yBot - yTop - 20))
+        wrapper.appendChild(spine)
+        spine.x = GROUP_W - 14
+        spine.y = yTop + 10
+        const label = docText(rowCombos[runStart].group ?? '', 11, 'Medium', MATRIX_INK)
+        wrapper.appendChild(label)
+        label.x = 0
+        label.y = yTop + (yBot - yTop) / 2 - label.height / 2
+        runStart = i
+      }
+    }
+
+    return wrapper
   }
 
   // NOTE: the free-floating `docs/<set>-header` bar that used to sit above each
@@ -5457,6 +5777,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     const isVariantSet = spec.variants.length > 1
     const cursorY = cursorByPage.get(pg.id) ?? 120
     let placedNode: SceneNode
+    let variantNodes: ComponentNode[] | undefined
 
     if (isVariantSet) {
       const existingSet = existingSets.get(entry.set)
@@ -5530,6 +5851,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       // Set-level TEXT / BOOLEAN properties (variant children can't own them).
       applyPendingProps(set, pending)
       placedNode = set
+      variantNodes = nodes
     } else {
       // Single-variant component
       let comp = existingSingles.get(entry.set)
@@ -5565,34 +5887,411 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     // set's own name label ABOVE its bounds, so that label collided with the
     // header bar sitting right on top of it.
     //
-    // Now every element gets the same treatment the "⬡ Documentation" chapters
-    // get: a rounded slab opened by a tinted section bar, holding that
-    // element's handoff panel and its component set. One board per element,
-    // laid side by side across the charcoal page — same grammar as Documentation.
+    // The board is now HORIZONTAL, not vertical: a left column (section bar +
+    // doc panel, stacked) beside the real content — matching the reference
+    // file's own "01 · Button" layout (panel left, labeled spec grid right)
+    // rather than the panel sitting on top of the set. docBoard() (used by
+    // Documentation/Icons) still stacks vertically; this one needs its own
+    // composition because the bar here is scoped to the panel's column width,
+    // not the whole board.
     const propNames = [...new Set(pending.filter((pp) => typeof pp.def === 'string').map((pp) => pp.prop))]
     const toggleNames = [...new Set(pending.filter((pp) => typeof pp.def === 'boolean').map((pp) => pp.prop))]
     const panel = buildDocPanel(entry, spec, category, propNames, toggleNames)
 
-    // The bar spans the widest thing the board will hold, so it reads as the
-    // board's header rather than a chip floating in its corner. Both operands
-    // are MEASURED — the panel's own padding makes it wider than PANEL_W, and
-    // assuming that constant here left the bar narrower than the panel.
-    const contentW = Math.max(Math.ceil(panel.width), Math.ceil(placedNode.width))
+    const barW = Math.ceil(panel.width)
+    const bar = docFrame(`§ ${category}  /  ${entry.page}`, 'HORIZONTAL', 8)
+    bar.fills = [docSolid(DOC.bar)]
+    bar.cornerRadius = 12
+    bar.primaryAxisSizingMode = 'FIXED'
+    bar.counterAxisSizingMode = 'FIXED'
+    bar.resize(barW, 56)
+    bar.primaryAxisAlignItems = 'SPACE_BETWEEN'
+    bar.counterAxisAlignItems = 'CENTER'
+    bar.paddingLeft = 24; bar.paddingRight = 24
+    bar.appendChild(docText(`${category}  /  ${entry.page}`, 12, 'Medium', DOC.barText, 1, sampleChrome.text))
+    bar.appendChild(docText(`⬡ ${tokens.project || 'Design System'}`, 12, 'Semi Bold', DOC.barText, 1, sampleChrome.text))
+
+    const leftCol = docFrame('leftCol', 'VERTICAL', 24)
+    leftCol.appendChild(bar)
+    leftCol.appendChild(panel)
+
+    // Multi-variant entries get the labeled spec grid instead of the raw
+    // (now hidden) component set; single-variant entries still show
+    // themselves directly — there's nothing to compare/label.
+    const rightContent: SceneNode = (isVariantSet && variantNodes)
+      ? buildVariantMatrix(entry, spec, variantNodes, placedNode as ComponentSetNode)
+      : placedNode
+
     const idx = String(++boardIndex).padStart(2, '0')
-    const board = docBoard(`${idx} · ${entry.page}`, `${category}  /  ${entry.page}`,
-      tokens.project || 'Design System', contentW)
+    const board = docFrame(`${idx} · ${entry.page}`, 'HORIZONTAL', 24)
+    board.fills = [docSolid(DOC.board, 1, sampleChrome.board)]
+    board.cornerRadius = 24
+    board.paddingTop = 48; board.paddingBottom = 48
+    board.paddingLeft = 48; board.paddingRight = 48
+    board.counterAxisAlignItems = 'MIN'
+    pinToLightMode(board, sampleModePin)
     pg.appendChild(board)
-    board.appendChild(panel)
-    // Re-parenting the set into the board is what stops it floating. It must
-    // happen AFTER combineAsVariants (above), which needs a page-level parent
-    // to lay the variants out on a grid first.
-    board.appendChild(placedNode)
-    const boardW = Math.max(Math.ceil(board.width), contentW + 96)
+    board.appendChild(leftCol)
+    // Re-parenting into the board is what stops it floating. Must happen
+    // AFTER combineAsVariants (above), which needs a page-level parent to lay
+    // the variants out on a grid first.
+    board.appendChild(rightContent)
     board.x = boardX
     board.y = 0
-    boardX += boardW + BOARD_GAP
+    boardX += Math.ceil(board.width) + BOARD_GAP
 
     builtAtoms++
+  }
+
+  // ── Artefacts — real, composed screens built from the SAME builders above ──
+  // Every other generated page proves a TOKEN (a ramp, a role, a spacing
+  // scale); this one proves a SCREEN — that Button/Input/Card/InlineAlert/
+  // SwitchGroup/TextLink/Badge/Avatar/Input OTP/Social button genuinely
+  // compose into something a product would ship, with every fill, border and
+  // text still resolving through the exact same `p.*` pair + fillP()/
+  // bindRadius() call the sample sheet above uses. Nothing here is a second
+  // rendering path — a fix to buildButton lands here for free, same as it
+  // lands on the sample sheet.
+  const ARTEFACTS_PAGE = '⬡ Artefacts'
+  const PHONE_W = 360
+
+  // `layoutSizingHorizontal`/`Vertical` only take effect once a node already
+  // has an auto-layout PARENT — call this strictly AFTER `parent.appendChild(n)`,
+  // never before, or it silently no-ops and the node stays hug-sized instead
+  // of stretching (the exact bug this file's own "Type roles" fix above
+  // exists to avoid reintroducing).
+  function fillW(n: SceneNode) { try { (n as unknown as { layoutSizingHorizontal: string }).layoutSizingHorizontal = 'FILL' } catch {} }
+
+  // The phone's own bezel — a plain rounded rectangle, no notch, no simulated
+  // hardware, same restraint the web app's own DeviceFrame documents. Its
+  // corner radius is editorial chrome (a device shape, not a content token);
+  // everything INSIDE it is what has to be token-bound.
+  function phoneFrame(): FrameNode {
+    const f = figma.createFrame()
+    f.name = 'phone'
+    f.layoutMode = 'VERTICAL'
+    f.primaryAxisSizingMode = 'AUTO'
+    f.counterAxisSizingMode = 'FIXED'
+    f.resize(PHONE_W, 100)
+    f.cornerRadius = 32
+    f.clipsContent = true
+    f.fills = [fillP(p.surface0)]
+    f.strokes = [fillP(p.borderDefault)]
+    f.strokeWeight = 1
+    tryBind(f, 'strokeWeight', borderWidthVar())
+    // The phone's own inner inset IS a real token — the system's grid margin,
+    // the same number the web app's artefact caption calls out ("page margin
+    // Npx from Grid"). Not a picked number.
+    const marginPx = pxToFloat(tokens.grid?.margin ?? '16px') || 16
+    pad(f, marginPx, marginPx, marginPx, marginPx)
+    gap(f, 24)
+    return f
+  }
+
+  // Returns the text unparented — textAutoResize is intrinsic to the node and
+  // safe to set here, but the FILL width has to wait for the caller to append
+  // it (see fillW above), so callers do `content.appendChild(heading(...));
+  // fillW(...)` rather than getting it pre-filled.
+  function heading(chars: string): TextNode {
+    const t = txt(chars, { style: 'Semi Bold', size: 22, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary })
+    t.textAutoResize = 'HEIGHT'
+    return t
+  }
+  function subtext(chars: string): TextNode {
+    const t = txt(chars, { size: 14, sizeVar: sizeSm, colorP: p.textSecondary })
+    t.textAutoResize = 'HEIGHT'
+    return t
+  }
+  function caption(chars: string): TextNode {
+    return txt(chars, { size: 11, colorP: p.textTertiary })
+  }
+
+  // A real Button component, built through buildButton exactly like the
+  // sample sheet, with its Label pending-prop overridden — the same override
+  // mechanism applyPendingProps exposes as a Figma text property, just
+  // applied here directly instead of left editable.
+  function screenButton(name: string, color: string, style: string, label: string, full = true): ComponentNode {
+    const btn = figma.createComponent()
+    btn.name = name
+    const pend: PendingProp[] = []
+    buildButton(btn, pend, color, style, 'Default', 'MD', 'None')
+    const lbl = pend.find((pp) => pp.prop === 'Label')
+    if (lbl) (lbl.node as TextNode).characters = label
+    if (full) btn.primaryAxisAlignItems = 'CENTER'
+    return btn
+  }
+  // `type` picks the field's whole anatomy (E-Mail/Password ship their own
+  // correct label + placeholder already); `label`/`value` override the ones a
+  // generic 'Default' type would otherwise render as "Default Input" /
+  // "Placeholder Text.." — found by NAME (buildInputField names them 'label'
+  // and 'value'/'placeholder'), not by child index, so this survives that
+  // builder's internals changing shape.
+  function screenField(name: string, type: string, state = 'Default', overrides?: { label?: string; value?: string }): ComponentNode {
+    const f = figma.createComponent()
+    f.name = name
+    buildInputField(f, [], 'MD', type, state)
+    if (overrides?.label) {
+      const n = f.findOne((c) => c.name === 'label')
+      if (n?.type === 'TEXT') n.characters = overrides.label
+    }
+    if (overrides?.value) {
+      const n = f.findOne((c) => c.name === 'value' || c.name === 'placeholder')
+      if (n?.type === 'TEXT') n.characters = overrides.value
+    }
+    return f
+  }
+  function screenTextLink(name: string, label: string, state = 'Default'): ComponentNode {
+    const l = figma.createComponent()
+    l.name = name
+    const pend: PendingProp[] = []
+    buildTextLink(l, pend, state)
+    const lbl = pend.find((pp) => pp.prop === 'Label')
+    if (lbl) (lbl.node as TextNode).characters = label
+    return l
+  }
+  // A sentence with an inline TextLink — "Don't have an account? Sign up" —
+  // mirrors the web app's own rule that a TextLink used inline supplies its
+  // OWN wrapping sentence rather than getting a second one wrapped around it.
+  function inlineLinkRow(name: string, lead: string, linkLabel: string): FrameNode {
+    const r = row(name, 4)
+    r.appendChild(txt(lead, { size: 13, sizeVar: sizeSm, colorP: p.textTertiary }))
+    r.appendChild(screenTextLink(`${name}-link`, linkLabel))
+    r.primaryAxisAlignItems = 'CENTER'
+    return r
+  }
+  function featureRow(name: string, label: string): FrameNode {
+    const r = row(name, 8)
+    r.counterAxisAlignItems = 'CENTER'
+    r.appendChild(txt('✓', { style: 'Semi Bold', size: 13, weightVar: wSemibold, colorP: p.textSuccess }))
+    r.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textSecondary }))
+    return r
+  }
+  // SPACE_BETWEEN only has room to work with once `r` is FILL-width — that
+  // has to wait until the caller appends it (see fillW above), same reason
+  // heading()/subtext() defer it.
+  function summaryRow(name: string, label: string, value: string, bold = false): FrameNode {
+    const r = row(name, 0)
+    r.primaryAxisAlignItems = 'SPACE_BETWEEN'
+    r.appendChild(txt(label, { style: bold ? 'Semi Bold' : 'Regular', size: 13, sizeVar: sizeSm, weightVar: bold ? wSemibold : wRegular, colorP: bold ? p.textPrimary : p.textSecondary }))
+    r.appendChild(txt(value, { style: 'Semi Bold', size: 13, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary }))
+    return r
+  }
+  // `layoutSizingHorizontal`/`Vertical` only take effect once a node already
+  // has an auto-layout parent, so the divider is APPENDED first and sized
+  // second — building it fully-formed and returning it (like every other
+  // screenX() helper here) would silently no-op the FILL and leave a 10px stub.
+  function appendDivider(container: FrameNode) {
+    const d = figma.createFrame()
+    d.name = 'divider'
+    d.fills = [fillP(p.borderDefault)]
+    d.resize(10, 1)
+    container.appendChild(d)
+    fillW(d)
+    d.layoutSizingVertical = 'FIXED'
+  }
+
+  function buildLoginScreen(): FrameNode {
+    const content = col('content', 20)
+    const title = heading('Welcome back')
+    content.appendChild(title); fillW(title)
+    const sub = subtext('Sign in to keep building your system.')
+    content.appendChild(sub); fillW(sub)
+    const email = screenField('Email', 'E-Mail')
+    content.appendChild(email); fillW(email)
+    const password = screenField('Password', 'Password')
+    content.appendChild(password); fillW(password)
+    const forgot = row('forgot-row', 0)
+    forgot.primaryAxisAlignItems = 'MAX'
+    content.appendChild(forgot); fillW(forgot)
+    forgot.appendChild(screenTextLink('forgot-link', 'Forgot password?'))
+    const cta = screenButton('Button · Sign in', 'Brand', 'Solid', 'Sign in')
+    content.appendChild(cta); fillW(cta)
+    appendDivider(content)
+    const social = col('social', 10)
+    content.appendChild(social); fillW(social)
+    const g = figma.createComponent(); g.name = 'Google SSO'
+    buildSocial(g, [], 'Google', 'Default', 'MD')
+    social.appendChild(g); fillW(g)
+    const a = figma.createComponent(); a.name = 'Apple SSO'
+    buildSocial(a, [], 'Apple', 'Default', 'MD')
+    social.appendChild(a); fillW(a)
+    content.appendChild(inlineLinkRow('signup-row', "Don't have an account?", 'Sign up'))
+
+    const phone = phoneFrame()
+    phone.appendChild(content); fillW(content)
+    return phone
+  }
+
+  function buildVerifyScreen(): FrameNode {
+    const content = col('content', 20)
+    const title = heading('Verify your identity')
+    content.appendChild(title); fillW(title)
+    const sub = subtext('Enter the code we just sent to your email.')
+    content.appendChild(sub); fillW(sub)
+    const otp = figma.createComponent(); otp.name = 'Input OTP'
+    buildOtp(otp, [], 'Filled', 'MD')
+    content.appendChild(otp)
+    const alert = figma.createComponent(); alert.name = 'InlineAlert · Error'
+    const pend: PendingProp[] = []
+    buildInlineAlert(alert, pend, 'Error')
+    const msg = pend.find((pp) => pp.prop === 'Message')
+    if (msg) (msg.node as TextNode).characters = 'That code expired. Request a new one below.'
+    content.appendChild(alert); fillW(alert)
+    const cta = screenButton('Button · Verify', 'Brand', 'Solid', 'Verify')
+    content.appendChild(cta); fillW(cta)
+    content.appendChild(inlineLinkRow('resend-row', "Didn't get a code?", 'Resend'))
+
+    const phone = phoneFrame()
+    phone.appendChild(content); fillW(content)
+    return phone
+  }
+
+  function buildPricingScreen(): FrameNode {
+    const content = col('content', 20)
+    const title = heading('Choose your plan')
+    content.appendChild(title); fillW(title)
+    const sub = subtext('Upgrade any time — cancel whenever.')
+    content.appendChild(sub); fillW(sub)
+
+    const badge = figma.createComponent(); badge.name = 'Badge · Most popular'
+    const bpend: PendingProp[] = []
+    buildBadge(badge, bpend, 'Solid', 'Brand', 'SM', 'None')
+    const blbl = bpend.find((pp) => pp.prop === 'Label')
+    if (blbl) (blbl.node as TextNode).characters = 'Most popular'
+    content.appendChild(badge)
+
+    const card = figma.createComponent(); card.name = 'Card · Pro plan'
+    const cpend: PendingProp[] = []
+    buildCard(card, cpend)
+    const cardTitle = cpend.find((pp) => pp.prop === 'Title')
+    if (cardTitle) (cardTitle.node as TextNode).characters = 'Pro'
+    const desc = cpend.find((pp) => pp.prop === 'Description')
+    if (desc) (desc.node as TextNode).characters = '$29/month, billed annually'
+    content.appendChild(card); fillW(card)
+    const f1 = featureRow('feature-1', 'Unlimited design systems')
+    card.appendChild(f1); fillW(f1)
+    const f2 = featureRow('feature-2', 'Figma + code + AI export')
+    card.appendChild(f2); fillW(f2)
+    const f3 = featureRow('feature-3', 'GitHub sync')
+    card.appendChild(f3); fillW(f3)
+    const planCta = screenButton('Button · Get started', 'Brand', 'Solid', 'Get started')
+    card.appendChild(planCta); fillW(planCta)
+
+    const phone = phoneFrame()
+    phone.appendChild(content); fillW(content)
+    return phone
+  }
+
+  function buildCheckoutScreen(): FrameNode {
+    const content = col('content', 20)
+    const title = heading('Checkout')
+    content.appendChild(title); fillW(title)
+    const alert = figma.createComponent(); alert.name = 'InlineAlert · Success'
+    const pend: PendingProp[] = []
+    buildInlineAlert(alert, pend, 'Success')
+    const msg = pend.find((pp) => pp.prop === 'Message')
+    if (msg) (msg.node as TextNode).characters = 'Payment method verified — you’re all set.'
+    content.appendChild(alert); fillW(alert)
+    const nameField = screenField('Name on card', 'Default', 'Filled', { label: 'Name on card', value: 'Jordan Silva' })
+    content.appendChild(nameField); fillW(nameField)
+    const cardField = screenField('Card number', 'Default', 'Filled', { label: 'Card number', value: '•••• •••• •••• 4242' })
+    content.appendChild(cardField); fillW(cardField)
+    const summary = col('summary', 8)
+    content.appendChild(summary); fillW(summary)
+    const rowSubtotal = summaryRow('subtotal', 'Subtotal', '$29.00')
+    summary.appendChild(rowSubtotal); fillW(rowSubtotal)
+    const rowTax = summaryRow('tax', 'Tax', '$0.00')
+    summary.appendChild(rowTax); fillW(rowTax)
+    appendDivider(summary)
+    const rowTotal = summaryRow('total', 'Total', '$29.00', true)
+    summary.appendChild(rowTotal); fillW(rowTotal)
+    const cta = screenButton('Button · Pay now', 'Brand', 'Solid', 'Pay now')
+    content.appendChild(cta); fillW(cta)
+
+    const phone = phoneFrame()
+    phone.appendChild(content); fillW(content)
+    return phone
+  }
+
+  function buildProfileScreen(): FrameNode {
+    const content = col('content', 24)
+    const title = heading('Profile')
+    content.appendChild(title); fillW(title)
+
+    const avatar = figma.createComponent(); avatar.name = 'Avatar'
+    const apend: PendingProp[] = []
+    buildAvatar(avatar, apend, 'LG')
+    const initials = apend.find((pp) => pp.prop === 'Initials')
+    if (initials) (initials.node as TextNode).characters = 'JS'
+    const identity = col('identity', 2)
+    identity.appendChild(txt('Jordan Silva', { style: 'Semi Bold', size: 15, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary }))
+    identity.appendChild(txt('jordan@escalatokens.com', { size: 12, sizeVar: sizeXs, colorP: p.textTertiary }))
+    const header = row('profile-header', 12)
+    header.counterAxisAlignItems = 'CENTER'
+    header.appendChild(avatar)
+    header.appendChild(identity)
+    content.appendChild(header)
+
+    appendDivider(content)
+
+    const switchGroup = figma.createComponent(); switchGroup.name = 'SwitchGroup · Notifications'
+    buildSwitchGroup(switchGroup, [])
+    content.appendChild(switchGroup)
+
+    appendDivider(content)
+
+    const danger = screenButton('Button · Delete account', 'Danger', 'Outline', 'Delete account')
+    content.appendChild(danger); fillW(danger)
+
+    const phone = phoneFrame()
+    phone.appendChild(content); fillW(content)
+    return phone
+  }
+
+  async function buildArtefactsPage(): Promise<number> {
+    let page = figma.root.children.find((pg) => pg.name === ARTEFACTS_PAGE) as PageNode | undefined
+    if (!page) {
+      page = figma.createPage()
+      page.name = ARTEFACTS_PAGE
+    } else {
+      await page.loadAsync()
+      for (const child of [...page.children]) child.remove()
+    }
+    try { page.backgrounds = [{ type: 'SOLID', color: hexToRgb(DOC.page) }] } catch {}
+
+    const screens: { label: string; build: () => FrameNode }[] = [
+      { label: 'Login', build: buildLoginScreen },
+      { label: 'Verify code', build: buildVerifyScreen },
+      { label: 'Pricing', build: buildPricingScreen },
+      { label: 'Checkout', build: buildCheckoutScreen },
+      { label: 'Profile', build: buildProfileScreen },
+    ]
+
+    let x = 0
+    let built = 0
+    for (const s of screens) {
+      progress('Artefacts', built, screens.length, s.label)
+      await yieldToUI()
+      const col_ = figma.createFrame()
+      col_.name = `${String(built + 1).padStart(2, '0')} · ${s.label}`
+      col_.layoutMode = 'VERTICAL'
+      col_.primaryAxisSizingMode = 'AUTO'
+      col_.counterAxisSizingMode = 'AUTO'
+      col_.fills = []
+      col_.itemSpacing = 16
+      const cap = caption(`Artefact · ${s.label} · true size · page margin from Grid`)
+      col_.appendChild(cap)
+      const phone = s.build()
+      col_.appendChild(phone)
+      page.appendChild(col_)
+      col_.x = x
+      col_.y = 0
+      x += col_.width + 96
+      built++
+    }
+    progress('Artefacts', screens.length, screens.length)
+    log(`✓ Artefacts (${built} screens) — every control bound to the same color, border and text tokens as Components Overview`)
+    return built
   }
 
   // Everything lands on ONE page. Resolve the specs up front so the progress
@@ -5623,6 +6322,11 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
   figma.root.appendChild(samplePage)
   try { samplePage.backgrounds = [docSolid(DOC.page)] } catch {}
+  // Pin the WHOLE page to the first theme's mode, not just each board — any
+  // node dropped directly on the page (outside a docBoard) still needs the
+  // bound chrome fills to resolve as light, and pinning higher up is strictly
+  // safer than relying on every call site to nest inside a pinned board.
+  pinToLightMode(samplePage, sampleModePin)
   firstBuiltPage = samplePage
 
   for (const { entry, spec } of planned) {
@@ -5657,6 +6361,12 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
 
   log(`✓ Components Overview — ${builtAtoms} elements (${builtVariants} variants), every fill, radius, spacing and text bound to your tokens`)
+
+  // Runs after the sample sheet, on the same phase — a composed screen is
+  // still a components deliverable, and folding it into "Components" ships
+  // it without a second checkbox to teach in the Import panel.
+  await buildArtefactsPage()
+
   return builtVariants
 }
 
@@ -5700,9 +6410,12 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     } catch { /* field not bindable on this node/plan */ }
   }
 
-  // ── Documentation chrome — fixed light editorial palette ──────────────────
-  // Charcoal page, white boards, white cards. Token swatches and specimens stay
-  // bound to variables; the chrome itself never shifts when the mode changes.
+  // ── Documentation chrome — editorial palette, bound to real tokens ────────
+  // Charcoal page, light boards, light cards — the LOOK never changes, but the
+  // fills painting it now bind to the system's own Content/Border/Surface
+  // roles instead of hardcoded hex (see docChromeVarsFrom / docModePin above).
+  // Readability across modes is guaranteed by pinning every board's resolved
+  // mode to the first theme (docModePin below), not by leaving the fills unbound.
   const sem = tokens.colors.semantic
   const surfaceHex = '#FFFFFF'   // board fill on the charcoal page
   const cardHex    = '#FFFFFF'   // section cards
@@ -5715,18 +6428,18 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
   const accentHex  = archHexFor(tokens, 'background-brand-solid', (tokens.colors.themeOrder ?? ['light'])[0])
     || sem['background-brand-solid'] || sem['content-brand'] || sem['action-primary'] || sem['bg-accent-solid'] || sem.primary || '#3B82F6'
 
-  // Chrome colors are intentionally unbound so cards stay readable in every mode.
-  const surfaceVar: Variable | undefined = undefined
-  const cardVar:    Variable | undefined = undefined
-  const textVar:    Variable | undefined = undefined
-  const mutedVar:   Variable | undefined = undefined
-  const borderVar:  Variable | undefined = undefined
-
   const S = COLLECTIONS.semantics
   // Same translation layer the components use — the docs must bind to whatever
   // vocabulary "Color Semantics" is actually holding (see semLookupFor).
   const docSem = semLookupFor(tokens, allVars, allCols)
   const accentVar  = docSem.varFor('background-brand-solid', 'Action/primary/default', 'Action/primary.default', 'action/primary/default', 'action/primary.default', 'action/primary', 'bg/accent-solid', 'primary')
+  const docChromeVars = docChromeVarsFrom(docSem)
+  const docModeVars = docModePin(tokens, allCols)
+  const surfaceVar = docChromeVars.board
+  const cardVar    = docChromeVars.card
+  const textVar    = docChromeVars.text
+  const mutedVar   = docChromeVars.muted
+  const borderVar  = docChromeVars.border
   const familyVar  = findVar(COLLECTIONS.typography, 'family')
   const typoBind = new Map<string, Variable>()
   {
@@ -5795,6 +6508,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     for (const child of [...page.children]) child.remove()
   }
   try { page.backgrounds = [{ type: 'SOLID', color: hexToRgb(DOC.page) }] } catch {}
+  pinToLightMode(page, docModeVars)
 
   // ── Text helper ────────────────────────────────────────────────────────────
   interface TextOpts {
@@ -5850,8 +6564,8 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
   // Section card: title + description + content, white spec-sheet card
   function section(title: string, subtitle: string): { card: FrameNode; body: FrameNode } {
     const card = autoFrame(title, 'VERTICAL', 24)
-    card.fills = [solid(cardHex)]
-    card.strokes = [solid(borderHex)]
+    card.fills = [boundFill(cardVar, cardHex)]
+    card.strokes = [boundFill(borderVar, borderHex)]
     card.strokeWeight = 1
     card.cornerRadius = 16
     card.paddingTop = 36; card.paddingBottom = 44
@@ -5860,8 +6574,8 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     card.resize(CARD_W, 100)
 
     const head = autoFrame(`${title}__head`, 'VERTICAL', 8)
-    head.appendChild(mkText(title, { size: 24, style: 'Semi Bold', colorHex: textHex }))
-    const sub = mkText(subtitle, { size: 12, colorHex: mutedHex })
+    head.appendChild(mkText(title, { size: 24, style: 'Semi Bold', colorVar: textVar, colorHex: textHex }))
+    const sub = mkText(subtitle, { size: 12, colorVar: mutedVar, colorHex: mutedHex })
     sub.resize(INNER_W, sub.height)
     sub.textAutoResize = 'HEIGHT'
     head.appendChild(sub)
@@ -5883,8 +6597,8 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     bar.primaryAxisAlignItems = 'SPACE_BETWEEN'
     bar.counterAxisAlignItems = 'CENTER'
     bar.paddingLeft = 24; bar.paddingRight = 24
-    bar.appendChild(mkText(label, { size: 12, style: 'Medium', colorHex: '#26262E' }))
-    bar.appendChild(mkText(`⬡ ${tokens.project || 'Design System'}`, { size: 12, style: 'Semi Bold', colorHex: '#26262E' }))
+    bar.appendChild(mkText(label, { size: 12, style: 'Medium', colorVar: textVar, colorHex: '#26262E' }))
+    bar.appendChild(mkText(`⬡ ${tokens.project || 'Design System'}`, { size: 12, style: 'Semi Bold', colorVar: textVar, colorHex: '#26262E' }))
     return bar
   }
 
@@ -5911,10 +6625,14 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     await yieldToUI()
     const idx = String(boards.length + 1).padStart(2, '0')
     const b = autoFrame(`${idx} · ${label}`, 'VERTICAL', 24)
-    b.fills = [solid(surfaceHex)]
+    b.fills = [boundFill(surfaceVar, surfaceHex)]
     b.paddingTop = 48; b.paddingBottom = 96
     b.paddingLeft = 48; b.paddingRight = 48
     b.cornerRadius = 24
+    // Pinned to the system's first theme — see docModePin — so the bound
+    // Content/Border/Surface fills above always resolve as the intended
+    // light editorial board, whatever mode the rest of the file is in.
+    pinToLightMode(b, docModeVars)
     docPage.appendChild(b)
     b.x = boardX
     b.y = 0
@@ -5938,8 +6656,8 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     const steps = Math.max(0, ...famTones.values())
 
     const cover = autoFrame('cover', 'VERTICAL', 0)
-    cover.fills = [solid(cardHex)]
-    cover.strokes = [solid(borderHex)]
+    cover.fills = [boundFill(cardVar, cardHex)]
+    cover.strokes = [boundFill(borderVar, borderHex)]
     cover.strokeWeight = 1
     cover.cornerRadius = 16
     cover.clipsContent = true
@@ -6001,11 +6719,11 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     // Column 1 — breadcrumb, title, intro paragraph
     const main = coverCol('cover__intro', 590)
     main.paddingLeft = 40
-    main.appendChild(mkText('Foundations  /  Color System  /  Tokens', { size: 10, colorHex: mutedHex }))
-    main.appendChild(mkText('Color System', { size: 30, style: 'Semi Bold', colorHex: textHex }))
+    main.appendChild(mkText('Foundations  /  Color System  /  Tokens', { size: 10, colorVar: mutedVar, colorHex: mutedHex }))
+    main.appendChild(mkText('Color System', { size: 30, style: 'Semi Bold', colorVar: textVar, colorHex: textHex }))
     const para = mkText(
       `${project}'s color foundation is built on primitive ramps — raw, unopinionated values that feed every semantic token in the system. Primitives never appear in components directly; they exist solely as the source of truth that the semantic layer references.`,
-      { size: 13, colorHex: mutedHex },
+      { size: 13, colorVar: mutedVar, colorHex: mutedHex },
     )
     para.resize(500, para.height)
     para.textAutoResize = 'HEIGHT'
@@ -6014,8 +6732,8 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
 
     // Column 2 — primitive palette facts
     const midCol = coverCol('cover__primitives', 295, '#FAFAFB')
-    midCol.appendChild(mkText('Primitive Colors', { size: 18, style: 'Semi Bold', colorHex: textHex }))
-    const midSub = mkText('The raw ramps — every family, every step.', { size: 11, colorHex: mutedHex })
+    midCol.appendChild(mkText('Primitive Colors', { size: 18, style: 'Semi Bold', colorVar: textVar, colorHex: textHex }))
+    const midSub = mkText('The raw ramps — every family, every step.', { size: 11, colorVar: mutedVar, colorHex: mutedHex })
     midSub.resize(231, midSub.height)
     midSub.textAutoResize = 'HEIGHT'
     midCol.appendChild(midSub)
@@ -6042,7 +6760,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     btn.resize(231, 40)
     btn.primaryAxisAlignItems = 'CENTER'
     btn.counterAxisAlignItems = 'CENTER'
-    btn.appendChild(mkText('Open configurator ↗', { size: 11, style: 'Medium', colorHex: textHex }))
+    btn.appendChild(mkText('Open configurator ↗', { size: 11, style: 'Medium', colorVar: textVar, colorHex: textHex }))
     inkCol.appendChild(btn)
   }
 
@@ -6208,7 +6926,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       const palettes = docArch.palettes as Record<string, Record<string, string>> | undefined
       const lookup = docArch.kind === 'tonal'
         ? (fam: string, tone: string) => palettes?.[fam]?.[tone]
-        : (fam: string, tone: string) => tokens.colors.primitive[`${fam}-${tone}`]
+        : (fam: string, tone: string) => primitiveRefHex(tokens, fam, tone)
       const modeKeys = docNorm.modes.map(([k]) => k)
       const lightKey = modeKeys[0]
       // Second column: the mode literally named 'dark' when the architecture
@@ -6275,7 +6993,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       c.primaryAxisSizingMode = 'FIXED'
       c.resize(width, 14)
       c.paddingLeft = padLeft
-      const t = mkText(label, { size: 9, style: 'Medium', colorHex: mutedHex })
+      const t = mkText(label, { size: 9, style: 'Medium', colorVar: mutedVar, colorHex: mutedHex })
       t.letterSpacing = { value: 0.8, unit: 'PIXELS' }
       c.appendChild(t)
       return c
@@ -6361,7 +7079,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         dot.strokes = [solid('#000000', 0.1)]
         dot.strokeWeight = 1
         cell.appendChild(dot)
-        cell.appendChild(mkText(e.label, { size: 11, style: 'Medium', colorHex: textHex }))
+        cell.appendChild(mkText(e.label, { size: 11, style: 'Medium', colorVar: textVar, colorHex: textHex }))
         names.appendChild(cell)
 
         const lightKey = primKeyByHex.get(normHex(e.light))
@@ -6470,22 +7188,43 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         if (!d) continue
         const px = pxToFloat(tokens.typography.sizes[d.size] ?? '')
         if (!px) continue
+        // A row here spans display-2xl (72px) down to helper (12px) — the
+        // widest size range in the whole doc. BASELINE alignment on a HUG row
+        // with that much size variance left the row's reported height out of
+        // sync with the specimen's actual rendered box, so every row visually
+        // collapsed onto the next (the clipped/overlapping "Type roles" stack).
+        // CENTER is what the "sizes" list right above already uses safely —
+        // matching it here removes the one thing that differed between a
+        // working row and a broken one, and a vertically centered label reads
+        // fine next to a specimen of any size.
         const row = autoFrame(`role-${key}`, 'HORIZONTAL', 24)
-        row.counterAxisAlignItems = 'BASELINE'
-        const label = mkText(`${key}  →  ${d.size} / ${d.weight}`, { size: 10, colorHex: mutedHex })
+        row.counterAxisAlignItems = 'CENTER'
+        const label = mkText(`${key}  →  ${d.size} / ${d.weight}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
         row.appendChild(label)
         label.resize(220, label.height)
-        ;(label as TextNode).textAutoResize = 'HEIGHT'
+        label.textAutoResize = 'HEIGHT'
+        label.layoutSizingHorizontal = 'FIXED'
+        label.layoutSizingVertical = 'HUG'
         const spec = mkText('Almost before we knew it, we had left the ground.', {
           style: weightStyle(d.weight),
+          colorVar: textVar,
           colorHex: textHex,
         })
         spec.fontSize = px
+        // An explicit, deterministic line-height — the same "resize before
+        // trusting the box" reasoning as label above — so a display-size
+        // specimen never carries over a smaller row's auto line-height.
+        spec.lineHeight = { value: 120, unit: 'PERCENT' }
+        spec.textAutoResize = 'WIDTH_AND_HEIGHT'
         bindField(spec, 'fontSize', bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`))
         bindField(spec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`))
         bindField(spec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === 'display' ? 'heading-family' : 'family'))
         row.appendChild(spec)
+        spec.layoutSizingHorizontal = 'HUG'
+        spec.layoutSizingVertical = 'HUG'
         roleBody.appendChild(row)
+        row.layoutSizingHorizontal = 'HUG'
+        row.layoutSizingVertical = 'HUG'
       }
       root.appendChild(roleCard)
       sections++
@@ -6523,7 +7262,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
           const px = pxToFloat(tokens.spacing[step] ?? '')
           const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
           row.counterAxisAlignItems = 'CENTER'
-          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorHex: mutedHex })
+          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
           row.appendChild(label)
           label.resize(200, label.height)
           const bar = figma.createFrame()
@@ -6594,7 +7333,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
             sq.setBoundVariable('bottomRightRadius', rv)
           }
           cell.appendChild(sq)
-          cell.appendChild(mkText(`${role} → ${step}`, { size: 10, colorHex: mutedHex }))
+          cell.appendChild(mkText(`${role} → ${step}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex }))
           roleRow.appendChild(cell)
         }
         body.appendChild(roleRow)
@@ -6637,7 +7376,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
           const px = pxToFloat((strokeMap ?? {})[step] ?? '')
           const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
           row.counterAxisAlignItems = 'CENTER'
-          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorHex: mutedHex })
+          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
           row.appendChild(label)
           label.resize(200, label.height)
           const line = figma.createFrame()
@@ -6753,7 +7492,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
           const px = pxToFloat(tokens.sizes?.[step] ?? '')
           const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
           row.counterAxisAlignItems = 'CENTER'
-          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorHex: mutedHex })
+          const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
           row.appendChild(label)
           label.resize(200, label.height)
           const bar = figma.createFrame()
@@ -6793,12 +7532,12 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         sw.name = `gradient-${slug}`
         sw.resize(248, 140)
         sw.cornerRadius = 12
-        sw.strokes = [solid(borderHex)]
+        sw.strokes = [boundFill(borderVar, borderHex)]
         sw.strokeWeight = 1
         sw.fills = [paint]
         cell.appendChild(sw)
         const tags = (['cover', 'avatar'] as const).filter((s) => assigned[s] === slug)
-        cell.appendChild(mkText(slug + (tags.length ? `  ·  ${tags.join(' + ')}` : ''), { size: 11, style: 'Medium', colorHex: textHex }))
+        cell.appendChild(mkText(slug + (tags.length ? `  ·  ${tags.join(' + ')}` : ''), { size: 11, style: 'Medium', colorVar: textVar, colorHex: textHex }))
         row.appendChild(cell)
       }
       body.appendChild(row)
@@ -7017,8 +7756,13 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   const fontFor = (style: DocFontStyle): FontName =>
     loadedStyles.has(style) ? { family: fontFamily, style } : { family: 'Inter', style }
   const iconsTypo = await typoVarMap()
-  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, iconsTypo, tokens.typography.sizes)
+  const iconsAllVars = await figma.variables.getLocalVariablesAsync()
+  const iconsAllCols = await figma.variables.getLocalVariableCollectionsAsync()
+  const iconsChrome = docChromeVarsFrom(semLookupFor(tokens, iconsAllVars, iconsAllCols))
+  const iconsModePin = docModePin(tokens, iconsAllCols)
+  const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, iconsTypo, tokens.typography.sizes, iconsChrome, iconsModePin)
   try { pg.backgrounds = [docSolid(DOC.page)] } catch {}
+  pinToLightMode(pg, iconsModePin)
 
   const MARGIN = 80
   const TOP = 120
@@ -7058,12 +7802,12 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
       card.cornerRadius = 16
       pg.appendChild(card)
     }
-    card.fills = [docSolid(DOC.card)]
-    card.strokes = [docSolid(DOC.border)]
+    card.fills = [docSolid(DOC.card, 1, iconsChrome.card)]
+    card.strokes = [docSolid(DOC.border, 1, iconsChrome.border)]
     card.strokeWeight = 1
     const oldLabel = card.children.find((n) => n.type === 'TEXT' && n.name === 'label')
     if (oldLabel) oldLabel.remove()
-    const lbl = docText(label.toUpperCase(), 10, 'Medium', DOC.muted)
+    const lbl = docText(label.toUpperCase(), 10, 'Medium', DOC.muted, 1, iconsChrome.muted)
     lbl.name = 'label'
     lbl.letterSpacing = { value: 1, unit: 'PIXELS' }
     card.insertChild(0, lbl)
@@ -7281,8 +8025,8 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   }
 
   const panel = docFrame('docs/icons-panel', 'VERTICAL', 20)
-  panel.fills = [docSolid(DOC.card)]
-  panel.strokes = [docSolid(DOC.border)]
+  panel.fills = [docSolid(DOC.card, 1, iconsChrome.board)]
+  panel.strokes = [docSolid(DOC.border, 1, iconsChrome.border)]
   panel.strokeWeight = 1
   panel.cornerRadius = 16
   panel.paddingTop = PANEL_PAD; panel.paddingBottom = PANEL_PAD
@@ -7296,14 +8040,14 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   crumb.resize(PANEL_INNER, 18)
   crumb.primaryAxisAlignItems = 'SPACE_BETWEEN'
   crumb.counterAxisAlignItems = 'CENTER'
-  crumb.appendChild(docText('Foundations  /  Icons', 9, 'Regular', DOC.muted))
-  crumb.appendChild(docText('v1.0 – LAUNCH', 8, 'Medium', DOC.muted, 0.9))
+  crumb.appendChild(docText('Foundations  /  Icons', 9, 'Regular', DOC.muted, 1, iconsChrome.secondary))
+  crumb.appendChild(docText('v1.0 – LAUNCH', 8, 'Medium', DOC.muted, 0.9, iconsChrome.secondary))
   panel.appendChild(crumb)
 
-  panel.appendChild(wrapText(docText('Icons', 26, 'Semi Bold', DOC.text), PANEL_INNER))
+  panel.appendChild(wrapText(docText('Icons', 26, 'Semi Bold', DOC.text, 1, iconsChrome.text), PANEL_INNER))
   const intro = wrapText(docText(
     `${libName || 'The icon set'} is the icon language of this design system. The core UI set is imported straight from the official collection, normalized to a 24px grid and tinted through the text/primary variable — custom brand glyphs live alongside it.`,
-    12, 'Regular', DOC.muted), PANEL_INNER)
+    12, 'Regular', DOC.muted, 1, iconsChrome.muted), PANEL_INNER)
   intro.lineHeight = { value: 150, unit: 'PERCENT' }
   panel.appendChild(intro)
 
@@ -7339,25 +8083,25 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
       chipF.paddingLeft = 8; chipF.paddingRight = 8
       chipF.paddingTop = 4; chipF.paddingBottom = 4
       chipF.cornerRadius = 999
-      chipF.strokes = [docSolid(accent, 0.45)]
+      chipF.strokes = [docSolid(accent, 0.45, iconsChrome.accentBorder)]
       chipF.strokeWeight = 1
-      chipF.appendChild(docText(f, 9, 'Medium', accent))
+      chipF.appendChild(docText(f, 9, 'Medium', accent, 1, iconsChrome.accentText))
       rw.appendChild(chipF)
     }
     panel.appendChild(rw)
   }
 
   const hint = docFrame('insert-hint', 'VERTICAL', 6)
-  hint.fills = [docSolid(DOC.faint)]
-  hint.strokes = [docSolid(DOC.border)]
+  hint.fills = [docSolid(DOC.faint, 1, iconsChrome.card)]
+  hint.strokes = [docSolid(DOC.border, 1, iconsChrome.border)]
   hint.strokeWeight = 1
   hint.cornerRadius = 10
   hint.paddingTop = 14; hint.paddingBottom = 14
   hint.paddingLeft = 16; hint.paddingRight = 16
   hint.counterAxisSizingMode = 'FIXED'
   hint.resize(PANEL_INNER, 60)
-  hint.appendChild(wrapText(docText('Insert icons easily to your canvas', 12, 'Medium', DOC.text), PANEL_INNER - 32))
-  hint.appendChild(wrapText(docText('hold ⇧ Shift + I, search “icon/” and press insert — or drag any glyph from Assets to the canvas', 10.5, 'Regular', DOC.muted), PANEL_INNER - 32))
+  hint.appendChild(wrapText(docText('Insert icons easily to your canvas', 12, 'Medium', DOC.text, 1, iconsChrome.text), PANEL_INNER - 32))
+  hint.appendChild(wrapText(docText('hold ⇧ Shift + I, search “icon/” and press insert — or drag any glyph from Assets to the canvas', 10.5, 'Regular', DOC.muted, 1, iconsChrome.muted), PANEL_INNER - 32))
   panel.appendChild(hint)
 
   const board = docBoard('docs/board · Icons', 'Foundations  /  Icons',
@@ -7710,7 +8454,7 @@ figma.showUI(__html__, { width: 880, height: 620, themeColors: true })
 // one, so the order holds no matter how the file got rearranged.
 function ensureFoundationPageOrder() {
   let idx = 0
-  for (const name of ['⬡ Cover', '⬡ Documentation', '⬡ Components Overview', '⬡ Icons']) {
+  for (const name of ['⬡ Cover', '⬡ Documentation', '⬡ Components Overview', '⬡ Artefacts', '⬡ Icons']) {
     const foundation = figma.root.children.find((p) => p.name === name)
     if (foundation) figma.root.insertChild(idx++, foundation)
   }
@@ -7950,6 +8694,7 @@ interface FileAssets {
   cover: boolean
   documentation: boolean
   sample: boolean
+  artefacts: boolean
   icons: boolean
   variables: number
   collections: number
@@ -7970,6 +8715,7 @@ async function reportFileAssets(): Promise<FileAssets> {
     cover: names.has('⬡ Cover'),
     documentation: names.has('⬡ Documentation'),
     sample: names.has('⬡ Components Overview'),
+    artefacts: names.has('⬡ Artefacts'),
     icons: names.has('⬡ Icons'),
     variables,
     collections,
