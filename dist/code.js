@@ -1609,7 +1609,7 @@
     return { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard };
   }
   async function importSample(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
     const atoms = (_b = (_a = tokens.atoms) != null ? _a : tokens.components) != null ? _b : [];
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
@@ -1820,27 +1820,52 @@
         blendMode: "NORMAL"
       }];
     }
-    const fontFamily = ((_q = tokens.typography) == null ? void 0 : _q.fontFamily) || "Inter";
-    const loaded = /* @__PURE__ */ new Set();
-    for (const style of ["Regular", "Medium", "Semi Bold", "Bold"]) {
-      try {
-        await figma.loadFontAsync({ family: fontFamily, style });
-        loaded.add(style);
-      } catch (e) {
+    const bodyFamily = ((_q = tokens.typography) == null ? void 0 : _q.fontFamily) || "Inter";
+    const headingFamily = ((_r = tokens.typography) == null ? void 0 : _r.headingFontFamily) || bodyFamily;
+    const STYLE_VARIANTS = {
+      "Regular": ["Regular", "Normal", "Book"],
+      "Medium": ["Medium", "Regular"],
+      "Semi Bold": ["Semi Bold", "SemiBold", "Semibold", "Demi Bold", "DemiBold", "Bold", "Medium"],
+      "Bold": ["Bold", "Semi Bold", "SemiBold", "Black", "Heavy", "Medium"]
+    };
+    const resolvedFont = /* @__PURE__ */ new Map();
+    async function loadLogical(family, logical) {
+      const key = `${family}|${logical}`;
+      if (resolvedFont.has(key)) return;
+      for (const style of STYLE_VARIANTS[logical]) {
         try {
-          await figma.loadFontAsync({ family: "Inter", style });
-        } catch (e2) {
+          await figma.loadFontAsync({ family, style });
+          resolvedFont.set(key, { family, style });
+          return;
+        } catch (e) {
         }
       }
+      for (const style of STYLE_VARIANTS[logical]) {
+        try {
+          await figma.loadFontAsync({ family: "Inter", style });
+          resolvedFont.set(key, { family: "Inter", style });
+          return;
+        } catch (e) {
+        }
+      }
+      resolvedFont.set(key, { family: "Inter", style: "Regular" });
     }
-    const fontFor = (style) => loaded.has(style) ? { family: fontFamily, style } : { family: "Inter", style };
+    for (const family of /* @__PURE__ */ new Set([bodyFamily, headingFamily])) {
+      for (const logical of ["Regular", "Medium", "Semi Bold", "Bold"]) await loadLogical(family, logical);
+    }
+    const fontFor = (style, heading = false) => {
+      var _a2;
+      return (_a2 = resolvedFont.get(`${heading ? headingFamily : bodyFamily}|${style}`)) != null ? _a2 : { family: "Inter", style };
+    };
+    const fontFamily = bodyFamily;
     function txt(chars, o = {}) {
-      var _a2, _b2, _c2, _d2, _e2, _f2, _g2, _h2;
+      var _a2, _b2, _c2, _d2, _e2, _f2, _g2, _h2, _i2, _j2, _k2;
       const t = figma.createText();
-      t.fontName = fontFor((_a2 = o.style) != null ? _a2 : "Regular");
+      const headingRole = !!o.roleKey && ((_c2 = (_b2 = (_a2 = tokens.typography.roles) == null ? void 0 : _a2[o.roleKey]) == null ? void 0 : _b2.desktop) == null ? void 0 : _c2.family) === "display";
+      t.fontName = fontFor((_d2 = o.style) != null ? _d2 : "Regular", headingRole);
       t.characters = chars;
-      t.fontSize = (_b2 = o.size) != null ? _b2 : 14;
-      t.fills = [fillP((_c2 = o.colorP) != null ? _c2 : p.textPrimary, (_d2 = o.opacity) != null ? _d2 : 1)];
+      t.fontSize = (_e2 = o.size) != null ? _e2 : 14;
+      t.fills = [fillP((_f2 = o.colorP) != null ? _f2 : p.textPrimary, (_g2 = o.opacity) != null ? _g2 : 1)];
       if ((familyVar == null ? void 0 : familyVar.resolvedType) === "STRING") tryBind(t, "fontFamily", familyVar);
       if (o.sizeVar) {
         tryBind(t, "fontSize", o.sizeVar);
@@ -1849,14 +1874,14 @@
         const ls = findVar(T, o.sizeVar.name.replace("size/", "letter-spacing/"));
         if (ls) tryBind(t, "letterSpacing", ls);
       }
-      tryBind(t, "fontWeight", (_e2 = o.weightVar) != null ? _e2 : o.style === "Semi Bold" || o.style === "Bold" ? wSemibold : o.style === "Medium" ? wMedium : wRegular);
+      tryBind(t, "fontWeight", (_h2 = o.weightVar) != null ? _h2 : o.style === "Semi Bold" || o.style === "Bold" ? wSemibold : o.style === "Medium" ? wMedium : wRegular);
       if (o.roleKey) {
         const rFamily = findVar(T, `role/${o.roleKey}/family`);
         if ((rFamily == null ? void 0 : rFamily.resolvedType) === "STRING") tryBind(t, "fontFamily", rFamily);
         const rSize = findVar(T, `role/${o.roleKey}/size`);
         if (rSize) {
           tryBind(t, "fontSize", rSize);
-          const step = (_h2 = (_g2 = (_f2 = tokens.typography.roles) == null ? void 0 : _f2[o.roleKey]) == null ? void 0 : _g2.desktop) == null ? void 0 : _h2.size;
+          const step = (_k2 = (_j2 = (_i2 = tokens.typography.roles) == null ? void 0 : _i2[o.roleKey]) == null ? void 0 : _j2.desktop) == null ? void 0 : _k2.size;
           if (step) {
             const lh = findVar(T, `line-height/${step}`);
             if (lh) tryBind(t, "lineHeight", lh);
@@ -5039,7 +5064,7 @@
     let plannedDone = 0;
     const legacySamplePage = pageByName("\u2B21 Sample");
     if (legacySamplePage) legacySamplePage.name = SAMPLE_PAGE;
-    const samplePage = (_r = makePage(SAMPLE_PAGE)) != null ? _r : oldPage != null ? oldPage : figma.currentPage;
+    const samplePage = (_s = makePage(SAMPLE_PAGE)) != null ? _s : oldPage != null ? oldPage : figma.currentPage;
     await harvest(samplePage);
     for (const { entry } of planned) {
       const legacy = pageByName(ITEM_PREFIX + entry.page);

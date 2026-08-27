@@ -2557,15 +2557,42 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
 
   // ── Fonts ──────────────────────────────────────────────────────────────────
-  const fontFamily = tokens.typography?.fontFamily || 'Inter'
-  const loaded = new Set<string>()
-  for (const style of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) {
-    try { await figma.loadFontAsync({ family: fontFamily, style }); loaded.add(style) } catch {
-      try { await figma.loadFontAsync({ family: 'Inter', style }) } catch {}
-    }
+  // Both families, not just the body one — display/heading roles bind
+  // `role/*/family` to `heading-family`, so the concrete fontName has to be the
+  // heading typeface too or Figma rejects the variable bind and the node stays
+  // on whatever it had (Inter).
+  const bodyFamily = tokens.typography?.fontFamily || 'Inter'
+  const headingFamily = tokens.typography?.headingFontFamily || bodyFamily
+  type LogicalStyle = 'Regular' | 'Medium' | 'Semi Bold' | 'Bold'
+  // Figma needs an EXACT {family, style}. "Semi Bold" is Inter's spelling;
+  // Poppins ships "SemiBold", Roboto has no semibold at all. Probe variants so
+  // a non-Inter family degrades to its nearest real weight instead of snapping
+  // the whole node back to Inter.
+  const STYLE_VARIANTS: Record<LogicalStyle, string[]> = {
+    'Regular': ['Regular', 'Normal', 'Book'],
+    'Medium': ['Medium', 'Regular'],
+    'Semi Bold': ['Semi Bold', 'SemiBold', 'Semibold', 'Demi Bold', 'DemiBold', 'Bold', 'Medium'],
+    'Bold': ['Bold', 'Semi Bold', 'SemiBold', 'Black', 'Heavy', 'Medium'],
   }
-  const fontFor = (style: 'Regular' | 'Medium' | 'Semi Bold' | 'Bold'): FontName =>
-    loaded.has(style) ? { family: fontFamily, style } : { family: 'Inter', style }
+  const resolvedFont = new Map<string, FontName>()
+  async function loadLogical(family: string, logical: LogicalStyle): Promise<void> {
+    const key = `${family}|${logical}`
+    if (resolvedFont.has(key)) return
+    for (const style of STYLE_VARIANTS[logical]) {
+      try { await figma.loadFontAsync({ family, style }); resolvedFont.set(key, { family, style }); return } catch { /* try next */ }
+    }
+    for (const style of STYLE_VARIANTS[logical]) {
+      try { await figma.loadFontAsync({ family: 'Inter', style }); resolvedFont.set(key, { family: 'Inter', style }); return } catch { /* try next */ }
+    }
+    resolvedFont.set(key, { family: 'Inter', style: 'Regular' })
+  }
+  for (const family of new Set([bodyFamily, headingFamily])) {
+    for (const logical of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) await loadLogical(family, logical)
+  }
+  const fontFor = (style: LogicalStyle, heading = false): FontName =>
+    resolvedFont.get(`${heading ? headingFamily : bodyFamily}|${style}`) ?? { family: 'Inter', style }
+  // Back-compat alias for call sites that still read `fontFamily`.
+  const fontFamily = bodyFamily
 
   interface TxtOpts {
     style?: 'Regular' | 'Medium' | 'Semi Bold' | 'Bold'
@@ -2584,7 +2611,10 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
   function txt(chars: string, o: TxtOpts = {}): TextNode {
     const t = figma.createText()
-    t.fontName = fontFor(o.style ?? 'Regular')
+    // Display / heading roles bind their family to `heading-family`; the
+    // concrete fontName must be that same typeface or the bind is rejected.
+    const headingRole = !!o.roleKey && tokens.typography.roles?.[o.roleKey]?.desktop?.family === 'display'
+    t.fontName = fontFor(o.style ?? 'Regular', headingRole)
     t.characters = chars
     t.fontSize = o.size ?? 14
     t.fills = [fillP(o.colorP ?? p.textPrimary, o.opacity ?? 1)]
