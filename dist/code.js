@@ -1822,36 +1822,59 @@
     }
     const bodyFamily = ((_q = tokens.typography) == null ? void 0 : _q.fontFamily) || "Inter";
     const headingFamily = ((_r = tokens.typography) == null ? void 0 : _r.headingFontFamily) || bodyFamily;
-    const STYLE_VARIANTS = {
-      "Regular": ["Regular", "Normal", "Book"],
-      "Medium": ["Medium", "Regular"],
-      "Semi Bold": ["Semi Bold", "SemiBold", "Semibold", "Demi Bold", "DemiBold", "Bold", "Medium"],
-      "Bold": ["Bold", "Semi Bold", "SemiBold", "Black", "Heavy", "Medium"]
+    const STYLE_PREF = {
+      "Regular": ["Regular", "Normal", "Book", "Roman"],
+      "Medium": ["Medium", "Regular", "Book"],
+      "Semi Bold": ["Semi Bold", "SemiBold", "Semibold", "Demi Bold", "DemiBold", "Demi", "Bold", "Medium"],
+      "Bold": ["Bold", "Semi Bold", "SemiBold", "Black", "Heavy", "Extra Bold", "ExtraBold", "Medium"]
     };
+    const stylesByFamily = /* @__PURE__ */ new Map();
+    try {
+      for (const f of await figma.listAvailableFontsAsync()) {
+        let s = stylesByFamily.get(f.fontName.family);
+        if (!s) {
+          s = /* @__PURE__ */ new Set();
+          stylesByFamily.set(f.fontName.family, s);
+        }
+        s.add(f.fontName.style);
+      }
+    } catch (e) {
+    }
     const resolvedFont = /* @__PURE__ */ new Map();
+    const fellBack = /* @__PURE__ */ new Set();
     async function loadLogical(family, logical) {
+      var _a2;
       const key = `${family}|${logical}`;
       if (resolvedFont.has(key)) return;
-      for (const style of STYLE_VARIANTS[logical]) {
+      const pick = (fam) => {
+        var _a3;
+        const have = stylesByFamily.get(fam);
+        if (!have) return void 0;
+        for (const cand of STYLE_PREF[logical]) if (have.has(cand)) return cand;
+        return (_a3 = [...have].find((st) => !/italic|oblique/i.test(st))) != null ? _a3 : [...have][0];
+      };
+      const wantStyle = pick(family);
+      if (wantStyle) {
         try {
-          await figma.loadFontAsync({ family, style });
-          resolvedFont.set(key, { family, style });
+          await figma.loadFontAsync({ family, style: wantStyle });
+          resolvedFont.set(key, { family, style: wantStyle });
           return;
         } catch (e) {
         }
       }
-      for (const style of STYLE_VARIANTS[logical]) {
-        try {
-          await figma.loadFontAsync({ family: "Inter", style });
-          resolvedFont.set(key, { family: "Inter", style });
-          return;
-        } catch (e) {
-        }
+      fellBack.add(family);
+      const interStyle = (_a2 = pick("Inter")) != null ? _a2 : "Regular";
+      try {
+        await figma.loadFontAsync({ family: "Inter", style: interStyle });
+      } catch (e) {
       }
-      resolvedFont.set(key, { family: "Inter", style: "Regular" });
+      resolvedFont.set(key, { family: "Inter", style: interStyle });
     }
     for (const family of /* @__PURE__ */ new Set([bodyFamily, headingFamily])) {
       for (const logical of ["Regular", "Medium", "Semi Bold", "Bold"]) await loadLogical(family, logical);
+    }
+    for (const fam of fellBack) {
+      log(`\u26A0 Font "${fam}" isn't available in this workspace \u2014 component text falls back to Inter. Add the font to the file (Figma \u203A Assets \u203A fonts) or via a font plugin, then re-sync.`);
     }
     const fontFor = (style, heading = false) => {
       var _a2;

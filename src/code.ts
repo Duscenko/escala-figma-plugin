@@ -2564,30 +2564,56 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   const bodyFamily = tokens.typography?.fontFamily || 'Inter'
   const headingFamily = tokens.typography?.headingFontFamily || bodyFamily
   type LogicalStyle = 'Regular' | 'Medium' | 'Semi Bold' | 'Bold'
-  // Figma needs an EXACT {family, style}. "Semi Bold" is Inter's spelling;
-  // Poppins ships "SemiBold", Roboto has no semibold at all. Probe variants so
-  // a non-Inter family degrades to its nearest real weight instead of snapping
-  // the whole node back to Inter.
-  const STYLE_VARIANTS: Record<LogicalStyle, string[]> = {
-    'Regular': ['Regular', 'Normal', 'Book'],
-    'Medium': ['Medium', 'Regular'],
-    'Semi Bold': ['Semi Bold', 'SemiBold', 'Semibold', 'Demi Bold', 'DemiBold', 'Bold', 'Medium'],
-    'Bold': ['Bold', 'Semi Bold', 'SemiBold', 'Black', 'Heavy', 'Medium'],
+  // Figma needs an EXACT {family, style} and the family has to actually be
+  // installed. Resolve against the REAL available-font list rather than
+  // guessing: "Semi Bold" is Inter's spelling, Poppins ships "SemiBold",
+  // Roboto has no semibold at all, and a family the workspace doesn't have
+  // must fall back to Inter loudly (logged) instead of silently.
+  const STYLE_PREF: Record<LogicalStyle, string[]> = {
+    'Regular': ['Regular', 'Normal', 'Book', 'Roman'],
+    'Medium': ['Medium', 'Regular', 'Book'],
+    'Semi Bold': ['Semi Bold', 'SemiBold', 'Semibold', 'Demi Bold', 'DemiBold', 'Demi', 'Bold', 'Medium'],
+    'Bold': ['Bold', 'Semi Bold', 'SemiBold', 'Black', 'Heavy', 'Extra Bold', 'ExtraBold', 'Medium'],
   }
+  const stylesByFamily = new Map<string, Set<string>>()
+  try {
+    for (const f of await figma.listAvailableFontsAsync()) {
+      let s = stylesByFamily.get(f.fontName.family)
+      if (!s) { s = new Set(); stylesByFamily.set(f.fontName.family, s) }
+      s.add(f.fontName.style)
+    }
+  } catch { /* fall through — every resolve below then lands on Inter */ }
+
   const resolvedFont = new Map<string, FontName>()
+  const fellBack = new Set<string>()
   async function loadLogical(family: string, logical: LogicalStyle): Promise<void> {
     const key = `${family}|${logical}`
     if (resolvedFont.has(key)) return
-    for (const style of STYLE_VARIANTS[logical]) {
-      try { await figma.loadFontAsync({ family, style }); resolvedFont.set(key, { family, style }); return } catch { /* try next */ }
+    const pick = (fam: string): string | undefined => {
+      const have = stylesByFamily.get(fam)
+      if (!have) return undefined
+      for (const cand of STYLE_PREF[logical]) if (have.has(cand)) return cand
+      // last resort: any style this family ships, preferring a non-italic one
+      return [...have].find((st) => !/italic|oblique/i.test(st)) ?? [...have][0]
     }
-    for (const style of STYLE_VARIANTS[logical]) {
-      try { await figma.loadFontAsync({ family: 'Inter', style }); resolvedFont.set(key, { family: 'Inter', style }); return } catch { /* try next */ }
+    const wantStyle = pick(family)
+    if (wantStyle) {
+      try {
+        await figma.loadFontAsync({ family, style: wantStyle })
+        resolvedFont.set(key, { family, style: wantStyle })
+        return
+      } catch { /* installed per the list but unloadable — fall back */ }
     }
-    resolvedFont.set(key, { family: 'Inter', style: 'Regular' })
+    fellBack.add(family)
+    const interStyle = pick('Inter') ?? 'Regular'
+    try { await figma.loadFontAsync({ family: 'Inter', style: interStyle }) } catch { /* Inter is always present */ }
+    resolvedFont.set(key, { family: 'Inter', style: interStyle })
   }
   for (const family of new Set([bodyFamily, headingFamily])) {
     for (const logical of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) await loadLogical(family, logical)
+  }
+  for (const fam of fellBack) {
+    log(`⚠ Font "${fam}" isn't available in this workspace — component text falls back to Inter. Add the font to the file (Figma › Assets › fonts) or via a font plugin, then re-sync.`)
   }
   const fontFor = (style: LogicalStyle, heading = false): FontName =>
     resolvedFont.get(`${heading ? headingFamily : bodyFamily}|${style}`) ?? { family: 'Inter', style }
