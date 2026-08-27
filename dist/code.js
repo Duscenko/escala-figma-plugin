@@ -42,6 +42,10 @@
     const ch = (n) => Math.round(Math.max(0, Math.min(1, n)) * 255).toString(16).padStart(2, "0");
     return `${ch(c.r)}${ch(c.g)}${ch(c.b)}`;
   }
+  function rgbaToHex8(c) {
+    const ch = (n) => Math.round(Math.max(0, Math.min(1, n)) * 255).toString(16).padStart(2, "0");
+    return `${rgbaToHex(c)}${ch(c.a)}`;
+  }
   function pxToFloat(val) {
     return parseFloat(val.replace("px", "").replace("rem", "")) || 0;
   }
@@ -283,7 +287,11 @@
     warning: 8,
     "warning-dark": 9,
     info: 10,
-    "info-dark": 11
+    "info-dark": 11,
+    // The fixed black/white opacity ladder — sorts right after the state
+    // colors, ahead of any custom family (which defaults to 99).
+    "black-a": 12,
+    "white-a": 13
   };
   function primitiveVarName(key) {
     var _a;
@@ -299,6 +307,13 @@
     return `${group}/${paddedTone}`;
   }
   function primitiveAlphaVarName(key) {
+    const neutralLadder = /^(black|white)-a-\d+$/.exec(key);
+    if (neutralLadder) {
+      const dash = key.lastIndexOf("-");
+      const tone = key.slice(dash + 1);
+      const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone;
+      return `${neutralLadder[1] === "black" ? "Black" : "White"} Alpha/${paddedTone}`;
+    }
     const solid = primitiveVarName(key);
     const slash = solid.lastIndexOf("/");
     if (slash === -1) return `Alpha/${solid}`;
@@ -663,7 +678,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     let count = 0;
     semanticsRebuilt = false;
     foundationsRebuilt = false;
@@ -887,12 +902,19 @@
       const norm2 = normHex(hex);
       if (v && !primByHex.has(norm2)) primByHex.set(norm2, v);
     }
+    const primAlphaByHex = /* @__PURE__ */ new Map();
+    for (const [key, hex] of Object.entries((_b = tokens.colors.primitiveAlpha) != null ? _b : {})) {
+      if (!hex) continue;
+      const v = primCache.get(primitiveAlphaVarName(key));
+      const norm2 = rgbaToHex8(hexToRgba(hex));
+      if (v && !primAlphaByHex.has(norm2)) primAlphaByHex.set(norm2, v);
+    }
     const semCol = findOrCreateCollection(COLLECTIONS.semantics);
     const semCache = cacheFor(semCol);
     const themes = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({
       light: tokens.colors.semantic || {}
     }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const ordered = ((_b = tokens.colors.themeOrder) != null ? _b : []).filter((t) => themes[t]);
+    const ordered = ((_c = tokens.colors.themeOrder) != null ? _c : []).filter((t) => themes[t]);
     const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))];
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const arch = tokens.colors.architecture;
@@ -930,7 +952,7 @@
     let rawCount = 0;
     let unresolvedCount = 0;
     const valueFor = (rgba) => {
-      const prim = rgba.a === 1 ? primByHex.get(normHex(rgbaToHex(rgba))) : void 0;
+      const prim = rgba.a === 1 ? primByHex.get(normHex(rgbaToHex(rgba))) : primAlphaByHex.get(rgbaToHex8(rgba));
       if (prim) {
         aliasedCount++;
         return figma.variables.createVariableAlias(prim);
@@ -951,7 +973,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_c = tok.byMode[modeKey]) != null ? _c : "", lookup);
+            const rgba = archValueRgba((_d = tok.byMode[modeKey]) != null ? _d : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -1012,7 +1034,7 @@
       for (const [mid, value] of entry.values) v.setValueForMode(mid, value);
     }
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_d = ARCH_LABEL[arch.kind]) != null ? _d : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_e = ARCH_LABEL[arch.kind]) != null ? _e : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -1078,7 +1100,7 @@
     const radiusRoleCount = emitRoleAliases(COLLECTIONS.radius, tokens.radiusRoles, (s) => s);
     log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""}`);
     const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_e = tokens.borders) == null ? void 0 : _e.width;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_f = tokens.borders) == null ? void 0 : _f.width;
     if (strokeMap) {
       const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
       emitCollection(COLLECTIONS.border, Object.entries(strokeMap), "FLOAT", pxToFloat, nameOf);
@@ -1099,7 +1121,7 @@
       const bpRoleCount = emitRoleAliases(COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`);
       log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_f = tokens.icons) == null ? void 0 : _f.library) {
+    if ((_g = tokens.icons) == null ? void 0 : _g.library) {
       emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
     }
     if (tokens.copy) {
@@ -3462,13 +3484,13 @@
         seg.layoutSizingVertical = "FIXED";
       }
       c.appendChild(meter);
-      const caption2 = txt(
+      const caption = txt(
         strength === "Weak" ? "Weak \u2014 add more characters" : strength === "Fair" ? "Fair \u2014 add a symbol or number" : "Strong password",
         { size: 12, sizeVar: sizeXs, colorP: strength === "Weak" ? p.textError : strength === "Fair" ? p.textWarning : p.textSuccess }
       );
-      caption2.name = "caption";
-      c.appendChild(caption2);
-      out.push({ node: caption2, prop: "Caption", def: caption2.characters });
+      caption.name = "caption";
+      c.appendChild(caption);
+      out.push({ node: caption, prop: "Caption", def: caption.characters });
     }
     function buildRating(c, out, interactive) {
       c.layoutMode = "HORIZONTAL";
@@ -4984,341 +5006,6 @@
       boardX += Math.ceil(board.width) + BOARD_GAP;
       builtAtoms++;
     }
-    const ARTEFACTS_PAGE = "\u2B21 Artefacts";
-    const PHONE_W = 360;
-    function fillW(n) {
-      try {
-        n.layoutSizingHorizontal = "FILL";
-      } catch (e) {
-      }
-    }
-    function phoneFrame() {
-      var _a2, _b2;
-      const f = figma.createFrame();
-      f.name = "phone";
-      f.layoutMode = "VERTICAL";
-      f.primaryAxisSizingMode = "AUTO";
-      f.counterAxisSizingMode = "FIXED";
-      f.resize(PHONE_W, 100);
-      f.cornerRadius = 32;
-      f.clipsContent = true;
-      f.fills = [fillP(p.surface0)];
-      f.strokes = [fillP(p.borderDefault)];
-      f.strokeWeight = 1;
-      tryBind(f, "strokeWeight", borderWidthVar());
-      const marginPx = pxToFloat((_b2 = (_a2 = tokens.grid) == null ? void 0 : _a2.margin) != null ? _b2 : "16px") || 16;
-      pad(f, marginPx, marginPx, marginPx, marginPx);
-      gap(f, 24);
-      return f;
-    }
-    function heading(chars) {
-      const t = txt(chars, { style: "Semi Bold", size: 22, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary });
-      t.textAutoResize = "HEIGHT";
-      return t;
-    }
-    function subtext(chars) {
-      const t = txt(chars, { size: 14, sizeVar: sizeSm, colorP: p.textSecondary });
-      t.textAutoResize = "HEIGHT";
-      return t;
-    }
-    function caption(chars) {
-      return txt(chars, { size: 11, colorP: p.textTertiary });
-    }
-    function screenButton(name, color, style, label, full = true) {
-      const btn = figma.createComponent();
-      btn.name = name;
-      const pend = [];
-      buildButton(btn, pend, color, style, "Default", "MD", "None");
-      const lbl = pend.find((pp) => pp.prop === "Label");
-      if (lbl) lbl.node.characters = label;
-      if (full) btn.primaryAxisAlignItems = "CENTER";
-      return btn;
-    }
-    function screenField(name, type, state = "Default", overrides) {
-      const f = figma.createComponent();
-      f.name = name;
-      buildInputField(f, [], "MD", type, state);
-      if (overrides == null ? void 0 : overrides.label) {
-        const n = f.findOne((c) => c.name === "label");
-        if ((n == null ? void 0 : n.type) === "TEXT") n.characters = overrides.label;
-      }
-      if (overrides == null ? void 0 : overrides.value) {
-        const n = f.findOne((c) => c.name === "value" || c.name === "placeholder");
-        if ((n == null ? void 0 : n.type) === "TEXT") n.characters = overrides.value;
-      }
-      return f;
-    }
-    function screenTextLink(name, label, state = "Default") {
-      const l = figma.createComponent();
-      l.name = name;
-      const pend = [];
-      buildTextLink(l, pend, state);
-      const lbl = pend.find((pp) => pp.prop === "Label");
-      if (lbl) lbl.node.characters = label;
-      return l;
-    }
-    function inlineLinkRow(name, lead, linkLabel) {
-      const r = row(name, 4);
-      r.appendChild(txt(lead, { size: 13, sizeVar: sizeSm, colorP: p.textTertiary }));
-      r.appendChild(screenTextLink(`${name}-link`, linkLabel));
-      r.primaryAxisAlignItems = "CENTER";
-      return r;
-    }
-    function featureRow(name, label) {
-      const r = row(name, 8);
-      r.counterAxisAlignItems = "CENTER";
-      r.appendChild(txt("\u2713", { style: "Semi Bold", size: 13, weightVar: wSemibold, colorP: p.textSuccess }));
-      r.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textSecondary }));
-      return r;
-    }
-    function summaryRow(name, label, value, bold = false) {
-      const r = row(name, 0);
-      r.primaryAxisAlignItems = "SPACE_BETWEEN";
-      r.appendChild(txt(label, { style: bold ? "Semi Bold" : "Regular", size: 13, sizeVar: sizeSm, weightVar: bold ? wSemibold : wRegular, colorP: bold ? p.textPrimary : p.textSecondary }));
-      r.appendChild(txt(value, { style: "Semi Bold", size: 13, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary }));
-      return r;
-    }
-    function appendDivider(container) {
-      const d = figma.createFrame();
-      d.name = "divider";
-      d.fills = [fillP(p.borderDefault)];
-      d.resize(10, 1);
-      container.appendChild(d);
-      fillW(d);
-      d.layoutSizingVertical = "FIXED";
-    }
-    function buildLoginScreen() {
-      const content = col("content", 20);
-      const title = heading("Welcome back");
-      content.appendChild(title);
-      fillW(title);
-      const sub = subtext("Sign in to keep building your system.");
-      content.appendChild(sub);
-      fillW(sub);
-      const email = screenField("Email", "E-Mail");
-      content.appendChild(email);
-      fillW(email);
-      const password = screenField("Password", "Password");
-      content.appendChild(password);
-      fillW(password);
-      const forgot = row("forgot-row", 0);
-      forgot.primaryAxisAlignItems = "MAX";
-      content.appendChild(forgot);
-      fillW(forgot);
-      forgot.appendChild(screenTextLink("forgot-link", "Forgot password?"));
-      const cta = screenButton("Button \xB7 Sign in", "Brand", "Solid", "Sign in");
-      content.appendChild(cta);
-      fillW(cta);
-      appendDivider(content);
-      const social = col("social", 10);
-      content.appendChild(social);
-      fillW(social);
-      const g = figma.createComponent();
-      g.name = "Google SSO";
-      buildSocial(g, [], "Google", "Default", "MD");
-      social.appendChild(g);
-      fillW(g);
-      const a = figma.createComponent();
-      a.name = "Apple SSO";
-      buildSocial(a, [], "Apple", "Default", "MD");
-      social.appendChild(a);
-      fillW(a);
-      content.appendChild(inlineLinkRow("signup-row", "Don't have an account?", "Sign up"));
-      const phone = phoneFrame();
-      phone.appendChild(content);
-      fillW(content);
-      return phone;
-    }
-    function buildVerifyScreen() {
-      const content = col("content", 20);
-      const title = heading("Verify your identity");
-      content.appendChild(title);
-      fillW(title);
-      const sub = subtext("Enter the code we just sent to your email.");
-      content.appendChild(sub);
-      fillW(sub);
-      const otp = figma.createComponent();
-      otp.name = "Input OTP";
-      buildOtp(otp, [], "Filled", "MD");
-      content.appendChild(otp);
-      const alert = figma.createComponent();
-      alert.name = "InlineAlert \xB7 Error";
-      const pend = [];
-      buildInlineAlert(alert, pend, "Error");
-      const msg = pend.find((pp) => pp.prop === "Message");
-      if (msg) msg.node.characters = "That code expired. Request a new one below.";
-      content.appendChild(alert);
-      fillW(alert);
-      const cta = screenButton("Button \xB7 Verify", "Brand", "Solid", "Verify");
-      content.appendChild(cta);
-      fillW(cta);
-      content.appendChild(inlineLinkRow("resend-row", "Didn't get a code?", "Resend"));
-      const phone = phoneFrame();
-      phone.appendChild(content);
-      fillW(content);
-      return phone;
-    }
-    function buildPricingScreen() {
-      const content = col("content", 20);
-      const title = heading("Choose your plan");
-      content.appendChild(title);
-      fillW(title);
-      const sub = subtext("Upgrade any time \u2014 cancel whenever.");
-      content.appendChild(sub);
-      fillW(sub);
-      const badge = figma.createComponent();
-      badge.name = "Badge \xB7 Most popular";
-      const bpend = [];
-      buildBadge(badge, bpend, "Solid", "Brand", "SM", "None");
-      const blbl = bpend.find((pp) => pp.prop === "Label");
-      if (blbl) blbl.node.characters = "Most popular";
-      content.appendChild(badge);
-      const card = figma.createComponent();
-      card.name = "Card \xB7 Pro plan";
-      const cpend = [];
-      buildCard(card, cpend);
-      const cardTitle = cpend.find((pp) => pp.prop === "Title");
-      if (cardTitle) cardTitle.node.characters = "Pro";
-      const desc = cpend.find((pp) => pp.prop === "Description");
-      if (desc) desc.node.characters = "$29/month, billed annually";
-      content.appendChild(card);
-      fillW(card);
-      const f1 = featureRow("feature-1", "Unlimited design systems");
-      card.appendChild(f1);
-      fillW(f1);
-      const f2 = featureRow("feature-2", "Figma + code + AI export");
-      card.appendChild(f2);
-      fillW(f2);
-      const f3 = featureRow("feature-3", "GitHub sync");
-      card.appendChild(f3);
-      fillW(f3);
-      const planCta = screenButton("Button \xB7 Get started", "Brand", "Solid", "Get started");
-      card.appendChild(planCta);
-      fillW(planCta);
-      const phone = phoneFrame();
-      phone.appendChild(content);
-      fillW(content);
-      return phone;
-    }
-    function buildCheckoutScreen() {
-      const content = col("content", 20);
-      const title = heading("Checkout");
-      content.appendChild(title);
-      fillW(title);
-      const alert = figma.createComponent();
-      alert.name = "InlineAlert \xB7 Success";
-      const pend = [];
-      buildInlineAlert(alert, pend, "Success");
-      const msg = pend.find((pp) => pp.prop === "Message");
-      if (msg) msg.node.characters = "Payment method verified \u2014 you\u2019re all set.";
-      content.appendChild(alert);
-      fillW(alert);
-      const nameField = screenField("Name on card", "Default", "Filled", { label: "Name on card", value: "Jordan Silva" });
-      content.appendChild(nameField);
-      fillW(nameField);
-      const cardField = screenField("Card number", "Default", "Filled", { label: "Card number", value: "\u2022\u2022\u2022\u2022 \u2022\u2022\u2022\u2022 \u2022\u2022\u2022\u2022 4242" });
-      content.appendChild(cardField);
-      fillW(cardField);
-      const summary = col("summary", 8);
-      content.appendChild(summary);
-      fillW(summary);
-      const rowSubtotal = summaryRow("subtotal", "Subtotal", "$29.00");
-      summary.appendChild(rowSubtotal);
-      fillW(rowSubtotal);
-      const rowTax = summaryRow("tax", "Tax", "$0.00");
-      summary.appendChild(rowTax);
-      fillW(rowTax);
-      appendDivider(summary);
-      const rowTotal = summaryRow("total", "Total", "$29.00", true);
-      summary.appendChild(rowTotal);
-      fillW(rowTotal);
-      const cta = screenButton("Button \xB7 Pay now", "Brand", "Solid", "Pay now");
-      content.appendChild(cta);
-      fillW(cta);
-      const phone = phoneFrame();
-      phone.appendChild(content);
-      fillW(content);
-      return phone;
-    }
-    function buildProfileScreen() {
-      const content = col("content", 24);
-      const title = heading("Profile");
-      content.appendChild(title);
-      fillW(title);
-      const avatar = figma.createComponent();
-      avatar.name = "Avatar";
-      const apend = [];
-      buildAvatar(avatar, apend, "LG");
-      const initials = apend.find((pp) => pp.prop === "Initials");
-      if (initials) initials.node.characters = "JS";
-      const identity = col("identity", 2);
-      identity.appendChild(txt("Jordan Silva", { style: "Semi Bold", size: 15, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary }));
-      identity.appendChild(txt("jordan@escalatokens.com", { size: 12, sizeVar: sizeXs, colorP: p.textTertiary }));
-      const header = row("profile-header", 12);
-      header.counterAxisAlignItems = "CENTER";
-      header.appendChild(avatar);
-      header.appendChild(identity);
-      content.appendChild(header);
-      appendDivider(content);
-      const switchGroup = figma.createComponent();
-      switchGroup.name = "SwitchGroup \xB7 Notifications";
-      buildSwitchGroup(switchGroup, []);
-      content.appendChild(switchGroup);
-      appendDivider(content);
-      const danger = screenButton("Button \xB7 Delete account", "Danger", "Outline", "Delete account");
-      content.appendChild(danger);
-      fillW(danger);
-      const phone = phoneFrame();
-      phone.appendChild(content);
-      fillW(content);
-      return phone;
-    }
-    async function buildArtefactsPage() {
-      let page = figma.root.children.find((pg) => pg.name === ARTEFACTS_PAGE);
-      if (!page) {
-        page = figma.createPage();
-        page.name = ARTEFACTS_PAGE;
-      } else {
-        await page.loadAsync();
-        for (const child of [...page.children]) child.remove();
-      }
-      try {
-        page.backgrounds = [{ type: "SOLID", color: hexToRgb(DOC.page) }];
-      } catch (e) {
-      }
-      const screens = [
-        { label: "Login", build: buildLoginScreen },
-        { label: "Verify code", build: buildVerifyScreen },
-        { label: "Pricing", build: buildPricingScreen },
-        { label: "Checkout", build: buildCheckoutScreen },
-        { label: "Profile", build: buildProfileScreen }
-      ];
-      let x = 0;
-      let built = 0;
-      for (const s of screens) {
-        progress("Artefacts", built, screens.length, s.label);
-        await yieldToUI();
-        const col_ = figma.createFrame();
-        col_.name = `${String(built + 1).padStart(2, "0")} \xB7 ${s.label}`;
-        col_.layoutMode = "VERTICAL";
-        col_.primaryAxisSizingMode = "AUTO";
-        col_.counterAxisSizingMode = "AUTO";
-        col_.fills = [];
-        col_.itemSpacing = 16;
-        const cap = caption(`Artefact \xB7 ${s.label} \xB7 true size \xB7 page margin from Grid`);
-        col_.appendChild(cap);
-        const phone = s.build();
-        col_.appendChild(phone);
-        page.appendChild(col_);
-        col_.x = x;
-        col_.y = 0;
-        x += col_.width + 96;
-        built++;
-      }
-      progress("Artefacts", screens.length, screens.length);
-      log(`\u2713 Artefacts (${built} screens) \u2014 every control bound to the same color, border and text tokens as Components Overview`);
-      return built;
-    }
     const planned = SAMPLE.map((e) => ({ entry: e, spec: sampleSpec(e) })).filter((x) => x.spec !== void 0);
     const plannedTotal = planned.length;
     let plannedDone = 0;
@@ -5356,7 +5043,6 @@
       if (placed.length > 0) figma.viewport.scrollAndZoomIntoView(placed);
     }
     log(`\u2713 Components Overview \u2014 ${builtAtoms} elements (${builtVariants} variants), every fill, radius, spacing and text bound to your tokens`);
-    await buildArtefactsPage();
     return builtVariants;
   }
   async function importDocumentation(tokens) {
@@ -5529,7 +5215,8 @@
       const head = autoFrame(`${title}__head`, "VERTICAL", 8);
       head.appendChild(mkText(title, { size: 24, style: "Semi Bold", colorVar: textVar, colorHex: textHex }));
       const sub = mkText(subtitle, { size: 12, colorVar: mutedVar, colorHex: mutedHex });
-      sub.resize(INNER_W, sub.height);
+      sub.textAutoResize = "NONE";
+      sub.resize(INNER_W, 200);
       sub.textAutoResize = "HEIGHT";
       head.appendChild(sub);
       card.appendChild(head);
@@ -7210,7 +6897,7 @@
   figma.showUI(__html__, { width: 880, height: 620, themeColors: true });
   function ensureFoundationPageOrder() {
     let idx = 0;
-    for (const name of ["\u2B21 Cover", "\u2B21 Documentation", "\u2B21 Components Overview", "\u2B21 Artefacts", "\u2B21 Icons"]) {
+    for (const name of ["\u2B21 Cover", "\u2B21 Documentation", "\u2B21 Components Overview", "\u2B21 Icons"]) {
       const foundation = figma.root.children.find((p) => p.name === name);
       if (foundation) figma.root.insertChild(idx++, foundation);
     }
@@ -7390,7 +7077,6 @@
       cover: names.has("\u2B21 Cover"),
       documentation: names.has("\u2B21 Documentation"),
       sample: names.has("\u2B21 Components Overview"),
-      artefacts: names.has("\u2B21 Artefacts"),
       icons: names.has("\u2B21 Icons"),
       variables,
       collections
@@ -7465,6 +7151,14 @@
       if (!tokens || !options) return;
       log(`\u2015 Starting import for "${tokens.project || "Untitled"}" \u2015`);
       checkSchema(tokens);
+      try {
+        const staleArtefacts = figma.root.children.find((p) => p.name === "\u2B21 Artefacts");
+        if (staleArtefacts) {
+          staleArtefacts.remove();
+          log('\u2713 Removed the retired "\u2B21 Artefacts" page');
+        }
+      } catch (e) {
+      }
       const inheritedPrefixes = await scanInheritedStylePrefixes();
       const staleDocs = readDocsRev() < DOCS_REV;
       let docsMustRebuild = inheritedPrefixes.length > 0 || staleDocs;

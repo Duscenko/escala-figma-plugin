@@ -164,6 +164,15 @@ function rgbaToHex(c: RGB): string {
   return `${ch(c.r)}${ch(c.g)}${ch(c.b)}`
 }
 
+// 8-digit `rrggbbaa` — the shape `colors.primitiveAlpha` ships and `hexToRgba`
+// round-trips exactly. Lets a TRANSLUCENT architecture colour be matched
+// against an alpha-twin primitive the same way `rgbaToHex` matches an opaque
+// one against `primByHex`.
+function rgbaToHex8(c: RGBA): string {
+  const ch = (n: number) => Math.round(Math.max(0, Math.min(1, n)) * 255).toString(16).padStart(2, '0')
+  return `${rgbaToHex(c)}${ch(c.a)}`
+}
+
 function pxToFloat(val: string): number {
   return parseFloat(val.replace('px', '').replace('rem', '')) || 0
 }
@@ -483,6 +492,9 @@ const FAMILY_ORDER: Record<string, number> = {
   success: 6, 'success-dark': 7,
   warning: 8, 'warning-dark': 9,
   info: 10, 'info-dark': 11,
+  // The fixed black/white opacity ladder — sorts right after the state
+  // colors, ahead of any custom family (which defaults to 99).
+  'black-a': 12, 'white-a': 13,
 }
 
 // Turn a flat primitive key into a grouped Figma variable name:
@@ -509,7 +521,21 @@ function primitiveVarName(key: string): string {
 // Alpha-twin variable name — same grouping as the solid primitive with an
 // "Alpha" segment before the tone: "accent-1" → "Accent/Alpha/01",
 // "error-500" → "State/Error/Alpha/500".
+//
+// `black-a`/`white-a` (the fixed opacity ladder — CLAUDE.md's "THE ALPHA
+// LAYER") are a DIFFERENT kind of key and must not fall through to the same
+// path: they already carry their own "-a" marker (`black-a-5`), so running
+// them through `primitiveVarName` + an inserted "/Alpha/" segment produced
+// "Black-a/Alpha/05" — the marker duplicated, once in the family name and
+// once in the folder. Named explicitly instead: "Black Alpha/05".
 function primitiveAlphaVarName(key: string): string {
+  const neutralLadder = /^(black|white)-a-\d+$/.exec(key)
+  if (neutralLadder) {
+    const dash = key.lastIndexOf('-')
+    const tone = key.slice(dash + 1)
+    const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone
+    return `${neutralLadder[1] === 'black' ? 'Black' : 'White'} Alpha/${paddedTone}`
+  }
   const solid = primitiveVarName(key)
   const slash = solid.lastIndexOf('/')
   if (slash === -1) return `Alpha/${solid}`
@@ -1372,6 +1398,24 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     if (v && !primByHex.has(norm)) primByHex.set(norm, v)
   }
 
+  // Same index for the ALPHA twins, keyed by the full 8-digit `rrggbbaa`. The
+  // alpha-backed semantic roles (`surface.overlay`, `status.*.surface`,
+  // `action.ghost.*`, `border.ring.*`, `border.rim-highlight`) resolve to a
+  // translucent hex that `colors.primitiveAlpha` also carries verbatim — both
+  // come from the same `generateAlphaScale` over the same page background — so
+  // a byte match here lets those roles ALIAS their primitive instead of
+  // shipping a detached raw fill. Covers light, dark and custom-theme families
+  // alike (every `*-a-*` / `*-dark-a-*` / `black-a-*` / `white-a-*` key is
+  // indexed), so per-theme repointing is handled by the value already being
+  // theme-resolved. First family wins on a shared hex, as with `primByHex`.
+  const primAlphaByHex = new Map<string, Variable>()
+  for (const [key, hex] of Object.entries(tokens.colors.primitiveAlpha ?? {})) {
+    if (!hex) continue
+    const v = primCache.get(primitiveAlphaVarName(key))
+    const norm = rgbaToHex8(hexToRgba(hex))
+    if (v && !primAlphaByHex.has(norm)) primAlphaByHex.set(norm, v)
+  }
+
   // ── Color Semantics — the ONE semantic tier, one mode per theme ───────────
   // Its NAME is always "Color Semantics"; its CONTENT is whatever the platform
   // says the system's contract is — the chosen architecture's own groups and
@@ -1461,11 +1505,17 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   let aliasedCount = 0
   let rawCount = 0
   let unresolvedCount = 0
-  // Alias to the primitive when one carries this exact opaque colour — an
-  // alpha value (Vibrancy) never can. Decided here so the plan holds the final
-  // value and the write loop stays dumb.
+  // Alias to the primitive when one carries this exact colour: an opaque value
+  // against `primByHex`, a translucent one against `primAlphaByHex` (the
+  // alpha-backed roles — `surface.overlay`, `status.*.surface`,
+  // `action.ghost.*`, `border.ring.*`, `border.rim-highlight`). A translucent
+  // value with no alpha twin (a hand-authored rgba) still falls through to
+  // raw. Decided here so the plan holds the final value and the write loop
+  // stays dumb.
   const valueFor = (rgba: RGBA): VariableValue => {
-    const prim = rgba.a === 1 ? primByHex.get(normHex(rgbaToHex(rgba))) : undefined
+    const prim = rgba.a === 1
+      ? primByHex.get(normHex(rgbaToHex(rgba)))
+      : primAlphaByHex.get(rgbaToHex8(rgba))
     if (prim) { aliasedCount++; return figma.variables.createVariableAlias(prim) }
     rawCount++
     return rgba
@@ -5943,357 +5993,6 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     builtAtoms++
   }
 
-  // ── Artefacts — real, composed screens built from the SAME builders above ──
-  // Every other generated page proves a TOKEN (a ramp, a role, a spacing
-  // scale); this one proves a SCREEN — that Button/Input/Card/InlineAlert/
-  // SwitchGroup/TextLink/Badge/Avatar/Input OTP/Social button genuinely
-  // compose into something a product would ship, with every fill, border and
-  // text still resolving through the exact same `p.*` pair + fillP()/
-  // bindRadius() call the sample sheet above uses. Nothing here is a second
-  // rendering path — a fix to buildButton lands here for free, same as it
-  // lands on the sample sheet.
-  const ARTEFACTS_PAGE = '⬡ Artefacts'
-  const PHONE_W = 360
-
-  // `layoutSizingHorizontal`/`Vertical` only take effect once a node already
-  // has an auto-layout PARENT — call this strictly AFTER `parent.appendChild(n)`,
-  // never before, or it silently no-ops and the node stays hug-sized instead
-  // of stretching (the exact bug this file's own "Type roles" fix above
-  // exists to avoid reintroducing).
-  function fillW(n: SceneNode) { try { (n as unknown as { layoutSizingHorizontal: string }).layoutSizingHorizontal = 'FILL' } catch {} }
-
-  // The phone's own bezel — a plain rounded rectangle, no notch, no simulated
-  // hardware, same restraint the web app's own DeviceFrame documents. Its
-  // corner radius is editorial chrome (a device shape, not a content token);
-  // everything INSIDE it is what has to be token-bound.
-  function phoneFrame(): FrameNode {
-    const f = figma.createFrame()
-    f.name = 'phone'
-    f.layoutMode = 'VERTICAL'
-    f.primaryAxisSizingMode = 'AUTO'
-    f.counterAxisSizingMode = 'FIXED'
-    f.resize(PHONE_W, 100)
-    f.cornerRadius = 32
-    f.clipsContent = true
-    f.fills = [fillP(p.surface0)]
-    f.strokes = [fillP(p.borderDefault)]
-    f.strokeWeight = 1
-    tryBind(f, 'strokeWeight', borderWidthVar())
-    // The phone's own inner inset IS a real token — the system's grid margin,
-    // the same number the web app's artefact caption calls out ("page margin
-    // Npx from Grid"). Not a picked number.
-    const marginPx = pxToFloat(tokens.grid?.margin ?? '16px') || 16
-    pad(f, marginPx, marginPx, marginPx, marginPx)
-    gap(f, 24)
-    return f
-  }
-
-  // Returns the text unparented — textAutoResize is intrinsic to the node and
-  // safe to set here, but the FILL width has to wait for the caller to append
-  // it (see fillW above), so callers do `content.appendChild(heading(...));
-  // fillW(...)` rather than getting it pre-filled.
-  function heading(chars: string): TextNode {
-    const t = txt(chars, { style: 'Semi Bold', size: 22, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary })
-    t.textAutoResize = 'HEIGHT'
-    return t
-  }
-  function subtext(chars: string): TextNode {
-    const t = txt(chars, { size: 14, sizeVar: sizeSm, colorP: p.textSecondary })
-    t.textAutoResize = 'HEIGHT'
-    return t
-  }
-  function caption(chars: string): TextNode {
-    return txt(chars, { size: 11, colorP: p.textTertiary })
-  }
-
-  // A real Button component, built through buildButton exactly like the
-  // sample sheet, with its Label pending-prop overridden — the same override
-  // mechanism applyPendingProps exposes as a Figma text property, just
-  // applied here directly instead of left editable.
-  function screenButton(name: string, color: string, style: string, label: string, full = true): ComponentNode {
-    const btn = figma.createComponent()
-    btn.name = name
-    const pend: PendingProp[] = []
-    buildButton(btn, pend, color, style, 'Default', 'MD', 'None')
-    const lbl = pend.find((pp) => pp.prop === 'Label')
-    if (lbl) (lbl.node as TextNode).characters = label
-    if (full) btn.primaryAxisAlignItems = 'CENTER'
-    return btn
-  }
-  // `type` picks the field's whole anatomy (E-Mail/Password ship their own
-  // correct label + placeholder already); `label`/`value` override the ones a
-  // generic 'Default' type would otherwise render as "Default Input" /
-  // "Placeholder Text.." — found by NAME (buildInputField names them 'label'
-  // and 'value'/'placeholder'), not by child index, so this survives that
-  // builder's internals changing shape.
-  function screenField(name: string, type: string, state = 'Default', overrides?: { label?: string; value?: string }): ComponentNode {
-    const f = figma.createComponent()
-    f.name = name
-    buildInputField(f, [], 'MD', type, state)
-    if (overrides?.label) {
-      const n = f.findOne((c) => c.name === 'label')
-      if (n?.type === 'TEXT') n.characters = overrides.label
-    }
-    if (overrides?.value) {
-      const n = f.findOne((c) => c.name === 'value' || c.name === 'placeholder')
-      if (n?.type === 'TEXT') n.characters = overrides.value
-    }
-    return f
-  }
-  function screenTextLink(name: string, label: string, state = 'Default'): ComponentNode {
-    const l = figma.createComponent()
-    l.name = name
-    const pend: PendingProp[] = []
-    buildTextLink(l, pend, state)
-    const lbl = pend.find((pp) => pp.prop === 'Label')
-    if (lbl) (lbl.node as TextNode).characters = label
-    return l
-  }
-  // A sentence with an inline TextLink — "Don't have an account? Sign up" —
-  // mirrors the web app's own rule that a TextLink used inline supplies its
-  // OWN wrapping sentence rather than getting a second one wrapped around it.
-  function inlineLinkRow(name: string, lead: string, linkLabel: string): FrameNode {
-    const r = row(name, 4)
-    r.appendChild(txt(lead, { size: 13, sizeVar: sizeSm, colorP: p.textTertiary }))
-    r.appendChild(screenTextLink(`${name}-link`, linkLabel))
-    r.primaryAxisAlignItems = 'CENTER'
-    return r
-  }
-  function featureRow(name: string, label: string): FrameNode {
-    const r = row(name, 8)
-    r.counterAxisAlignItems = 'CENTER'
-    r.appendChild(txt('✓', { style: 'Semi Bold', size: 13, weightVar: wSemibold, colorP: p.textSuccess }))
-    r.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textSecondary }))
-    return r
-  }
-  // SPACE_BETWEEN only has room to work with once `r` is FILL-width — that
-  // has to wait until the caller appends it (see fillW above), same reason
-  // heading()/subtext() defer it.
-  function summaryRow(name: string, label: string, value: string, bold = false): FrameNode {
-    const r = row(name, 0)
-    r.primaryAxisAlignItems = 'SPACE_BETWEEN'
-    r.appendChild(txt(label, { style: bold ? 'Semi Bold' : 'Regular', size: 13, sizeVar: sizeSm, weightVar: bold ? wSemibold : wRegular, colorP: bold ? p.textPrimary : p.textSecondary }))
-    r.appendChild(txt(value, { style: 'Semi Bold', size: 13, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary }))
-    return r
-  }
-  // `layoutSizingHorizontal`/`Vertical` only take effect once a node already
-  // has an auto-layout parent, so the divider is APPENDED first and sized
-  // second — building it fully-formed and returning it (like every other
-  // screenX() helper here) would silently no-op the FILL and leave a 10px stub.
-  function appendDivider(container: FrameNode) {
-    const d = figma.createFrame()
-    d.name = 'divider'
-    d.fills = [fillP(p.borderDefault)]
-    d.resize(10, 1)
-    container.appendChild(d)
-    fillW(d)
-    d.layoutSizingVertical = 'FIXED'
-  }
-
-  function buildLoginScreen(): FrameNode {
-    const content = col('content', 20)
-    const title = heading('Welcome back')
-    content.appendChild(title); fillW(title)
-    const sub = subtext('Sign in to keep building your system.')
-    content.appendChild(sub); fillW(sub)
-    const email = screenField('Email', 'E-Mail')
-    content.appendChild(email); fillW(email)
-    const password = screenField('Password', 'Password')
-    content.appendChild(password); fillW(password)
-    const forgot = row('forgot-row', 0)
-    forgot.primaryAxisAlignItems = 'MAX'
-    content.appendChild(forgot); fillW(forgot)
-    forgot.appendChild(screenTextLink('forgot-link', 'Forgot password?'))
-    const cta = screenButton('Button · Sign in', 'Brand', 'Solid', 'Sign in')
-    content.appendChild(cta); fillW(cta)
-    appendDivider(content)
-    const social = col('social', 10)
-    content.appendChild(social); fillW(social)
-    const g = figma.createComponent(); g.name = 'Google SSO'
-    buildSocial(g, [], 'Google', 'Default', 'MD')
-    social.appendChild(g); fillW(g)
-    const a = figma.createComponent(); a.name = 'Apple SSO'
-    buildSocial(a, [], 'Apple', 'Default', 'MD')
-    social.appendChild(a); fillW(a)
-    content.appendChild(inlineLinkRow('signup-row', "Don't have an account?", 'Sign up'))
-
-    const phone = phoneFrame()
-    phone.appendChild(content); fillW(content)
-    return phone
-  }
-
-  function buildVerifyScreen(): FrameNode {
-    const content = col('content', 20)
-    const title = heading('Verify your identity')
-    content.appendChild(title); fillW(title)
-    const sub = subtext('Enter the code we just sent to your email.')
-    content.appendChild(sub); fillW(sub)
-    const otp = figma.createComponent(); otp.name = 'Input OTP'
-    buildOtp(otp, [], 'Filled', 'MD')
-    content.appendChild(otp)
-    const alert = figma.createComponent(); alert.name = 'InlineAlert · Error'
-    const pend: PendingProp[] = []
-    buildInlineAlert(alert, pend, 'Error')
-    const msg = pend.find((pp) => pp.prop === 'Message')
-    if (msg) (msg.node as TextNode).characters = 'That code expired. Request a new one below.'
-    content.appendChild(alert); fillW(alert)
-    const cta = screenButton('Button · Verify', 'Brand', 'Solid', 'Verify')
-    content.appendChild(cta); fillW(cta)
-    content.appendChild(inlineLinkRow('resend-row', "Didn't get a code?", 'Resend'))
-
-    const phone = phoneFrame()
-    phone.appendChild(content); fillW(content)
-    return phone
-  }
-
-  function buildPricingScreen(): FrameNode {
-    const content = col('content', 20)
-    const title = heading('Choose your plan')
-    content.appendChild(title); fillW(title)
-    const sub = subtext('Upgrade any time — cancel whenever.')
-    content.appendChild(sub); fillW(sub)
-
-    const badge = figma.createComponent(); badge.name = 'Badge · Most popular'
-    const bpend: PendingProp[] = []
-    buildBadge(badge, bpend, 'Solid', 'Brand', 'SM', 'None')
-    const blbl = bpend.find((pp) => pp.prop === 'Label')
-    if (blbl) (blbl.node as TextNode).characters = 'Most popular'
-    content.appendChild(badge)
-
-    const card = figma.createComponent(); card.name = 'Card · Pro plan'
-    const cpend: PendingProp[] = []
-    buildCard(card, cpend)
-    const cardTitle = cpend.find((pp) => pp.prop === 'Title')
-    if (cardTitle) (cardTitle.node as TextNode).characters = 'Pro'
-    const desc = cpend.find((pp) => pp.prop === 'Description')
-    if (desc) (desc.node as TextNode).characters = '$29/month, billed annually'
-    content.appendChild(card); fillW(card)
-    const f1 = featureRow('feature-1', 'Unlimited design systems')
-    card.appendChild(f1); fillW(f1)
-    const f2 = featureRow('feature-2', 'Figma + code + AI export')
-    card.appendChild(f2); fillW(f2)
-    const f3 = featureRow('feature-3', 'GitHub sync')
-    card.appendChild(f3); fillW(f3)
-    const planCta = screenButton('Button · Get started', 'Brand', 'Solid', 'Get started')
-    card.appendChild(planCta); fillW(planCta)
-
-    const phone = phoneFrame()
-    phone.appendChild(content); fillW(content)
-    return phone
-  }
-
-  function buildCheckoutScreen(): FrameNode {
-    const content = col('content', 20)
-    const title = heading('Checkout')
-    content.appendChild(title); fillW(title)
-    const alert = figma.createComponent(); alert.name = 'InlineAlert · Success'
-    const pend: PendingProp[] = []
-    buildInlineAlert(alert, pend, 'Success')
-    const msg = pend.find((pp) => pp.prop === 'Message')
-    if (msg) (msg.node as TextNode).characters = 'Payment method verified — you’re all set.'
-    content.appendChild(alert); fillW(alert)
-    const nameField = screenField('Name on card', 'Default', 'Filled', { label: 'Name on card', value: 'Jordan Silva' })
-    content.appendChild(nameField); fillW(nameField)
-    const cardField = screenField('Card number', 'Default', 'Filled', { label: 'Card number', value: '•••• •••• •••• 4242' })
-    content.appendChild(cardField); fillW(cardField)
-    const summary = col('summary', 8)
-    content.appendChild(summary); fillW(summary)
-    const rowSubtotal = summaryRow('subtotal', 'Subtotal', '$29.00')
-    summary.appendChild(rowSubtotal); fillW(rowSubtotal)
-    const rowTax = summaryRow('tax', 'Tax', '$0.00')
-    summary.appendChild(rowTax); fillW(rowTax)
-    appendDivider(summary)
-    const rowTotal = summaryRow('total', 'Total', '$29.00', true)
-    summary.appendChild(rowTotal); fillW(rowTotal)
-    const cta = screenButton('Button · Pay now', 'Brand', 'Solid', 'Pay now')
-    content.appendChild(cta); fillW(cta)
-
-    const phone = phoneFrame()
-    phone.appendChild(content); fillW(content)
-    return phone
-  }
-
-  function buildProfileScreen(): FrameNode {
-    const content = col('content', 24)
-    const title = heading('Profile')
-    content.appendChild(title); fillW(title)
-
-    const avatar = figma.createComponent(); avatar.name = 'Avatar'
-    const apend: PendingProp[] = []
-    buildAvatar(avatar, apend, 'LG')
-    const initials = apend.find((pp) => pp.prop === 'Initials')
-    if (initials) (initials.node as TextNode).characters = 'JS'
-    const identity = col('identity', 2)
-    identity.appendChild(txt('Jordan Silva', { style: 'Semi Bold', size: 15, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary }))
-    identity.appendChild(txt('jordan@escalatokens.com', { size: 12, sizeVar: sizeXs, colorP: p.textTertiary }))
-    const header = row('profile-header', 12)
-    header.counterAxisAlignItems = 'CENTER'
-    header.appendChild(avatar)
-    header.appendChild(identity)
-    content.appendChild(header)
-
-    appendDivider(content)
-
-    const switchGroup = figma.createComponent(); switchGroup.name = 'SwitchGroup · Notifications'
-    buildSwitchGroup(switchGroup, [])
-    content.appendChild(switchGroup)
-
-    appendDivider(content)
-
-    const danger = screenButton('Button · Delete account', 'Danger', 'Outline', 'Delete account')
-    content.appendChild(danger); fillW(danger)
-
-    const phone = phoneFrame()
-    phone.appendChild(content); fillW(content)
-    return phone
-  }
-
-  async function buildArtefactsPage(): Promise<number> {
-    let page = figma.root.children.find((pg) => pg.name === ARTEFACTS_PAGE) as PageNode | undefined
-    if (!page) {
-      page = figma.createPage()
-      page.name = ARTEFACTS_PAGE
-    } else {
-      await page.loadAsync()
-      for (const child of [...page.children]) child.remove()
-    }
-    try { page.backgrounds = [{ type: 'SOLID', color: hexToRgb(DOC.page) }] } catch {}
-
-    const screens: { label: string; build: () => FrameNode }[] = [
-      { label: 'Login', build: buildLoginScreen },
-      { label: 'Verify code', build: buildVerifyScreen },
-      { label: 'Pricing', build: buildPricingScreen },
-      { label: 'Checkout', build: buildCheckoutScreen },
-      { label: 'Profile', build: buildProfileScreen },
-    ]
-
-    let x = 0
-    let built = 0
-    for (const s of screens) {
-      progress('Artefacts', built, screens.length, s.label)
-      await yieldToUI()
-      const col_ = figma.createFrame()
-      col_.name = `${String(built + 1).padStart(2, '0')} · ${s.label}`
-      col_.layoutMode = 'VERTICAL'
-      col_.primaryAxisSizingMode = 'AUTO'
-      col_.counterAxisSizingMode = 'AUTO'
-      col_.fills = []
-      col_.itemSpacing = 16
-      const cap = caption(`Artefact · ${s.label} · true size · page margin from Grid`)
-      col_.appendChild(cap)
-      const phone = s.build()
-      col_.appendChild(phone)
-      page.appendChild(col_)
-      col_.x = x
-      col_.y = 0
-      x += col_.width + 96
-      built++
-    }
-    progress('Artefacts', screens.length, screens.length)
-    log(`✓ Artefacts (${built} screens) — every control bound to the same color, border and text tokens as Components Overview`)
-    return built
-  }
-
   // Everything lands on ONE page. Resolve the specs up front so the progress
   // bar counts what will actually be built (a spec whose filter matched
   // nothing is skipped rather than reported).
@@ -6361,11 +6060,6 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
 
   log(`✓ Components Overview — ${builtAtoms} elements (${builtVariants} variants), every fill, radius, spacing and text bound to your tokens`)
-
-  // Runs after the sample sheet, on the same phase — a composed screen is
-  // still a components deliverable, and folding it into "Components" ships
-  // it without a second checkbox to teach in the Import panel.
-  await buildArtefactsPage()
 
   return builtVariants
 }
@@ -6576,7 +6270,21 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     const head = autoFrame(`${title}__head`, 'VERTICAL', 8)
     head.appendChild(mkText(title, { size: 24, style: 'Semi Bold', colorVar: textVar, colorHex: textHex }))
     const sub = mkText(subtitle, { size: 12, colorVar: mutedVar, colorHex: mutedHex })
-    sub.resize(INNER_W, sub.height)
+    // Typography's own subtitle carries the font family name(s) — "Family
+    // 'X' · headings 'Y' — sizes, weights…" — which can run past one line for
+    // a real family name. `sub.resize(INNER_W, sub.height)` used to read
+    // `.height` from the node's PRE-wrap, single-line state (still `NONE`/
+    // whatever textAutoResize mkText leaves it in) and lock the frame to
+    // that height before switching to auto-height — so a family name long
+    // enough to wrap got its second line masked under the frame's own
+    // (too-short) bounds. `textAutoResize` is reset to 'NONE' first so the
+    // width-then-height handoff always starts from a known state, and the
+    // placeholder height is generous rather than trusting a pre-wrap read —
+    // 'HEIGHT' below is what actually settles the real height once the width
+    // is in place, so a too-tall placeholder just means one synchronous
+    // shrink, never a clip.
+    sub.textAutoResize = 'NONE'
+    sub.resize(INNER_W, 200)
     sub.textAutoResize = 'HEIGHT'
     head.appendChild(sub)
     card.appendChild(head)
@@ -8454,7 +8162,7 @@ figma.showUI(__html__, { width: 880, height: 620, themeColors: true })
 // one, so the order holds no matter how the file got rearranged.
 function ensureFoundationPageOrder() {
   let idx = 0
-  for (const name of ['⬡ Cover', '⬡ Documentation', '⬡ Components Overview', '⬡ Artefacts', '⬡ Icons']) {
+  for (const name of ['⬡ Cover', '⬡ Documentation', '⬡ Components Overview', '⬡ Icons']) {
     const foundation = figma.root.children.find((p) => p.name === name)
     if (foundation) figma.root.insertChild(idx++, foundation)
   }
@@ -8694,7 +8402,6 @@ interface FileAssets {
   cover: boolean
   documentation: boolean
   sample: boolean
-  artefacts: boolean
   icons: boolean
   variables: number
   collections: number
@@ -8715,7 +8422,6 @@ async function reportFileAssets(): Promise<FileAssets> {
     cover: names.has('⬡ Cover'),
     documentation: names.has('⬡ Documentation'),
     sample: names.has('⬡ Components Overview'),
-    artefacts: names.has('⬡ Artefacts'),
     icons: names.has('⬡ Icons'),
     variables,
     collections,
@@ -8833,6 +8539,19 @@ figma.ui.onmessage = async (msg: {
 
     log(`― Starting import for "${tokens.project || 'Untitled'}" ―`)
     checkSchema(tokens)
+
+    // The Artefacts feature (composed screens built from a few not-yet-solid
+    // component builders) was pulled — an existing file can still carry the
+    // page it left behind, orphaned nodes and all. Remove it on sight so
+    // nothing from it lingers or gets mistaken for a component this plugin
+    // still maintains.
+    try {
+      const staleArtefacts = figma.root.children.find((p) => p.name === '⬡ Artefacts')
+      if (staleArtefacts) {
+        staleArtefacts.remove()
+        log('✓ Removed the retired "⬡ Artefacts" page')
+      }
+    } catch { /* best-effort cleanup */ }
 
     // Docs used to stay frozen on Live Sync (variables-only). After a plugin
     // update that adds Type/Spacing/Size/Stroke boards — or when this file
