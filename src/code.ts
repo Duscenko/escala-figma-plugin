@@ -2476,9 +2476,26 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   const radSm    = bestVar(COLLECTIONS.radius, 'sm')
   const radMd    = bestVar(COLLECTIONS.radius, 'md')
   const radLg    = bestVar(COLLECTIONS.radius, 'lg')
+  const radiusXs = pxToFloat(tokens.radius?.xs ?? '4px')
   const radiusSm = pxToFloat(tokens.radius?.sm ?? '4px')
   const radiusMd = pxToFloat(tokens.radius?.md ?? '8px')
   const radiusLg = pxToFloat(tokens.radius?.lg ?? '12px')
+  const radiusXl = pxToFloat(tokens.radius?.xl ?? '16px')
+
+  // Semantic radius roles (Radius Semantics — RADIUS_ROLES). Components bind to
+  // the ROLE the design system assigns them, not a raw primitive step, so
+  // re-aliasing `radius.action` in the editor moves every button/input/tab at
+  // once. `emitRoleAliases` writes these only when the payload carries
+  // `radiusRoles`, so each falls back to the primitive it used to hardcode for
+  // an older export that has no semantic layer yet.
+  const radControl   = findVar(COLLECTIONS.radius, 'role/control')   ?? radSm
+  const radAction    = findVar(COLLECTIONS.radius, 'role/action')    ?? radMd
+  const radContainer = findVar(COLLECTIONS.radius, 'role/container') ?? radLg
+  const radOverlay   = findVar(COLLECTIONS.radius, 'role/overlay')   ?? radLg
+  const radPill      = findVar(COLLECTIONS.radius, 'role/pill')
+  const radiusControl   = radiusXs
+  const radiusContainer = radiusLg
+  const radiusOverlay   = radiusXl
 
   // ── Generic helpers ────────────────────────────────────────────────────────
   function fillOf(v: Variable | undefined, hex: string, opacity = 1): SolidPaint {
@@ -2557,6 +2574,13 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     weightVar?: Variable
     colorP?: Pair
     opacity?: number
+    /** Semantic text role (Type Semantics — TYPE_ROLES: 'button', 'label',
+     *  'body-md', 'heading-sm', 'caption', …). When the payload carries
+     *  `typography.roles`, the node binds fontFamily/fontSize/fontWeight to
+     *  `role/<key>/*` — re-aliasing the role in the editor then moves every
+     *  component using it. Falls back to `sizeVar`/`weightVar`/`family` for an
+     *  older export with no semantic type layer. */
+    roleKey?: string
   }
   function txt(chars: string, o: TxtOpts = {}): TextNode {
     const t = figma.createText()
@@ -2574,6 +2598,27 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     }
     tryBind(t, 'fontWeight', o.weightVar
       ?? (o.style === 'Semi Bold' || o.style === 'Bold' ? wSemibold : o.style === 'Medium' ? wMedium : wRegular))
+    // Semantic type role — bound LAST so it wins over the primitive bindings
+    // above whenever the role variables exist. line-height / letter-spacing
+    // key off the primitive step the role resolves to (roles alias a step, so
+    // there is no `line-height/role-*`), read from the payload.
+    if (o.roleKey) {
+      const rFamily = findVar(T, `role/${o.roleKey}/family`)
+      if (rFamily?.resolvedType === 'STRING') tryBind(t, 'fontFamily', rFamily)
+      const rSize = findVar(T, `role/${o.roleKey}/size`)
+      if (rSize) {
+        tryBind(t, 'fontSize', rSize)
+        const step = tokens.typography.roles?.[o.roleKey]?.desktop?.size
+        if (step) {
+          const lh = findVar(T, `line-height/${step}`)
+          if (lh) tryBind(t, 'lineHeight', lh)
+          const ls = findVar(T, `letter-spacing/${step}`)
+          if (ls) tryBind(t, 'letterSpacing', ls)
+        }
+      }
+      const rWeight = findVar(T, `role/${o.roleKey}/weight`)
+      if (rWeight) tryBind(t, 'fontWeight', rWeight)
+    }
     return t
   }
 
@@ -2694,7 +2739,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     c.counterAxisAlignItems = 'CENTER'
     pad(c, sz.padV, sz.padH, sz.padV, sz.padH); gap(c, sz.gap)
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
 
     const disabled = state === 'Disabled'
     const hoverish = state === 'Hover' || state === 'Pressed'
@@ -2740,6 +2785,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       c.appendChild(makeIcon())
     }
     const label = txt('Button', {
+      roleKey: 'button',
       style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium,
       colorP: textP, opacity: state === 'Loading' ? 0.75 : 1,
     })
@@ -2840,7 +2886,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     box.counterAxisAlignItems = 'CENTER'
     box.paddingLeft = s.padX; box.paddingRight = s.padX
     tryBind(box, 'paddingLeft', closestSpacing(s.padX)); tryBind(box, 'paddingRight', closestSpacing(s.padX))
-    bindRadius(box, radMd, radiusMd)
+    bindRadius(box, radAction, radiusMd)
     box.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)]
     const border =
       disabled ? p.borderDisabled :
@@ -2879,7 +2925,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
 
     // Value / placeholder (+ caret when focused)
     const contentP = disabled ? p.textDisabled : filled ? p.textPrimary : p.textPlaceholder
-    const content = txt(meta.text, { size: s.f, sizeVar: s.fv, colorP: contentP })
+    const content = txt(meta.text, { roleKey: 'placeholder', size: s.f, sizeVar: s.fv, colorP: contentP })
     content.name = filled ? 'value' : 'placeholder'
     const valueWrap = row('value', 2)
     valueWrap.appendChild(content)
@@ -2936,7 +2982,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       btn.primaryAxisAlignItems = 'CENTER'
       btn.paddingLeft = 10; btn.paddingRight = 10
       btn.fills = [fillP(btnMuted ? p.actionDisabledSubtle : p.surface3)]
-      bindRadius(btn, radSm, radiusSm)
+      bindRadius(btn, radControl, radiusControl)
       btn.appendChild(txt('Search', {
         style: 'Medium', size: s.f - 1, weightVar: wMedium,
         colorP: btnMuted ? p.textDisabled : p.textSecondary,
@@ -2974,7 +3020,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.primaryAxisAlignItems = 'SPACE_BETWEEN'
     c.resize(240, sz.h)
     pad(c, sz.padV, 12, sz.padV, 12); gap(c, 8)
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
 
     const disabled = state === 'Disabled'
     c.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)]
@@ -3022,7 +3068,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     box.counterAxisSizingMode = 'FIXED'
     box.primaryAxisAlignItems = 'CENTER'
     box.counterAxisAlignItems = 'CENTER'
-    bindRadius(box, radSm, radiusSm)
+    bindRadius(box, radControl, radiusControl)
     if (checked) {
       box.fills = [fillP(disabled ? p.actionDisabled : state === 'Hover' ? p.actionHover : p.action)]
       const check = txt('✓', { style: 'Bold', size: sz.check, colorP: disabled ? p.textDisabled : p.textOnBrand })
@@ -3037,7 +3083,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     if (state === 'Focused') focusRing(box, p.action.hex)
     c.appendChild(box)
     box.resize(sz.d, sz.d)
-    const label = txt('Label', { size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary })
+    const label = txt('Label', { roleKey: 'label', size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Label' })
   }
@@ -3069,7 +3115,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       : on ? (state === 'Hover' ? p.actionHover : p.action)
       : (state === 'Hover' ? p.borderStrong : p.surface3),
     )]
-    track.cornerRadius = 9999
+    bindRadius(track, radPill, 9999)
     const knob = figma.createFrame()
     knob.name = 'knob'
     knob.resize(sz.knob, sz.knob)
@@ -3080,7 +3126,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     knob.layoutSizingVertical = 'FIXED'
     if (state === 'Focused') focusRing(track, p.action.hex)
     c.appendChild(track)
-    const label = txt('Option', { size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary })
+    const label = txt('Option', { roleKey: 'label', size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Option' })
   }
@@ -3112,7 +3158,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisAlignItems = 'CENTER'
     gap(c, Math.round(sz.padH * 0.4))
     pad(c, sz.padV, sz.padH, sz.padV, sz.padH)
-    c.cornerRadius = 9999
+    bindRadius(c, radPill, 9999)
     let textP: Pair
     if (style === 'Solid') { c.fills = [fillP(k.solid)]; textP = k.on }
     else if (style === 'Soft') { c.fills = [fillP(k.soft)]; textP = k.text }
@@ -3129,7 +3175,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       return icon
     }
     if (iconPos === 'Leading') c.appendChild(makeIcon('icon-leading'))
-    const label = txt('Badge', { style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP })
+    const label = txt('Badge', { roleKey: 'label', style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Badge' })
     if (iconPos === 'Trailing') c.appendChild(makeIcon('icon-trailing'))
@@ -3149,8 +3195,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisAlignItems = 'CENTER'
     c.resize(s.d, s.d)
     c.fills = [fillP(p.action, 0.9)]
-    c.cornerRadius = 9999
-    const initials = txt('AV', { style: 'Medium', size: s.f, sizeVar: s.sv, weightVar: wMedium, colorP: p.textOnBrand })
+    bindRadius(c, radPill, 9999)
+    const initials = txt('AV', { roleKey: 'label', style: 'Medium', size: s.f, sizeVar: s.sv, weightVar: wMedium, colorP: p.textOnBrand })
     c.appendChild(initials)
     out.push({ node: initials, prop: 'Initials', def: 'AV' })
   }
@@ -3170,7 +3216,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radContainer, radiusContainer)
     const dot = figma.createFrame()
     dot.name = 'status-dot'
     dot.resize(8, 8)
@@ -3179,11 +3225,11 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.appendChild(dot)
     dot.layoutSizingHorizontal = 'FIXED'
     dot.layoutSizingVertical = 'FIXED'
-    const message = txt('Changes saved successfully', { size: 14, sizeVar: sizeSm, colorP: p.textPrimary })
+    const message = txt('Changes saved successfully', { roleKey: 'body-sm', size: 14, sizeVar: sizeSm, colorP: p.textPrimary })
     c.appendChild(message)
     message.layoutSizingHorizontal = 'FILL'
     out.push({ node: message, prop: 'Message', def: 'Changes saved successfully' })
-    const action = txt('Undo', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand })
+    const action = txt('Undo', { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand })
     c.appendChild(action)
     out.push({ node: action, prop: 'Action', def: 'Undo' })
     // The early resize (dummy height) pins the counter axis — re-assert hug
@@ -3209,7 +3255,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisAlignItems = 'MIN'
     c.resize(520, 10)
     pad(c, 14, 16, 14, 16); gap(c, 12)
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radContainer, radiusContainer)
     if (solid) {
       c.fills = [fillP(k.solid)]
     } else {
@@ -3242,7 +3288,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.appendChild(body)
     body.layoutSizingHorizontal = 'FILL'
 
-    const action = txt('Learn more', { style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: onP })
+    const action = txt('Learn more', { roleKey: 'label', style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: onP })
     action.name = 'action'
     action.textDecoration = 'UNDERLINE'
     c.appendChild(action)
@@ -3265,7 +3311,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisAlignItems = 'CENTER'
     c.resize(380, 10)
     pad(c, 10, 12, 10, 12); gap(c, 10)
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radContainer, radiusContainer)
     c.fills = [fillP(k.subtle)]
     c.strokes = [fillP(k.solid, 0.4)]
     c.strokeWeight = 1
@@ -3274,7 +3320,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     const icon = txt(k.glyph, { style: 'Medium', size: 13, weightVar: wMedium, colorP: k.text })
     icon.name = 'icon-status'
     c.appendChild(icon)
-    const message = txt('A short inline alert message.', { size: 13, sizeVar: sizeSm, colorP: p.textSecondary })
+    const message = txt('A short inline alert message.', { roleKey: 'body-sm', size: 13, sizeVar: sizeSm, colorP: p.textSecondary })
     c.appendChild(message)
     message.layoutSizingHorizontal = 'FILL'
     out.push({ node: message, prop: 'Message', def: 'A short inline alert message.' })
@@ -3311,8 +3357,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     pad(c, 6, 10, 6, 10)
     c.fills = [fillP(p.surfaceInv)]
-    bindRadius(c, radSm, radiusSm)
-    const label = txt('Tooltip text', { style: 'Medium', size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: p.textOnInverse })
+    bindRadius(c, radControl, radiusControl)
+    const label = txt('Tooltip text', { roleKey: 'caption', style: 'Medium', size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: p.textOnInverse })
     c.appendChild(label)
     out.push({ node: label, prop: 'Content', def: 'Tooltip text' })
   }
@@ -3327,11 +3373,11 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radLg, radiusLg)
-    const title = txt('Card title', { style: 'Semi Bold', size: 16, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary })
+    bindRadius(c, radContainer, radiusContainer)
+    const title = txt('Card title', { roleKey: 'heading-sm', style: 'Semi Bold', size: 16, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary })
     c.appendChild(title)
     out.push({ node: title, prop: 'Title', def: 'Card title' })
-    const desc = txt('Supporting description that explains the card content.', { size: 14, sizeVar: sizeSm, colorP: p.textTertiary })
+    const desc = txt('Supporting description that explains the card content.', { roleKey: 'body-md', size: 14, sizeVar: sizeSm, colorP: p.textTertiary })
     c.appendChild(desc)
     desc.layoutSizingHorizontal = 'FILL'
     desc.textAutoResize = 'HEIGHT'
@@ -3348,11 +3394,11 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radLg, radiusLg)
-    const title = txt('Modal title', { style: 'Semi Bold', size: 18, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary })
+    bindRadius(c, radOverlay, radiusOverlay)
+    const title = txt('Modal title', { roleKey: 'heading-md', style: 'Semi Bold', size: 18, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary })
     c.appendChild(title)
     out.push({ node: title, prop: 'Title', def: 'Modal title' })
-    const body = txt('Body content explaining what this dialog does and what happens next.', { size: 14, sizeVar: sizeSm, colorP: p.textTertiary })
+    const body = txt('Body content explaining what this dialog does and what happens next.', { roleKey: 'body-md', size: 14, sizeVar: sizeSm, colorP: p.textTertiary })
     c.appendChild(body)
     body.layoutSizingHorizontal = 'FILL'
     body.textAutoResize = 'HEIGHT'
@@ -3363,14 +3409,14 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     pad(secondary, 8, 14, 8, 14)
     secondary.strokes = [fillP(p.borderDefault)]
     secondary.strokeWeight = 1
-    bindRadius(secondary, radMd, radiusMd)
-    secondary.appendChild(txt('Cancel', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary }))
+    bindRadius(secondary, radAction, radiusMd)
+    secondary.appendChild(txt('Cancel', { roleKey: 'button', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary }))
     footer.appendChild(secondary)
     const primary = row('button-primary', 8)
     pad(primary, 8, 14, 8, 14)
     primary.fills = [fillP(p.action)]
-    bindRadius(primary, radMd, radiusMd)
-    primary.appendChild(txt('Confirm', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }))
+    bindRadius(primary, radAction, radiusMd)
+    primary.appendChild(txt('Confirm', { roleKey: 'button', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }))
     footer.appendChild(primary)
     c.appendChild(footer)
     footer.layoutSizingHorizontal = 'FILL'
@@ -3431,7 +3477,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.primaryAxisAlignItems = 'MIN'
     c.resize(240, 8)
     c.fills = [fillP(p.surface3)]
-    c.cornerRadius = 9999
+    bindRadius(c, radPill, 9999)
     const bar = figma.createFrame()
     bar.name = 'bar'
     bar.resize(144, 8)
@@ -3456,7 +3502,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.primaryAxisAlignItems = 'CENTER'
     c.counterAxisAlignItems = 'CENTER'
     c.resize(sz.d, sz.d)
-    bindRadius(c, radSm, radiusSm)
+    bindRadius(c, radControl, radiusControl)
     const disabled = state === 'Disabled'
     const hoverish = state === 'Hover' || state === 'Pressed'
     c.fills = hoverish ? [fillP(p.surface2, state === 'Pressed' ? 1 : 0.8)] : []
@@ -3504,7 +3550,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     c.clipsContent = true
     ;['Day', 'Week', 'Month'].forEach((label, i) => {
       const seg = row(`segment-${label.toLowerCase()}`, 8)
@@ -3536,7 +3582,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     c.counterAxisAlignItems = 'CENTER'
     pad(c, sz.padV, sz.padH, sz.padV, sz.padH); gap(c, 10)
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     c.fills = state === 'Hover' ? [fillP(p.surface1)] : [fillP(p.surface0)]
     c.strokes = [fillP(state === 'Hover' ? p.borderStrong : p.borderDefault)]
     c.strokeWeight = 1
@@ -3544,7 +3590,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     const icon = txt(provider.charAt(0), { style: 'Bold', size: sz.f, colorP: p.textPrimary })
     icon.name = 'provider-icon'
     c.appendChild(icon)
-    const label = txt(`Continue with ${provider}`, { style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: p.textPrimary })
+    const label = txt(`Continue with ${provider}`, { roleKey: 'button', style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: p.textPrimary })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: `Continue with ${provider}` })
   }
@@ -3557,7 +3603,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     gap(c, 4)
     c.fills = []
     const colorP = state === 'Disabled' ? p.textDisabled : p.textBrand
-    const label = txt('Learn more', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP })
+    const label = txt('Learn more', { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP })
     if (state === 'Hover') label.textDecoration = 'UNDERLINE'
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Learn more' })
@@ -3576,7 +3622,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surfaceInv)]
     c.strokes = [fillP(p.borderStrong)]
     c.strokeWeight = 1
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     const icon = txt(apple ? '' : '▶', { size: 18, colorP: p.textOnInverse })
     icon.name = 'store-icon'
     c.appendChild(icon)
@@ -3595,7 +3641,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     box.counterAxisSizingMode = 'FIXED'
     box.primaryAxisAlignItems = 'CENTER'
     box.counterAxisAlignItems = 'CENTER'
-    bindRadius(box, radSm, radiusSm)
+    bindRadius(box, radControl, radiusControl)
     if (checked) {
       box.fills = [fillP(p.action)]
       box.appendChild(txt('✓', { style: 'Bold', size: 11, colorP: p.textOnBrand }))
@@ -3615,7 +3661,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     gap(c, 12)
     c.fills = []
-    const legend = txt('Group label', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
+    const legend = txt('Group label', { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
     c.appendChild(legend)
     out.push({ node: legend, prop: 'Legend', def: 'Group label' })
     const options: [string, boolean][] = [['Option one', true], ['Option two', false], ['Option three', false]]
@@ -3623,7 +3669,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       const r = row(`option-${label.toLowerCase().replace(/\s+/g, '-')}`, 8)
       r.counterAxisAlignItems = 'CENTER'
       r.appendChild(checkBoxSquare(checked))
-      r.appendChild(txt(label, { size: 14, sizeVar: sizeSm, colorP: p.textPrimary }))
+      r.appendChild(txt(label, { roleKey: 'label', size: 14, sizeVar: sizeSm, colorP: p.textPrimary }))
       c.appendChild(r)
     }
   }
@@ -3668,7 +3714,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     if (state === 'Hover' && !selected) o.strokes = [fillP(p.borderStrong)]
     if (state === 'Focused') focusRing(o, p.action.hex)
     c.appendChild(o)
-    const label = txt('Label', { size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary })
+    const label = txt('Label', { roleKey: 'label', size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Label' })
   }
@@ -3679,7 +3725,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     gap(c, 12)
     c.fills = []
-    const legend = txt('Group label', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
+    const legend = txt('Group label', { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
     c.appendChild(legend)
     out.push({ node: legend, prop: 'Legend', def: 'Group label' })
     const options: [string, boolean][] = [['Option one', true], ['Option two', false], ['Option three', false]]
@@ -3687,7 +3733,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       const r = row(`option-${label.toLowerCase().replace(/\s+/g, '-')}`, 8)
       r.counterAxisAlignItems = 'CENTER'
       r.appendChild(radioCircle(selected))
-      r.appendChild(txt(label, { size: 14, sizeVar: sizeSm, colorP: p.textPrimary }))
+      r.appendChild(txt(label, { roleKey: 'label', size: 14, sizeVar: sizeSm, colorP: p.textPrimary }))
       c.appendChild(r)
     }
   }
@@ -3710,8 +3756,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     if (state !== 'Focused') tryBind(c, 'strokeWeight', borderWidthVar())
     if (state === 'Focused') focusRing(c, p.borderFocus.hex)
     if (state === 'Error') focusRing(c, p.statusError.hex)
-    bindRadius(c, radMd, radiusMd)
-    const content = txt('Placeholder…', { size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPlaceholder })
+    bindRadius(c, radAction, radiusMd)
+    const content = txt('Placeholder…', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPlaceholder })
     content.name = 'placeholder'
     c.appendChild(content)
     content.layoutSizingHorizontal = 'FILL'
@@ -3747,7 +3793,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       cell.strokeWeight = active ? 1.5 : 1
       if (!active) tryBind(cell, 'strokeWeight', borderWidthVar())
       if (active) focusRing(cell, p.borderBrand.hex)
-      bindRadius(cell, radMd, radiusMd)
+      bindRadius(cell, radAction, radiusMd)
       if (state === 'Filled') {
         cell.appendChild(txt(d, { style: 'Medium', size: sz.f, weightVar: wMedium, colorP: p.textPrimary }))
       }
@@ -3765,7 +3811,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(state === 'Disabled' ? p.borderDisabled : p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     c.clipsContent = true
     const disabled = state === 'Disabled'
     const stepBtn = (label: string, name: string) => {
@@ -3786,7 +3832,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     value.strokeWeight = 0
     value.strokeLeftWeight = 1
     value.strokeRightWeight = 1
-    const vtxt = txt('10', { size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPrimary })
+    const vtxt = txt('10', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPrimary })
     value.appendChild(vtxt)
     c.appendChild(value)
     out.push({ node: vtxt, prop: 'Value', def: '10' })
@@ -3804,18 +3850,18 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     for (const t of ['Design', 'Tokens']) {
       const tag = row(`tag-${t.toLowerCase()}`, 4)
       tag.counterAxisAlignItems = 'CENTER'
       pad(tag, 2, 6, 2, 8)
       tag.fills = [fillP(p.surface2)]
-      bindRadius(tag, radSm, radiusSm)
-      tag.appendChild(txt(t, { size: 12, sizeVar: sizeXs, colorP: p.textSecondary }))
+      bindRadius(tag, radControl, radiusControl)
+      tag.appendChild(txt(t, { roleKey: 'label', size: 12, sizeVar: sizeXs, colorP: p.textSecondary }))
       tag.appendChild(txt('✕', { size: 10, colorP: p.textTertiary }))
       c.appendChild(tag)
     }
-    const placeholder = txt('Add tag…', { size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder })
+    const placeholder = txt('Add tag…', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder })
     placeholder.name = 'placeholder'
     c.appendChild(placeholder)
     out.push({ node: placeholder, prop: 'Placeholder', def: 'Add tag…' })
@@ -3835,7 +3881,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(state === 'Hover' ? p.borderBrand : p.borderDefault)]
     c.strokeWeight = 1
     c.dashPattern = [6, 6]
-    bindRadius(c, radLg, radiusLg)
+    bindRadius(c, radContainer, radiusContainer)
     const iconWrap = figma.createFrame()
     iconWrap.name = 'icon'
     iconWrap.layoutMode = 'HORIZONTAL'
@@ -3849,10 +3895,10 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     iconWrap.resize(40, 40)
     c.appendChild(iconWrap)
     const title = row('title', 4)
-    title.appendChild(txt('Click to upload', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand }))
-    title.appendChild(txt('or drag and drop', { size: 14, sizeVar: sizeSm, colorP: p.textSecondary }))
+    title.appendChild(txt('Click to upload', { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand }))
+    title.appendChild(txt('or drag and drop', { roleKey: 'body-sm', size: 14, sizeVar: sizeSm, colorP: p.textSecondary }))
     c.appendChild(title)
-    const hint = txt('SVG, PNG or JPG (max. 800×400px)', { size: 12, sizeVar: sizeXs, colorP: p.textTertiary })
+    const hint = txt('SVG, PNG or JPG (max. 800×400px)', { roleKey: 'caption', size: 12, sizeVar: sizeXs, colorP: p.textTertiary })
     c.appendChild(hint)
     out.push({ node: hint, prop: 'Hint', def: 'SVG, PNG or JPG (max. 800×400px)' })
   }
@@ -3871,7 +3917,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.paddingLeft = 2; c.paddingRight = 2
     c.itemSpacing = 2
     c.fills = [fillP(p.surface2)]
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     ;['List', 'Board', 'Timeline'].forEach((label, i) => {
       const active = i === 0
       const seg = row(`segment-${label.toLowerCase()}`, 8)
@@ -3881,7 +3927,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
         seg.fills = [fillP(p.surface0)]
         seg.strokes = [fillP(p.borderDefault, 0.7)]
         seg.strokeWeight = 1
-        bindRadius(seg, radSm, radiusSm)
+        bindRadius(seg, radControl, radiusControl)
       }
       seg.appendChild(txt(label, {
         style: active ? 'Medium' : 'Regular', size: sz.f, sizeVar: sizeSm,
@@ -3952,7 +3998,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     gap(c, 12)
     c.fills = []
-    const legend = txt('Notification settings', { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
+    const legend = txt('Notification settings', { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
     c.appendChild(legend)
     out.push({ node: legend, prop: 'Legend', def: 'Notification settings' })
     const options: [string, boolean][] = [['Email alerts', true], ['Push notifications', false], ['Weekly digest', false]]
@@ -3960,7 +4006,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       const r = row(`option-${label.toLowerCase().replace(/\s+/g, '-')}`, 10)
       r.counterAxisAlignItems = 'CENTER'
       r.appendChild(switchTrack(on))
-      r.appendChild(txt(label, { size: 14, sizeVar: sizeSm, colorP: p.textPrimary }))
+      r.appendChild(txt(label, { roleKey: 'label', size: 14, sizeVar: sizeSm, colorP: p.textPrimary }))
       c.appendChild(r)
     }
   }
@@ -3978,7 +4024,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     c.counterAxisAlignItems = 'CENTER'
     pad(c, sz.padV, sz.padH, sz.padV, sz.padH + 2); gap(c, 6)
-    c.cornerRadius = 9999
+    bindRadius(c, radPill, 9999)
     const disabled = state === 'Disabled'
     if (selected) {
       c.fills = [fillP(p.brandSubtle, state === 'Hover' ? 0.85 : 1)]
@@ -3988,7 +4034,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       c.fills = [fillP(state === 'Hover' ? p.surface3 : p.surface2)]
     }
     const colorP = disabled ? p.textDisabled : selected ? p.textBrand : p.textSecondary
-    const label = txt('Chip', { style: 'Medium', size: sz.f, sizeVar: sizeXs, weightVar: wMedium, colorP })
+    const label = txt('Chip', { roleKey: 'label', style: 'Medium', size: sz.f, sizeVar: sizeXs, weightVar: wMedium, colorP })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Chip' })
     const remove = txt('✕', { size: sz.rm, colorP, opacity: 0.8 })
@@ -4003,7 +4049,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     c.counterAxisAlignItems = 'CENTER'
     pad(c, 3, 10, 3, 8); gap(c, 6)
-    c.cornerRadius = 9999
+    bindRadius(c, radPill, 9999)
     c.fills = [fillP(k.soft)]
     const dot = figma.createFrame()
     dot.name = 'dot'
@@ -4013,7 +4059,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.appendChild(dot)
     dot.layoutSizingHorizontal = 'FIXED'
     dot.layoutSizingVertical = 'FIXED'
-    const label = txt(status, { style: 'Medium', size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: k.text })
+    const label = txt(status, { roleKey: 'label', style: 'Medium', size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: k.text })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: status })
   }
@@ -4091,7 +4137,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     trigger.strokes = [fillP(open ? p.borderBrand : p.borderDefault)]
     trigger.strokeWeight = open ? 1.5 : 1
     if (!open) tryBind(trigger, 'strokeWeight', borderWidthVar())
-    bindRadius(trigger, radMd, radiusMd)
+    bindRadius(trigger, radAction, radiusMd)
     pad(trigger, 10, 12, 10, 12)
     if (open) focusRing(trigger, p.borderBrand.hex)
     const lead = row('lead', 8)
@@ -4113,7 +4159,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       panel.fills = [fillP(p.surface1)]
       panel.strokes = [fillP(p.borderDefault)]
       panel.strokeWeight = 1
-      bindRadius(panel, radMd, radiusMd)
+      bindRadius(panel, radOverlay, radiusOverlay)
       pad(panel, 6, 6, 6, 6)
       panel.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.12 }, offset: { x: 0, y: 4 }, radius: 16, spread: 0, visible: true, blendMode: 'NORMAL' }]
       const options: [string, boolean][] = [['Berlin', true], ['Bern', false], ['Beirut', false]]
@@ -4121,9 +4167,9 @@ async function importSample(tokens: DesignTokens): Promise<number> {
         const opt = row(`option-${label.toLowerCase()}`, 8)
         opt.primaryAxisSizingMode = 'FIXED'
         opt.fills = active ? [fillP(p.surfaceSelected)] : []
-        bindRadius(opt, radSm, radiusSm)
+        bindRadius(opt, radControl, radiusControl)
         pad(opt, 8, 10, 8, 10)
-        opt.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textPrimary }))
+        opt.appendChild(txt(label, { roleKey: 'label', size: 13, sizeVar: sizeSm, colorP: p.textPrimary }))
         panel.appendChild(opt)
         opt.layoutSizingHorizontal = 'FILL'
       }
@@ -4143,7 +4189,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     c.clipsContent = true
 
     // Segments share the group's outer border; each hugs to the same 40px
@@ -4153,7 +4199,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     prefix.counterAxisAlignItems = 'CENTER'
     prefix.fills = [fillP(p.surface2)]
     pad(prefix, 10, 12, 10, 12)
-    prefix.appendChild(txt('https://', { size: 14, sizeVar: sizeSm, colorP: p.textTertiary }))
+    prefix.appendChild(txt('https://', { roleKey: 'body-sm', size: 14, sizeVar: sizeSm, colorP: p.textTertiary }))
     c.appendChild(prefix)
     prefix.resize(prefix.width, 40)
 
@@ -4161,7 +4207,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     field.primaryAxisSizingMode = 'FIXED'
     field.counterAxisSizingMode = 'FIXED'
     pad(field, 10, 12, 10, 12)
-    const value = txt('createui.co', { size: 14, sizeVar: sizeSm, colorP: p.textPrimary })
+    const value = txt('createui.co', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: p.textPrimary })
     value.name = 'value'
     field.appendChild(value)
     c.appendChild(field)
@@ -4173,7 +4219,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     suffix.counterAxisAlignItems = 'CENTER'
     suffix.fills = [fillP(p.action)]
     pad(suffix, 10, 14, 10, 14)
-    const go = txt('Copy', { style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand })
+    const go = txt('Copy', { roleKey: 'button', style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand })
     suffix.appendChild(go)
     c.appendChild(suffix)
     suffix.resize(suffix.width, 40)
@@ -4194,7 +4240,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(dragging ? p.borderBrand : error ? p.borderError : p.borderStrong)]
     c.strokeWeight = dragging ? 1.5 : 1
     c.dashPattern = [6, 6]
-    bindRadius(c, radLg, radiusLg)
+    bindRadius(c, radContainer, radiusContainer)
 
     c.appendChild(txt(error ? '⚠' : '⤒', { size: 20, colorP: error ? p.iconError : dragging ? p.iconBrand : p.iconTertiary }))
     const title = txt(
@@ -4223,7 +4269,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     const error = state === 'Error'
 
     const labelRow = row('label-row', 4)
-    const label = txt('Label', { style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
+    const label = txt('Label', { roleKey: 'label', style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
     labelRow.appendChild(label)
     labelRow.appendChild(txt('*', { style: 'Medium', size: 13, weightVar: wMedium, colorP: p.textError }))
     c.appendChild(labelRow)
@@ -4236,9 +4282,9 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     box.strokes = [fillP(error ? p.borderError : p.borderDefault)]
     box.strokeWeight = 1
     if (!error) tryBind(box, 'strokeWeight', borderWidthVar())
-    bindRadius(box, radMd, radiusMd)
+    bindRadius(box, radAction, radiusMd)
     pad(box, 10, 12, 10, 12)
-    box.appendChild(txt('Placeholder Text..', { size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder }))
+    box.appendChild(txt('Placeholder Text..', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder }))
     c.appendChild(box)
     box.resize(260, 40)
 
@@ -4258,12 +4304,12 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisAlignItems = 'CENTER'
     gap(c, 4)
     c.fills = []
-    const label = txt('Label', { style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
+    const label = txt('Label', { roleKey: 'label', style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Label' })
     if (required) c.appendChild(txt('*', { style: 'Medium', size: 13, weightVar: wMedium, colorP: p.textError }))
     else {
-      const hint = txt('(optional)', { size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder })
+      const hint = txt('(optional)', { roleKey: 'caption', size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder })
       hint.name = 'hint'
       c.appendChild(hint)
     }
@@ -4317,7 +4363,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     }
     c.appendChild(stars)
     if (interactive) {
-      const count = txt('4.0 · 128 reviews', { size: 12, sizeVar: sizeXs, colorP: p.textTertiary })
+      const count = txt('4.0 · 128 reviews', { roleKey: 'caption', size: 12, sizeVar: sizeXs, colorP: p.textTertiary })
       count.name = 'count'
       c.appendChild(count)
       out.push({ node: count, prop: 'Count', def: '4.0 · 128 reviews' })
@@ -4373,7 +4419,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       head.primaryAxisSizingMode = 'FIXED'
       head.primaryAxisAlignItems = 'SPACE_BETWEEN'
       pad(head, 14, 4, 14, 4)
-      head.appendChild(txt(q, { style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textPrimary }))
+      head.appendChild(txt(q, { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textPrimary }))
       head.appendChild(txt(openRow ? '▴' : '▾', { size: 12, colorP: p.iconTertiary }))
       item.appendChild(head)
       head.layoutSizingHorizontal = 'FILL'
@@ -4417,7 +4463,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surface2)]
     c.strokes = [fillP(p.borderSubtle)]
     c.strokeWeight = 1
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radContainer, radiusContainer)
     const tag = row('ratio', 0)
     tag.fills = [fillP(p.surfaceInv, 0.85)]
     tag.cornerRadius = 999
@@ -4437,21 +4483,21 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surface1)]
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
-    bindRadius(c, radLg, radiusLg)
+    bindRadius(c, radOverlay, radiusOverlay)
     c.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.14 }, offset: { x: 0, y: 6 }, radius: 24, spread: -4, visible: true, blendMode: 'NORMAL' }]
-    const title = txt('Share this view', { style: 'Semi Bold', size: 14, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary })
+    const title = txt('Share this view', { roleKey: 'heading-sm', style: 'Semi Bold', size: 14, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary })
     c.appendChild(title)
     out.push({ node: title, prop: 'Title', def: 'Share this view' })
-    const body = txt('Anyone with the link can see the current filters and sorting.', { size: 13, sizeVar: sizeSm, colorP: p.textTertiary })
+    const body = txt('Anyone with the link can see the current filters and sorting.', { roleKey: 'body-sm', size: 13, sizeVar: sizeSm, colorP: p.textTertiary })
     c.appendChild(body)
     body.layoutSizingHorizontal = 'FILL'
     body.textAutoResize = 'HEIGHT'
     out.push({ node: body, prop: 'Body', def: body.characters })
     const action = row('action', 6)
     action.fills = [fillP(p.action)]
-    bindRadius(action, radMd, radiusMd)
+    bindRadius(action, radAction, radiusMd)
     pad(action, 8, 14, 8, 14)
-    action.appendChild(txt('Copy link', { style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }))
+    action.appendChild(txt('Copy link', { roleKey: 'button', style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }))
     c.appendChild(action)
     c.resize(260, c.height)
   }
@@ -4467,9 +4513,9 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.appendChild(txt('ⓘ', { size: 14, colorP: p.iconQuaternary }))
     const bubble = row('bubble', 0)
     bubble.fills = [fillP(p.surfaceInv)]
-    bindRadius(bubble, radSm, radiusSm)
+    bindRadius(bubble, radControl, radiusControl)
     pad(bubble, 6, 10, 6, 10)
-    const tip = txt('Shown on hover and focus', { size: 12, sizeVar: sizeXs, colorP: p.textOnInverse })
+    const tip = txt('Shown on hover and focus', { roleKey: 'caption', size: 12, sizeVar: sizeXs, colorP: p.textOnInverse })
     bubble.appendChild(tip)
     c.appendChild(bubble)
     out.push({ node: tip, prop: 'Content', def: 'Shown on hover and focus' })
@@ -4485,7 +4531,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surface1)]
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radContainer, radiusContainer)
     c.clipsContent = true
     const list = col('content', 2)
     list.primaryAxisSizingMode = 'FIXED'
@@ -4493,8 +4539,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       const rowF = row(`row-${label.toLowerCase().replace(/\s+/g, '-')}`, 8)
       rowF.primaryAxisSizingMode = 'FIXED'
       pad(rowF, 7, 10, 7, 10)
-      bindRadius(rowF, radSm, radiusSm)
-      rowF.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textSecondary }))
+      bindRadius(rowF, radControl, radiusControl)
+      rowF.appendChild(txt(label, { roleKey: 'body-sm', size: 13, sizeVar: sizeSm, colorP: p.textSecondary }))
       list.appendChild(rowF)
       rowF.layoutSizingHorizontal = 'FILL'
     }
@@ -4534,7 +4580,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       b.counterAxisSizingMode = 'FIXED'
       b.primaryAxisAlignItems = 'CENTER'
       b.counterAxisAlignItems = 'CENTER'
-      bindRadius(b, radSm, radiusSm)
+      bindRadius(b, radControl, radiusControl)
       if (kind === 'current') b.fills = [fillP(p.action)]
       b.appendChild(txt(label, {
         style: kind === 'current' ? 'Medium' : 'Regular', size: 13, sizeVar: sizeSm,
@@ -4587,7 +4633,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surface1)]
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
-    bindRadius(c, radMd, radiusMd)
+    bindRadius(c, radAction, radiusMd)
     c.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.14 }, offset: { x: 0, y: 6 }, radius: 24, spread: -4, visible: true, blendMode: 'NORMAL' }]
     for (const item of items) {
       if (item.kind === 'separator') {
@@ -4604,11 +4650,11 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       rowF.primaryAxisSizingMode = 'FIXED'
       rowF.primaryAxisAlignItems = 'SPACE_BETWEEN'
       pad(rowF, 8, 10, 8, 10)
-      bindRadius(rowF, radSm, radiusSm)
+      bindRadius(rowF, radControl, radiusControl)
       if (item.kind === 'active') rowF.fills = [fillP(p.surface1Hover)]
       const colorP = item.kind === 'danger' ? p.textError : p.textPrimary
-      rowF.appendChild(txt(item.label, { size: 13, sizeVar: sizeSm, colorP }))
-      if (item.hint) rowF.appendChild(txt(item.hint, { size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder }))
+      rowF.appendChild(txt(item.label, { roleKey: 'label', size: 13, sizeVar: sizeSm, colorP }))
+      if (item.hint) rowF.appendChild(txt(item.hint, { roleKey: 'caption', size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder }))
       c.appendChild(rowF)
       rowF.layoutSizingHorizontal = 'FILL'
     }
@@ -4644,7 +4690,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surface1)]
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
-    bindRadius(c, radLg, radiusLg)
+    bindRadius(c, radOverlay, radiusOverlay)
     c.clipsContent = true
     c.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.18 }, offset: { x: 0, y: 12 }, radius: 40, spread: -8, visible: true, blendMode: 'NORMAL' }]
 
@@ -4652,14 +4698,14 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     search.primaryAxisSizingMode = 'FIXED'
     pad(search, 14, 16, 14, 16)
     search.appendChild(txt('🔍', { size: 13, colorP: p.iconQuaternary }))
-    const query = txt('Type a command or search…', { size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder })
+    const query = txt('Type a command or search…', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder })
     search.appendChild(query)
     query.layoutSizingHorizontal = 'FILL'
     const kbd = row('kbd', 0)
     kbd.fills = [fillP(p.surface2)]
     kbd.strokes = [fillP(p.borderSubtle)]
     kbd.strokeWeight = 1
-    bindRadius(kbd, radSm, radiusSm)
+    bindRadius(kbd, radControl, radiusControl)
     pad(kbd, 2, 6, 2, 6)
     kbd.appendChild(txt('⌘K', { size: 11, colorP: p.textTertiary }))
     search.appendChild(kbd)
@@ -4692,10 +4738,10 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       const rowF = row(`cmd-${label.toLowerCase().replace(/\s+/g, '-')}`, 10)
       rowF.primaryAxisSizingMode = 'FIXED'
       pad(rowF, 9, 10, 9, 10)
-      bindRadius(rowF, radSm, radiusSm)
+      bindRadius(rowF, radControl, radiusControl)
       if (active) rowF.fills = [fillP(p.surface1Hover)]
       rowF.appendChild(txt(glyph, { size: 13, colorP: p.iconTertiary }))
-      rowF.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textPrimary }))
+      rowF.appendChild(txt(label, { roleKey: 'body-sm', size: 13, sizeVar: sizeSm, colorP: p.textPrimary }))
       list.appendChild(rowF)
       rowF.layoutSizingHorizontal = 'FILL'
     }
@@ -4736,7 +4782,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     for (const [label, active] of links) {
       const link = row(`link-${label.toLowerCase()}`, 0)
       pad(link, 6, 12, 6, 12)
-      bindRadius(link, radSm, radiusSm)
+      bindRadius(link, radControl, radiusControl)
       if (active) link.fills = [fillP(p.surface1Hover)]
       link.appendChild(txt(label, {
         style: active ? 'Medium' : 'Regular', size: 13, sizeVar: sizeSm,
@@ -4785,7 +4831,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       const rowF = row(`item-${label.toLowerCase()}`, 10)
       rowF.primaryAxisSizingMode = 'FIXED'
       pad(rowF, 8, 10, 8, 10)
-      bindRadius(rowF, radSm, radiusSm)
+      bindRadius(rowF, radControl, radiusControl)
       if (active) rowF.fills = [fillP(p.brandSubtle)]
       rowF.appendChild(txt(glyph, { size: 13, colorP: active ? p.iconBrand : p.iconTertiary }))
       rowF.appendChild(txt(label, {

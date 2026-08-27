@@ -1609,7 +1609,7 @@
     return { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard };
   }
   async function importSample(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
     const atoms = (_b = (_a = tokens.atoms) != null ? _a : tokens.components) != null ? _b : [];
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
@@ -1741,9 +1741,19 @@
     const radSm = bestVar(COLLECTIONS.radius, "sm");
     const radMd = bestVar(COLLECTIONS.radius, "md");
     const radLg = bestVar(COLLECTIONS.radius, "lg");
-    const radiusSm = pxToFloat((_d = (_c = tokens.radius) == null ? void 0 : _c.sm) != null ? _d : "4px");
-    const radiusMd = pxToFloat((_f = (_e = tokens.radius) == null ? void 0 : _e.md) != null ? _f : "8px");
-    const radiusLg = pxToFloat((_h = (_g = tokens.radius) == null ? void 0 : _g.lg) != null ? _h : "12px");
+    const radiusXs = pxToFloat((_d = (_c = tokens.radius) == null ? void 0 : _c.xs) != null ? _d : "4px");
+    const radiusSm = pxToFloat((_f = (_e = tokens.radius) == null ? void 0 : _e.sm) != null ? _f : "4px");
+    const radiusMd = pxToFloat((_h = (_g = tokens.radius) == null ? void 0 : _g.md) != null ? _h : "8px");
+    const radiusLg = pxToFloat((_j = (_i = tokens.radius) == null ? void 0 : _i.lg) != null ? _j : "12px");
+    const radiusXl = pxToFloat((_l = (_k = tokens.radius) == null ? void 0 : _k.xl) != null ? _l : "16px");
+    const radControl = (_m = findVar(COLLECTIONS.radius, "role/control")) != null ? _m : radSm;
+    const radAction = (_n = findVar(COLLECTIONS.radius, "role/action")) != null ? _n : radMd;
+    const radContainer = (_o = findVar(COLLECTIONS.radius, "role/container")) != null ? _o : radLg;
+    const radOverlay = (_p = findVar(COLLECTIONS.radius, "role/overlay")) != null ? _p : radLg;
+    const radPill = findVar(COLLECTIONS.radius, "role/pill");
+    const radiusControl = radiusXs;
+    const radiusContainer = radiusLg;
+    const radiusOverlay = radiusXl;
     function fillOf(v, hex, opacity = 1) {
       let paint = { type: "SOLID", color: hexToRgb(hex), opacity };
       if ((v == null ? void 0 : v.resolvedType) === "COLOR") paint = figma.variables.setBoundVariableForPaint(paint, "color", v);
@@ -1810,7 +1820,7 @@
         blendMode: "NORMAL"
       }];
     }
-    const fontFamily = ((_i = tokens.typography) == null ? void 0 : _i.fontFamily) || "Inter";
+    const fontFamily = ((_q = tokens.typography) == null ? void 0 : _q.fontFamily) || "Inter";
     const loaded = /* @__PURE__ */ new Set();
     for (const style of ["Regular", "Medium", "Semi Bold", "Bold"]) {
       try {
@@ -1825,7 +1835,7 @@
     }
     const fontFor = (style) => loaded.has(style) ? { family: fontFamily, style } : { family: "Inter", style };
     function txt(chars, o = {}) {
-      var _a2, _b2, _c2, _d2, _e2;
+      var _a2, _b2, _c2, _d2, _e2, _f2, _g2, _h2;
       const t = figma.createText();
       t.fontName = fontFor((_a2 = o.style) != null ? _a2 : "Regular");
       t.characters = chars;
@@ -1840,6 +1850,23 @@
         if (ls) tryBind(t, "letterSpacing", ls);
       }
       tryBind(t, "fontWeight", (_e2 = o.weightVar) != null ? _e2 : o.style === "Semi Bold" || o.style === "Bold" ? wSemibold : o.style === "Medium" ? wMedium : wRegular);
+      if (o.roleKey) {
+        const rFamily = findVar(T, `role/${o.roleKey}/family`);
+        if ((rFamily == null ? void 0 : rFamily.resolvedType) === "STRING") tryBind(t, "fontFamily", rFamily);
+        const rSize = findVar(T, `role/${o.roleKey}/size`);
+        if (rSize) {
+          tryBind(t, "fontSize", rSize);
+          const step = (_h2 = (_g2 = (_f2 = tokens.typography.roles) == null ? void 0 : _f2[o.roleKey]) == null ? void 0 : _g2.desktop) == null ? void 0 : _h2.size;
+          if (step) {
+            const lh = findVar(T, `line-height/${step}`);
+            if (lh) tryBind(t, "lineHeight", lh);
+            const ls = findVar(T, `letter-spacing/${step}`);
+            if (ls) tryBind(t, "letterSpacing", ls);
+          }
+        }
+        const rWeight = findVar(T, `role/${o.roleKey}/weight`);
+        if (rWeight) tryBind(t, "fontWeight", rWeight);
+      }
       return t;
     }
     function row(name, gapPx) {
@@ -1937,7 +1964,7 @@
       c.counterAxisAlignItems = "CENTER";
       pad(c, sz.padV, sz.padH, sz.padV, sz.padH);
       gap(c, sz.gap);
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       const disabled = state === "Disabled";
       const hoverish = state === "Hover" || state === "Pressed";
       const dim = state === "Pressed" ? 0.88 : 1;
@@ -1979,6 +2006,7 @@
         c.appendChild(makeIcon());
       }
       const label = txt("Button", {
+        roleKey: "button",
         style: "Medium",
         size: sz.f,
         sizeVar: sz.fv,
@@ -2072,7 +2100,7 @@
       box.paddingRight = s.padX;
       tryBind(box, "paddingLeft", closestSpacing(s.padX));
       tryBind(box, "paddingRight", closestSpacing(s.padX));
-      bindRadius(box, radMd, radiusMd);
+      bindRadius(box, radAction, radiusMd);
       box.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)];
       const border = disabled ? p.borderDisabled : error ? p.borderError : focused || loading ? p.borderFocus : state === "Hover" ? p.borderStrong : p.borderStrong;
       box.strokes = [fillP(border)];
@@ -2109,7 +2137,7 @@
         fixDivider(d);
       }
       const contentP = disabled ? p.textDisabled : filled ? p.textPrimary : p.textPlaceholder;
-      const content = txt(meta.text, { size: s.f, sizeVar: s.fv, colorP: contentP });
+      const content = txt(meta.text, { roleKey: "placeholder", size: s.f, sizeVar: s.fv, colorP: contentP });
       content.name = filled ? "value" : "placeholder";
       const valueWrap = row("value", 2);
       valueWrap.appendChild(content);
@@ -2170,7 +2198,7 @@
         btn.paddingLeft = 10;
         btn.paddingRight = 10;
         btn.fills = [fillP(btnMuted ? p.actionDisabledSubtle : p.surface3)];
-        bindRadius(btn, radSm, radiusSm);
+        bindRadius(btn, radControl, radiusControl);
         btn.appendChild(txt("Search", {
           style: "Medium",
           size: s.f - 1,
@@ -2207,7 +2235,7 @@
       c.resize(240, sz.h);
       pad(c, sz.padV, 12, sz.padV, 12);
       gap(c, 8);
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       const disabled = state === "Disabled";
       c.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)];
       const border = disabled ? p.borderDisabled : state === "Error" ? p.borderError : state === "Focused" ? p.borderFocus : p.borderStrong;
@@ -2248,7 +2276,7 @@
       box.counterAxisSizingMode = "FIXED";
       box.primaryAxisAlignItems = "CENTER";
       box.counterAxisAlignItems = "CENTER";
-      bindRadius(box, radSm, radiusSm);
+      bindRadius(box, radControl, radiusControl);
       if (checked) {
         box.fills = [fillP(disabled ? p.actionDisabled : state === "Hover" ? p.actionHover : p.action)];
         const check = txt("\u2713", { style: "Bold", size: sz.check, colorP: disabled ? p.textDisabled : p.textOnBrand });
@@ -2263,7 +2291,7 @@
       if (state === "Focused") focusRing(box, p.action.hex);
       c.appendChild(box);
       box.resize(sz.d, sz.d);
-      const label = txt("Label", { size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary });
+      const label = txt("Label", { roleKey: "label", size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Label" });
     }
@@ -2294,7 +2322,7 @@
       track.fills = [fillP(
         disabled ? p.actionDisabled : on ? state === "Hover" ? p.actionHover : p.action : state === "Hover" ? p.borderStrong : p.surface3
       )];
-      track.cornerRadius = 9999;
+      bindRadius(track, radPill, 9999);
       const knob = figma.createFrame();
       knob.name = "knob";
       knob.resize(sz.knob, sz.knob);
@@ -2305,7 +2333,7 @@
       knob.layoutSizingVertical = "FIXED";
       if (state === "Focused") focusRing(track, p.action.hex);
       c.appendChild(track);
-      const label = txt("Option", { size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary });
+      const label = txt("Option", { roleKey: "label", size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Option" });
     }
@@ -2333,7 +2361,7 @@
       c.counterAxisAlignItems = "CENTER";
       gap(c, Math.round(sz.padH * 0.4));
       pad(c, sz.padV, sz.padH, sz.padV, sz.padH);
-      c.cornerRadius = 9999;
+      bindRadius(c, radPill, 9999);
       let textP;
       if (style === "Solid") {
         c.fills = [fillP(k.solid)];
@@ -2354,7 +2382,7 @@
         return icon;
       };
       if (iconPos === "Leading") c.appendChild(makeIcon("icon-leading"));
-      const label = txt("Badge", { style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP });
+      const label = txt("Badge", { roleKey: "label", style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Badge" });
       if (iconPos === "Trailing") c.appendChild(makeIcon("icon-trailing"));
@@ -2375,8 +2403,8 @@
       c.counterAxisAlignItems = "CENTER";
       c.resize(s.d, s.d);
       c.fills = [fillP(p.action, 0.9)];
-      c.cornerRadius = 9999;
-      const initials = txt("AV", { style: "Medium", size: s.f, sizeVar: s.sv, weightVar: wMedium, colorP: p.textOnBrand });
+      bindRadius(c, radPill, 9999);
+      const initials = txt("AV", { roleKey: "label", style: "Medium", size: s.f, sizeVar: s.sv, weightVar: wMedium, colorP: p.textOnBrand });
       c.appendChild(initials);
       out.push({ node: initials, prop: "Initials", def: "AV" });
     }
@@ -2399,7 +2427,7 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radContainer, radiusContainer);
       const dot = figma.createFrame();
       dot.name = "status-dot";
       dot.resize(8, 8);
@@ -2408,11 +2436,11 @@
       c.appendChild(dot);
       dot.layoutSizingHorizontal = "FIXED";
       dot.layoutSizingVertical = "FIXED";
-      const message = txt("Changes saved successfully", { size: 14, sizeVar: sizeSm, colorP: p.textPrimary });
+      const message = txt("Changes saved successfully", { roleKey: "body-sm", size: 14, sizeVar: sizeSm, colorP: p.textPrimary });
       c.appendChild(message);
       message.layoutSizingHorizontal = "FILL";
       out.push({ node: message, prop: "Message", def: "Changes saved successfully" });
-      const action = txt("Undo", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand });
+      const action = txt("Undo", { roleKey: "label", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand });
       c.appendChild(action);
       out.push({ node: action, prop: "Action", def: "Undo" });
       c.layoutSizingVertical = "HUG";
@@ -2435,7 +2463,7 @@
       c.resize(520, 10);
       pad(c, 14, 16, 14, 16);
       gap(c, 12);
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radContainer, radiusContainer);
       if (solid) {
         c.fills = [fillP(k.solid)];
       } else {
@@ -2470,7 +2498,7 @@
       out.push({ node: message, prop: "Message", def: "Short supporting message that explains what happened." });
       c.appendChild(body);
       body.layoutSizingHorizontal = "FILL";
-      const action = txt("Learn more", { style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: onP });
+      const action = txt("Learn more", { roleKey: "label", style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: onP });
       action.name = "action";
       action.textDecoration = "UNDERLINE";
       c.appendChild(action);
@@ -2491,7 +2519,7 @@
       c.resize(380, 10);
       pad(c, 10, 12, 10, 12);
       gap(c, 10);
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radContainer, radiusContainer);
       c.fills = [fillP(k.subtle)];
       c.strokes = [fillP(k.solid, 0.4)];
       c.strokeWeight = 1;
@@ -2499,7 +2527,7 @@
       const icon = txt(k.glyph, { style: "Medium", size: 13, weightVar: wMedium, colorP: k.text });
       icon.name = "icon-status";
       c.appendChild(icon);
-      const message = txt("A short inline alert message.", { size: 13, sizeVar: sizeSm, colorP: p.textSecondary });
+      const message = txt("A short inline alert message.", { roleKey: "body-sm", size: 13, sizeVar: sizeSm, colorP: p.textSecondary });
       c.appendChild(message);
       message.layoutSizingHorizontal = "FILL";
       out.push({ node: message, prop: "Message", def: "A short inline alert message." });
@@ -2532,8 +2560,8 @@
       c.counterAxisSizingMode = "AUTO";
       pad(c, 6, 10, 6, 10);
       c.fills = [fillP(p.surfaceInv)];
-      bindRadius(c, radSm, radiusSm);
-      const label = txt("Tooltip text", { style: "Medium", size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: p.textOnInverse });
+      bindRadius(c, radControl, radiusControl);
+      const label = txt("Tooltip text", { roleKey: "caption", style: "Medium", size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: p.textOnInverse });
       c.appendChild(label);
       out.push({ node: label, prop: "Content", def: "Tooltip text" });
     }
@@ -2548,11 +2576,11 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radLg, radiusLg);
-      const title = txt("Card title", { style: "Semi Bold", size: 16, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary });
+      bindRadius(c, radContainer, radiusContainer);
+      const title = txt("Card title", { roleKey: "heading-sm", style: "Semi Bold", size: 16, sizeVar: sizeMd, weightVar: wSemibold, colorP: p.textPrimary });
       c.appendChild(title);
       out.push({ node: title, prop: "Title", def: "Card title" });
-      const desc = txt("Supporting description that explains the card content.", { size: 14, sizeVar: sizeSm, colorP: p.textTertiary });
+      const desc = txt("Supporting description that explains the card content.", { roleKey: "body-md", size: 14, sizeVar: sizeSm, colorP: p.textTertiary });
       c.appendChild(desc);
       desc.layoutSizingHorizontal = "FILL";
       desc.textAutoResize = "HEIGHT";
@@ -2569,11 +2597,11 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radLg, radiusLg);
-      const title = txt("Modal title", { style: "Semi Bold", size: 18, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary });
+      bindRadius(c, radOverlay, radiusOverlay);
+      const title = txt("Modal title", { roleKey: "heading-md", style: "Semi Bold", size: 18, sizeVar: sizeLg, weightVar: wSemibold, colorP: p.textPrimary });
       c.appendChild(title);
       out.push({ node: title, prop: "Title", def: "Modal title" });
-      const body = txt("Body content explaining what this dialog does and what happens next.", { size: 14, sizeVar: sizeSm, colorP: p.textTertiary });
+      const body = txt("Body content explaining what this dialog does and what happens next.", { roleKey: "body-md", size: 14, sizeVar: sizeSm, colorP: p.textTertiary });
       c.appendChild(body);
       body.layoutSizingHorizontal = "FILL";
       body.textAutoResize = "HEIGHT";
@@ -2584,14 +2612,14 @@
       pad(secondary, 8, 14, 8, 14);
       secondary.strokes = [fillP(p.borderDefault)];
       secondary.strokeWeight = 1;
-      bindRadius(secondary, radMd, radiusMd);
-      secondary.appendChild(txt("Cancel", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary }));
+      bindRadius(secondary, radAction, radiusMd);
+      secondary.appendChild(txt("Cancel", { roleKey: "button", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary }));
       footer.appendChild(secondary);
       const primary = row("button-primary", 8);
       pad(primary, 8, 14, 8, 14);
       primary.fills = [fillP(p.action)];
-      bindRadius(primary, radMd, radiusMd);
-      primary.appendChild(txt("Confirm", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }));
+      bindRadius(primary, radAction, radiusMd);
+      primary.appendChild(txt("Confirm", { roleKey: "button", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }));
       footer.appendChild(primary);
       c.appendChild(footer);
       footer.layoutSizingHorizontal = "FILL";
@@ -2651,7 +2679,7 @@
       c.primaryAxisAlignItems = "MIN";
       c.resize(240, 8);
       c.fills = [fillP(p.surface3)];
-      c.cornerRadius = 9999;
+      bindRadius(c, radPill, 9999);
       const bar = figma.createFrame();
       bar.name = "bar";
       bar.resize(144, 8);
@@ -2674,7 +2702,7 @@
       c.primaryAxisAlignItems = "CENTER";
       c.counterAxisAlignItems = "CENTER";
       c.resize(sz.d, sz.d);
-      bindRadius(c, radSm, radiusSm);
+      bindRadius(c, radControl, radiusControl);
       const disabled = state === "Disabled";
       const hoverish = state === "Hover" || state === "Pressed";
       c.fills = hoverish ? [fillP(p.surface2, state === "Pressed" ? 1 : 0.8)] : [];
@@ -2725,7 +2753,7 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       c.clipsContent = true;
       ["Day", "Week", "Month"].forEach((label, i) => {
         const seg = row(`segment-${label.toLowerCase()}`, 8);
@@ -2759,7 +2787,7 @@
       c.counterAxisAlignItems = "CENTER";
       pad(c, sz.padV, sz.padH, sz.padV, sz.padH);
       gap(c, 10);
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       c.fills = state === "Hover" ? [fillP(p.surface1)] : [fillP(p.surface0)];
       c.strokes = [fillP(state === "Hover" ? p.borderStrong : p.borderDefault)];
       c.strokeWeight = 1;
@@ -2767,7 +2795,7 @@
       const icon = txt(provider.charAt(0), { style: "Bold", size: sz.f, colorP: p.textPrimary });
       icon.name = "provider-icon";
       c.appendChild(icon);
-      const label = txt(`Continue with ${provider}`, { style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: p.textPrimary });
+      const label = txt(`Continue with ${provider}`, { roleKey: "button", style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: p.textPrimary });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: `Continue with ${provider}` });
     }
@@ -2779,7 +2807,7 @@
       gap(c, 4);
       c.fills = [];
       const colorP = state === "Disabled" ? p.textDisabled : p.textBrand;
-      const label = txt("Learn more", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP });
+      const label = txt("Learn more", { roleKey: "label", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP });
       if (state === "Hover") label.textDecoration = "UNDERLINE";
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Learn more" });
@@ -2798,7 +2826,7 @@
       c.fills = [fillP(p.surfaceInv)];
       c.strokes = [fillP(p.borderStrong)];
       c.strokeWeight = 1;
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       const icon = txt(apple ? "" : "\u25B6", { size: 18, colorP: p.textOnInverse });
       icon.name = "store-icon";
       c.appendChild(icon);
@@ -2815,7 +2843,7 @@
       box.counterAxisSizingMode = "FIXED";
       box.primaryAxisAlignItems = "CENTER";
       box.counterAxisAlignItems = "CENTER";
-      bindRadius(box, radSm, radiusSm);
+      bindRadius(box, radControl, radiusControl);
       if (checked) {
         box.fills = [fillP(p.action)];
         box.appendChild(txt("\u2713", { style: "Bold", size: 11, colorP: p.textOnBrand }));
@@ -2834,7 +2862,7 @@
       c.counterAxisSizingMode = "AUTO";
       gap(c, 12);
       c.fills = [];
-      const legend = txt("Group label", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
+      const legend = txt("Group label", { roleKey: "label", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
       c.appendChild(legend);
       out.push({ node: legend, prop: "Legend", def: "Group label" });
       const options = [["Option one", true], ["Option two", false], ["Option three", false]];
@@ -2842,7 +2870,7 @@
         const r = row(`option-${label.toLowerCase().replace(/\s+/g, "-")}`, 8);
         r.counterAxisAlignItems = "CENTER";
         r.appendChild(checkBoxSquare(checked));
-        r.appendChild(txt(label, { size: 14, sizeVar: sizeSm, colorP: p.textPrimary }));
+        r.appendChild(txt(label, { roleKey: "label", size: 14, sizeVar: sizeSm, colorP: p.textPrimary }));
         c.appendChild(r);
       }
     }
@@ -2886,7 +2914,7 @@
       if (state === "Hover" && !selected) o.strokes = [fillP(p.borderStrong)];
       if (state === "Focused") focusRing(o, p.action.hex);
       c.appendChild(o);
-      const label = txt("Label", { size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary });
+      const label = txt("Label", { roleKey: "label", size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Label" });
     }
@@ -2896,7 +2924,7 @@
       c.counterAxisSizingMode = "AUTO";
       gap(c, 12);
       c.fills = [];
-      const legend = txt("Group label", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
+      const legend = txt("Group label", { roleKey: "label", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
       c.appendChild(legend);
       out.push({ node: legend, prop: "Legend", def: "Group label" });
       const options = [["Option one", true], ["Option two", false], ["Option three", false]];
@@ -2904,7 +2932,7 @@
         const r = row(`option-${label.toLowerCase().replace(/\s+/g, "-")}`, 8);
         r.counterAxisAlignItems = "CENTER";
         r.appendChild(radioCircle(selected));
-        r.appendChild(txt(label, { size: 14, sizeVar: sizeSm, colorP: p.textPrimary }));
+        r.appendChild(txt(label, { roleKey: "label", size: 14, sizeVar: sizeSm, colorP: p.textPrimary }));
         c.appendChild(r);
       }
     }
@@ -2922,8 +2950,8 @@
       if (state !== "Focused") tryBind(c, "strokeWeight", borderWidthVar());
       if (state === "Focused") focusRing(c, p.borderFocus.hex);
       if (state === "Error") focusRing(c, p.statusError.hex);
-      bindRadius(c, radMd, radiusMd);
-      const content = txt("Placeholder\u2026", { size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPlaceholder });
+      bindRadius(c, radAction, radiusMd);
+      const content = txt("Placeholder\u2026", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPlaceholder });
       content.name = "placeholder";
       c.appendChild(content);
       content.layoutSizingHorizontal = "FILL";
@@ -2958,7 +2986,7 @@
         cell.strokeWeight = active ? 1.5 : 1;
         if (!active) tryBind(cell, "strokeWeight", borderWidthVar());
         if (active) focusRing(cell, p.borderBrand.hex);
-        bindRadius(cell, radMd, radiusMd);
+        bindRadius(cell, radAction, radiusMd);
         if (state === "Filled") {
           cell.appendChild(txt(d, { style: "Medium", size: sz.f, weightVar: wMedium, colorP: p.textPrimary }));
         }
@@ -2975,7 +3003,7 @@
       c.strokes = [fillP(state === "Disabled" ? p.borderDisabled : p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       c.clipsContent = true;
       const disabled = state === "Disabled";
       const stepBtn = (label, name) => {
@@ -2996,7 +3024,7 @@
       value.strokeWeight = 0;
       value.strokeLeftWeight = 1;
       value.strokeRightWeight = 1;
-      const vtxt = txt("10", { size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPrimary });
+      const vtxt = txt("10", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPrimary });
       value.appendChild(vtxt);
       c.appendChild(value);
       out.push({ node: vtxt, prop: "Value", def: "10" });
@@ -3014,18 +3042,18 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       for (const t of ["Design", "Tokens"]) {
         const tag = row(`tag-${t.toLowerCase()}`, 4);
         tag.counterAxisAlignItems = "CENTER";
         pad(tag, 2, 6, 2, 8);
         tag.fills = [fillP(p.surface2)];
-        bindRadius(tag, radSm, radiusSm);
-        tag.appendChild(txt(t, { size: 12, sizeVar: sizeXs, colorP: p.textSecondary }));
+        bindRadius(tag, radControl, radiusControl);
+        tag.appendChild(txt(t, { roleKey: "label", size: 12, sizeVar: sizeXs, colorP: p.textSecondary }));
         tag.appendChild(txt("\u2715", { size: 10, colorP: p.textTertiary }));
         c.appendChild(tag);
       }
-      const placeholder = txt("Add tag\u2026", { size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder });
+      const placeholder = txt("Add tag\u2026", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder });
       placeholder.name = "placeholder";
       c.appendChild(placeholder);
       out.push({ node: placeholder, prop: "Placeholder", def: "Add tag\u2026" });
@@ -3043,7 +3071,7 @@
       c.strokes = [fillP(state === "Hover" ? p.borderBrand : p.borderDefault)];
       c.strokeWeight = 1;
       c.dashPattern = [6, 6];
-      bindRadius(c, radLg, radiusLg);
+      bindRadius(c, radContainer, radiusContainer);
       const iconWrap = figma.createFrame();
       iconWrap.name = "icon";
       iconWrap.layoutMode = "HORIZONTAL";
@@ -3057,10 +3085,10 @@
       iconWrap.resize(40, 40);
       c.appendChild(iconWrap);
       const title = row("title", 4);
-      title.appendChild(txt("Click to upload", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand }));
-      title.appendChild(txt("or drag and drop", { size: 14, sizeVar: sizeSm, colorP: p.textSecondary }));
+      title.appendChild(txt("Click to upload", { roleKey: "label", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textBrand }));
+      title.appendChild(txt("or drag and drop", { roleKey: "body-sm", size: 14, sizeVar: sizeSm, colorP: p.textSecondary }));
       c.appendChild(title);
-      const hint = txt("SVG, PNG or JPG (max. 800\xD7400px)", { size: 12, sizeVar: sizeXs, colorP: p.textTertiary });
+      const hint = txt("SVG, PNG or JPG (max. 800\xD7400px)", { roleKey: "caption", size: 12, sizeVar: sizeXs, colorP: p.textTertiary });
       c.appendChild(hint);
       out.push({ node: hint, prop: "Hint", def: "SVG, PNG or JPG (max. 800\xD7400px)" });
     }
@@ -3080,7 +3108,7 @@
       c.paddingRight = 2;
       c.itemSpacing = 2;
       c.fills = [fillP(p.surface2)];
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       ["List", "Board", "Timeline"].forEach((label, i) => {
         const active = i === 0;
         const seg = row(`segment-${label.toLowerCase()}`, 8);
@@ -3092,7 +3120,7 @@
           seg.fills = [fillP(p.surface0)];
           seg.strokes = [fillP(p.borderDefault, 0.7)];
           seg.strokeWeight = 1;
-          bindRadius(seg, radSm, radiusSm);
+          bindRadius(seg, radControl, radiusControl);
         }
         seg.appendChild(txt(label, {
           style: active ? "Medium" : "Regular",
@@ -3166,7 +3194,7 @@
       c.counterAxisSizingMode = "AUTO";
       gap(c, 12);
       c.fills = [];
-      const legend = txt("Notification settings", { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
+      const legend = txt("Notification settings", { roleKey: "label", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
       c.appendChild(legend);
       out.push({ node: legend, prop: "Legend", def: "Notification settings" });
       const options = [["Email alerts", true], ["Push notifications", false], ["Weekly digest", false]];
@@ -3174,7 +3202,7 @@
         const r = row(`option-${label.toLowerCase().replace(/\s+/g, "-")}`, 10);
         r.counterAxisAlignItems = "CENTER";
         r.appendChild(switchTrack(on));
-        r.appendChild(txt(label, { size: 14, sizeVar: sizeSm, colorP: p.textPrimary }));
+        r.appendChild(txt(label, { roleKey: "label", size: 14, sizeVar: sizeSm, colorP: p.textPrimary }));
         c.appendChild(r);
       }
     }
@@ -3191,7 +3219,7 @@
       c.counterAxisAlignItems = "CENTER";
       pad(c, sz.padV, sz.padH, sz.padV, sz.padH + 2);
       gap(c, 6);
-      c.cornerRadius = 9999;
+      bindRadius(c, radPill, 9999);
       const disabled = state === "Disabled";
       if (selected) {
         c.fills = [fillP(p.brandSubtle, state === "Hover" ? 0.85 : 1)];
@@ -3201,7 +3229,7 @@
         c.fills = [fillP(state === "Hover" ? p.surface3 : p.surface2)];
       }
       const colorP = disabled ? p.textDisabled : selected ? p.textBrand : p.textSecondary;
-      const label = txt("Chip", { style: "Medium", size: sz.f, sizeVar: sizeXs, weightVar: wMedium, colorP });
+      const label = txt("Chip", { roleKey: "label", style: "Medium", size: sz.f, sizeVar: sizeXs, weightVar: wMedium, colorP });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Chip" });
       const remove = txt("\u2715", { size: sz.rm, colorP, opacity: 0.8 });
@@ -3217,7 +3245,7 @@
       c.counterAxisAlignItems = "CENTER";
       pad(c, 3, 10, 3, 8);
       gap(c, 6);
-      c.cornerRadius = 9999;
+      bindRadius(c, radPill, 9999);
       c.fills = [fillP(k.soft)];
       const dot = figma.createFrame();
       dot.name = "dot";
@@ -3227,7 +3255,7 @@
       c.appendChild(dot);
       dot.layoutSizingHorizontal = "FIXED";
       dot.layoutSizingVertical = "FIXED";
-      const label = txt(status, { style: "Medium", size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: k.text });
+      const label = txt(status, { roleKey: "label", style: "Medium", size: 12, sizeVar: sizeXs, weightVar: wMedium, colorP: k.text });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: status });
     }
@@ -3300,7 +3328,7 @@
       trigger.strokes = [fillP(open ? p.borderBrand : p.borderDefault)];
       trigger.strokeWeight = open ? 1.5 : 1;
       if (!open) tryBind(trigger, "strokeWeight", borderWidthVar());
-      bindRadius(trigger, radMd, radiusMd);
+      bindRadius(trigger, radAction, radiusMd);
       pad(trigger, 10, 12, 10, 12);
       if (open) focusRing(trigger, p.borderBrand.hex);
       const lead = row("lead", 8);
@@ -3322,7 +3350,7 @@
         panel.fills = [fillP(p.surface1)];
         panel.strokes = [fillP(p.borderDefault)];
         panel.strokeWeight = 1;
-        bindRadius(panel, radMd, radiusMd);
+        bindRadius(panel, radOverlay, radiusOverlay);
         pad(panel, 6, 6, 6, 6);
         panel.effects = [{ type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.12 }, offset: { x: 0, y: 4 }, radius: 16, spread: 0, visible: true, blendMode: "NORMAL" }];
         const options = [["Berlin", true], ["Bern", false], ["Beirut", false]];
@@ -3330,9 +3358,9 @@
           const opt = row(`option-${label.toLowerCase()}`, 8);
           opt.primaryAxisSizingMode = "FIXED";
           opt.fills = active ? [fillP(p.surfaceSelected)] : [];
-          bindRadius(opt, radSm, radiusSm);
+          bindRadius(opt, radControl, radiusControl);
           pad(opt, 8, 10, 8, 10);
-          opt.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textPrimary }));
+          opt.appendChild(txt(label, { roleKey: "label", size: 13, sizeVar: sizeSm, colorP: p.textPrimary }));
           panel.appendChild(opt);
           opt.layoutSizingHorizontal = "FILL";
         }
@@ -3350,21 +3378,21 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       c.clipsContent = true;
       const prefix = row("prefix", 0);
       prefix.counterAxisSizingMode = "FIXED";
       prefix.counterAxisAlignItems = "CENTER";
       prefix.fills = [fillP(p.surface2)];
       pad(prefix, 10, 12, 10, 12);
-      prefix.appendChild(txt("https://", { size: 14, sizeVar: sizeSm, colorP: p.textTertiary }));
+      prefix.appendChild(txt("https://", { roleKey: "body-sm", size: 14, sizeVar: sizeSm, colorP: p.textTertiary }));
       c.appendChild(prefix);
       prefix.resize(prefix.width, 40);
       const field = row("field", 0);
       field.primaryAxisSizingMode = "FIXED";
       field.counterAxisSizingMode = "FIXED";
       pad(field, 10, 12, 10, 12);
-      const value = txt("createui.co", { size: 14, sizeVar: sizeSm, colorP: p.textPrimary });
+      const value = txt("createui.co", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: p.textPrimary });
       value.name = "value";
       field.appendChild(value);
       c.appendChild(field);
@@ -3375,7 +3403,7 @@
       suffix.counterAxisAlignItems = "CENTER";
       suffix.fills = [fillP(p.action)];
       pad(suffix, 10, 14, 10, 14);
-      const go = txt("Copy", { style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand });
+      const go = txt("Copy", { roleKey: "button", style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand });
       suffix.appendChild(go);
       c.appendChild(suffix);
       suffix.resize(suffix.width, 40);
@@ -3394,7 +3422,7 @@
       c.strokes = [fillP(dragging ? p.borderBrand : error ? p.borderError : p.borderStrong)];
       c.strokeWeight = dragging ? 1.5 : 1;
       c.dashPattern = [6, 6];
-      bindRadius(c, radLg, radiusLg);
+      bindRadius(c, radContainer, radiusContainer);
       c.appendChild(txt(error ? "\u26A0" : "\u2912", { size: 20, colorP: error ? p.iconError : dragging ? p.iconBrand : p.iconTertiary }));
       const title = txt(
         dragging ? "Drop files to upload" : error ? "File type not accepted" : "Drag & drop or click to browse",
@@ -3421,7 +3449,7 @@
       c.fills = [];
       const error = state === "Error";
       const labelRow = row("label-row", 4);
-      const label = txt("Label", { style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
+      const label = txt("Label", { roleKey: "label", style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
       labelRow.appendChild(label);
       labelRow.appendChild(txt("*", { style: "Medium", size: 13, weightVar: wMedium, colorP: p.textError }));
       c.appendChild(labelRow);
@@ -3433,9 +3461,9 @@
       box.strokes = [fillP(error ? p.borderError : p.borderDefault)];
       box.strokeWeight = 1;
       if (!error) tryBind(box, "strokeWeight", borderWidthVar());
-      bindRadius(box, radMd, radiusMd);
+      bindRadius(box, radAction, radiusMd);
       pad(box, 10, 12, 10, 12);
-      box.appendChild(txt("Placeholder Text..", { size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder }));
+      box.appendChild(txt("Placeholder Text..", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder }));
       c.appendChild(box);
       box.resize(260, 40);
       const hint = txt(error ? "This field is required." : "Helper text goes here.", {
@@ -3454,12 +3482,12 @@
       c.counterAxisAlignItems = "CENTER";
       gap(c, 4);
       c.fills = [];
-      const label = txt("Label", { style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
+      const label = txt("Label", { roleKey: "label", style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Label" });
       if (required) c.appendChild(txt("*", { style: "Medium", size: 13, weightVar: wMedium, colorP: p.textError }));
       else {
-        const hint = txt("(optional)", { size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder });
+        const hint = txt("(optional)", { roleKey: "caption", size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder });
         hint.name = "hint";
         c.appendChild(hint);
       }
@@ -3508,7 +3536,7 @@
       }
       c.appendChild(stars);
       if (interactive) {
-        const count = txt("4.0 \xB7 128 reviews", { size: 12, sizeVar: sizeXs, colorP: p.textTertiary });
+        const count = txt("4.0 \xB7 128 reviews", { roleKey: "caption", size: 12, sizeVar: sizeXs, colorP: p.textTertiary });
         count.name = "count";
         c.appendChild(count);
         out.push({ node: count, prop: "Count", def: "4.0 \xB7 128 reviews" });
@@ -3566,7 +3594,7 @@
         head.primaryAxisSizingMode = "FIXED";
         head.primaryAxisAlignItems = "SPACE_BETWEEN";
         pad(head, 14, 4, 14, 4);
-        head.appendChild(txt(q, { style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textPrimary }));
+        head.appendChild(txt(q, { roleKey: "label", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textPrimary }));
         head.appendChild(txt(openRow ? "\u25B4" : "\u25BE", { size: 12, colorP: p.iconTertiary }));
         item.appendChild(head);
         head.layoutSizingHorizontal = "FILL";
@@ -3611,7 +3639,7 @@
       c.fills = [fillP(p.surface2)];
       c.strokes = [fillP(p.borderSubtle)];
       c.strokeWeight = 1;
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radContainer, radiusContainer);
       const tag = row("ratio", 0);
       tag.fills = [fillP(p.surfaceInv, 0.85)];
       tag.cornerRadius = 999;
@@ -3629,21 +3657,21 @@
       c.fills = [fillP(p.surface1)];
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
-      bindRadius(c, radLg, radiusLg);
+      bindRadius(c, radOverlay, radiusOverlay);
       c.effects = [{ type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.14 }, offset: { x: 0, y: 6 }, radius: 24, spread: -4, visible: true, blendMode: "NORMAL" }];
-      const title = txt("Share this view", { style: "Semi Bold", size: 14, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary });
+      const title = txt("Share this view", { roleKey: "heading-sm", style: "Semi Bold", size: 14, sizeVar: sizeSm, weightVar: wSemibold, colorP: p.textPrimary });
       c.appendChild(title);
       out.push({ node: title, prop: "Title", def: "Share this view" });
-      const body = txt("Anyone with the link can see the current filters and sorting.", { size: 13, sizeVar: sizeSm, colorP: p.textTertiary });
+      const body = txt("Anyone with the link can see the current filters and sorting.", { roleKey: "body-sm", size: 13, sizeVar: sizeSm, colorP: p.textTertiary });
       c.appendChild(body);
       body.layoutSizingHorizontal = "FILL";
       body.textAutoResize = "HEIGHT";
       out.push({ node: body, prop: "Body", def: body.characters });
       const action = row("action", 6);
       action.fills = [fillP(p.action)];
-      bindRadius(action, radMd, radiusMd);
+      bindRadius(action, radAction, radiusMd);
       pad(action, 8, 14, 8, 14);
-      action.appendChild(txt("Copy link", { style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }));
+      action.appendChild(txt("Copy link", { roleKey: "button", style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }));
       c.appendChild(action);
       c.resize(260, c.height);
     }
@@ -3657,9 +3685,9 @@
       c.appendChild(txt("\u24D8", { size: 14, colorP: p.iconQuaternary }));
       const bubble = row("bubble", 0);
       bubble.fills = [fillP(p.surfaceInv)];
-      bindRadius(bubble, radSm, radiusSm);
+      bindRadius(bubble, radControl, radiusControl);
       pad(bubble, 6, 10, 6, 10);
-      const tip = txt("Shown on hover and focus", { size: 12, sizeVar: sizeXs, colorP: p.textOnInverse });
+      const tip = txt("Shown on hover and focus", { roleKey: "caption", size: 12, sizeVar: sizeXs, colorP: p.textOnInverse });
       bubble.appendChild(tip);
       c.appendChild(bubble);
       out.push({ node: tip, prop: "Content", def: "Shown on hover and focus" });
@@ -3673,7 +3701,7 @@
       c.fills = [fillP(p.surface1)];
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radContainer, radiusContainer);
       c.clipsContent = true;
       const list = col("content", 2);
       list.primaryAxisSizingMode = "FIXED";
@@ -3681,8 +3709,8 @@
         const rowF = row(`row-${label.toLowerCase().replace(/\s+/g, "-")}`, 8);
         rowF.primaryAxisSizingMode = "FIXED";
         pad(rowF, 7, 10, 7, 10);
-        bindRadius(rowF, radSm, radiusSm);
-        rowF.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textSecondary }));
+        bindRadius(rowF, radControl, radiusControl);
+        rowF.appendChild(txt(label, { roleKey: "body-sm", size: 13, sizeVar: sizeSm, colorP: p.textSecondary }));
         list.appendChild(rowF);
         rowF.layoutSizingHorizontal = "FILL";
       }
@@ -3720,7 +3748,7 @@
         b.counterAxisSizingMode = "FIXED";
         b.primaryAxisAlignItems = "CENTER";
         b.counterAxisAlignItems = "CENTER";
-        bindRadius(b, radSm, radiusSm);
+        bindRadius(b, radControl, radiusControl);
         if (kind === "current") b.fills = [fillP(p.action)];
         b.appendChild(txt(label, {
           style: kind === "current" ? "Medium" : "Regular",
@@ -3771,7 +3799,7 @@
       c.fills = [fillP(p.surface1)];
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
-      bindRadius(c, radMd, radiusMd);
+      bindRadius(c, radAction, radiusMd);
       c.effects = [{ type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.14 }, offset: { x: 0, y: 6 }, radius: 24, spread: -4, visible: true, blendMode: "NORMAL" }];
       for (const item of items) {
         if (item.kind === "separator") {
@@ -3788,11 +3816,11 @@
         rowF.primaryAxisSizingMode = "FIXED";
         rowF.primaryAxisAlignItems = "SPACE_BETWEEN";
         pad(rowF, 8, 10, 8, 10);
-        bindRadius(rowF, radSm, radiusSm);
+        bindRadius(rowF, radControl, radiusControl);
         if (item.kind === "active") rowF.fills = [fillP(p.surface1Hover)];
         const colorP = item.kind === "danger" ? p.textError : p.textPrimary;
-        rowF.appendChild(txt(item.label, { size: 13, sizeVar: sizeSm, colorP }));
-        if (item.hint) rowF.appendChild(txt(item.hint, { size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder }));
+        rowF.appendChild(txt(item.label, { roleKey: "label", size: 13, sizeVar: sizeSm, colorP }));
+        if (item.hint) rowF.appendChild(txt(item.hint, { roleKey: "caption", size: 12, sizeVar: sizeXs, colorP: p.textPlaceholder }));
         c.appendChild(rowF);
         rowF.layoutSizingHorizontal = "FILL";
       }
@@ -3824,21 +3852,21 @@
       c.fills = [fillP(p.surface1)];
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
-      bindRadius(c, radLg, radiusLg);
+      bindRadius(c, radOverlay, radiusOverlay);
       c.clipsContent = true;
       c.effects = [{ type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.18 }, offset: { x: 0, y: 12 }, radius: 40, spread: -8, visible: true, blendMode: "NORMAL" }];
       const search = row("search", 10);
       search.primaryAxisSizingMode = "FIXED";
       pad(search, 14, 16, 14, 16);
       search.appendChild(txt("\u{1F50D}", { size: 13, colorP: p.iconQuaternary }));
-      const query = txt("Type a command or search\u2026", { size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder });
+      const query = txt("Type a command or search\u2026", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder });
       search.appendChild(query);
       query.layoutSizingHorizontal = "FILL";
       const kbd = row("kbd", 0);
       kbd.fills = [fillP(p.surface2)];
       kbd.strokes = [fillP(p.borderSubtle)];
       kbd.strokeWeight = 1;
-      bindRadius(kbd, radSm, radiusSm);
+      bindRadius(kbd, radControl, radiusControl);
       pad(kbd, 2, 6, 2, 6);
       kbd.appendChild(txt("\u2318K", { size: 11, colorP: p.textTertiary }));
       search.appendChild(kbd);
@@ -3869,10 +3897,10 @@
         const rowF = row(`cmd-${label.toLowerCase().replace(/\s+/g, "-")}`, 10);
         rowF.primaryAxisSizingMode = "FIXED";
         pad(rowF, 9, 10, 9, 10);
-        bindRadius(rowF, radSm, radiusSm);
+        bindRadius(rowF, radControl, radiusControl);
         if (active) rowF.fills = [fillP(p.surface1Hover)];
         rowF.appendChild(txt(glyph, { size: 13, colorP: p.iconTertiary }));
-        rowF.appendChild(txt(label, { size: 13, sizeVar: sizeSm, colorP: p.textPrimary }));
+        rowF.appendChild(txt(label, { roleKey: "body-sm", size: 13, sizeVar: sizeSm, colorP: p.textPrimary }));
         list.appendChild(rowF);
         rowF.layoutSizingHorizontal = "FILL";
       }
@@ -3909,7 +3937,7 @@
       for (const [label, active] of links) {
         const link = row(`link-${label.toLowerCase()}`, 0);
         pad(link, 6, 12, 6, 12);
-        bindRadius(link, radSm, radiusSm);
+        bindRadius(link, radControl, radiusControl);
         if (active) link.fills = [fillP(p.surface1Hover)];
         link.appendChild(txt(label, {
           style: active ? "Medium" : "Regular",
@@ -3957,7 +3985,7 @@
         const rowF = row(`item-${label.toLowerCase()}`, 10);
         rowF.primaryAxisSizingMode = "FIXED";
         pad(rowF, 8, 10, 8, 10);
-        bindRadius(rowF, radSm, radiusSm);
+        bindRadius(rowF, radControl, radiusControl);
         if (active) rowF.fills = [fillP(p.brandSubtle)];
         rowF.appendChild(txt(glyph, { size: 13, colorP: active ? p.iconBrand : p.iconTertiary }));
         rowF.appendChild(txt(label, {
@@ -5011,7 +5039,7 @@
     let plannedDone = 0;
     const legacySamplePage = pageByName("\u2B21 Sample");
     if (legacySamplePage) legacySamplePage.name = SAMPLE_PAGE;
-    const samplePage = (_j = makePage(SAMPLE_PAGE)) != null ? _j : oldPage != null ? oldPage : figma.currentPage;
+    const samplePage = (_r = makePage(SAMPLE_PAGE)) != null ? _r : oldPage != null ? oldPage : figma.currentPage;
     await harvest(samplePage);
     for (const { entry } of planned) {
       const legacy = pageByName(ITEM_PREFIX + entry.page);
