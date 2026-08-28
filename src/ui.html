@@ -1400,6 +1400,7 @@ let parsedTokens   = null
 let syncTimer      = null
 let syncRunning    = false
 let lastHash       = null   // hash of the last imported token payload (persisted)
+let pendingHash    = null   // hash of a fetch/import in flight — committed only on 'done'
 let importInFlight = false  // an import is running in the sandbox — don't overlap
 let failCount      = 0
 
@@ -2405,6 +2406,7 @@ function noteActivity() {
     // Live Sync can run again and the user isn't stuck staring at a dead bar.
     $('stallResetBtn').addEventListener('click', () => {
       importInFlight = false
+      pendingHash = null
       hideProgress()
       addLog('Import marked as stalled and reset — if it was still running, its result may still land', 'error')
       updateSyncStatus('error', 'Import reset after a stall')
@@ -2418,8 +2420,8 @@ function runImport() {
   if (!parsedTokens || importInFlight) return
   if (!anyScopeOn()) return
 
-  // Manual import counts as the latest synced state
-  lastHash = hashStr(JSON.stringify(parsedTokens))
+  // Manual import — hash commits only after the sandbox reports 'done'
+  pendingHash = hashStr(JSON.stringify(parsedTokens))
   importInFlight = true
   guideDone = true
   saveSettings()
@@ -2461,7 +2463,7 @@ function buildMissingAssets() {
   const needsVars = fileAssets.variables === 0
   if (!needsSample && !needsCover && !needsDocumentation && !needsVars) return
 
-  lastHash = hashStr(JSON.stringify(tokens))
+  pendingHash = hashStr(JSON.stringify(tokens))
   importInFlight = true
   setAside('log')
   showProgress('Starting…', 0, 0)
@@ -2538,12 +2540,13 @@ async function fetchAndSync(url) {
       updateSyncStatus('active', 'Up to date — no changes')
       return
     }
-    lastHash = hash
+    pendingHash = hash
     parsedTokens = tokens
     showPreview(tokens)
     $('exportTokensBtn').disabled = false
 
-    addLog(`Sync: fetched "${tokens.project}" — refreshing variables…`)
+    const payloadFamily = (tokens.typography && tokens.typography.fontFamily) || '?'
+    addLog(`Sync: fetched "${tokens.project}" — payload family "${payloadFamily}"`)
     updateSyncStatus('active', `Refreshing "${tokens.project}"…`)
     importInFlight = true
     showProgress('Starting…', 0, 0)
@@ -2734,7 +2737,21 @@ window.onmessage = (event) => {
   if (msg.type === 'done') {
     importInFlight = false
     hideProgress()
-    if (syncRunning) updateSyncStatus('active', 'Synced ✓')
+    if (msg.hadError) {
+      // A partial import must not be marked as current. Keeping the old hash
+      // means Live Sync retries this payload on its next tick instead of
+      // claiming success while a Figma variable still holds an old value.
+      pendingHash = null
+      if (syncRunning) updateSyncStatus('error', 'Sync incomplete — see Activity')
+    } else {
+      if (pendingHash) {
+        lastHash = pendingHash
+        pendingHash = null
+      } else if (parsedTokens) {
+        lastHash = hashStr(JSON.stringify(parsedTokens))
+      }
+      if (syncRunning) updateSyncStatus('active', 'Synced ✓')
+    }
     $('exportTokensBtn').disabled = false
     // What just landed in the file IS the connected system now — the sandbox
     // persisted the same payload to THIS file (figma.root.pluginData), so
@@ -2763,6 +2780,7 @@ window.onmessage = (event) => {
 
   if (msg.type === 'error') {
     importInFlight = false
+    pendingHash = null
     hideProgress()
     if (syncRunning) updateSyncStatus('error', 'Import failed — see log')
     $('runTitle').textContent = 'Import failed'
@@ -2855,6 +2873,7 @@ window.onmessage = (event) => {
     storedTokens = null
     lastImportAt = null
     lastHash = null
+    pendingHash = null
     $('syncUrl').value = ''
     $('exportTokensBtn').disabled = true
     addLog('File reset — no system or sync connected to this file', 'success')

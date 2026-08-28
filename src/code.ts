@@ -177,6 +177,132 @@ function pxToFloat(val: string): number {
   return parseFloat(val.replace('px', '').replace('rem', '')) || 0
 }
 
+// Figma font-family variables want a plain family name ("DM Sans"), not a CSS
+// stack ("'DM Sans', sans-serif"). Payloads should ship the plain name, but
+// hand-edited / W3C-adapted files sometimes carry a stack — normalize before
+// every write so setValueForMode doesn't silently no-op or throw.
+function normalizeFontFamilyName(raw: string | undefined | null): string {
+  if (!raw || typeof raw !== 'string') return 'Inter'
+  const trimmed = raw.trim()
+  if (!trimmed) return 'Inter'
+  const quoted = /^['"]([^'"]+)['"]/.exec(trimmed)
+  if (quoted?.[1]) return quoted[1].trim()
+  const first = trimmed.split(',')[0].trim().replace(/^['"]|['"]$/g, '')
+  return first || 'Inter'
+}
+
+function varStringAt(v: Variable, modeId: string): string | undefined {
+  const val = v.valuesByMode[modeId]
+  return typeof val === 'string' ? val : undefined
+}
+
+type LogicalStyle = 'Regular' | 'Medium' | 'Semi Bold' | 'Bold'
+
+const STYLE_PREF: Record<LogicalStyle, string[]> = {
+  'Regular': ['Regular', 'Normal', 'Book', 'Roman'],
+  'Medium': ['Medium', 'Regular', 'Book'],
+  'Semi Bold': ['Semi Bold', 'SemiBold', 'Semibold', 'Demi Bold', 'DemiBold', 'Demi', 'Bold', 'Medium'],
+  'Bold': ['Bold', 'Semi Bold', 'SemiBold', 'Black', 'Heavy', 'Extra Bold', 'ExtraBold', 'Medium'],
+}
+
+interface FontResolver {
+  bodyFamily: string
+  headingFamily: string
+  loadedFamilies: Set<string>
+  fontFor(style: LogicalStyle, heading?: boolean): FontName
+}
+
+// These are the Figma counterparts of the CSS contract
+// `--font-family-body` / `--font-family-heading`.  Keep the role in the
+// variable name: a bare `family` made it impossible to tell which font a
+// variable represented in the Typography collection.
+const TYPOGRAPHY_FAMILY_VARS = {
+  body: 'font-family-body',
+  display: 'font-family-display',
+  // Names emitted by pre-role plugin builds. They are only maintained when a
+  // file already has them, preserving existing variable bindings on upgrade.
+  legacyBody: 'family',
+  legacyDisplay: 'heading-family',
+} as const
+
+/** Resolve body + heading families against the fonts Figma actually has.
+ *  Used by importStyles (text styles) and importSample (components) so a sync
+ *  never sets fontName to an Inter style spelling that Poppins rejects. */
+async function createFontResolver(
+  tokens: DesignTokens,
+): Promise<FontResolver> {
+  const bodyFamily = normalizeFontFamilyName(tokens.typography?.fontFamily)
+  const headingFamily = normalizeFontFamilyName(tokens.typography?.headingFontFamily ?? bodyFamily)
+  const stylesByFamily = new Map<string, Set<string>>()
+  try {
+    for (const f of await figma.listAvailableFontsAsync()) {
+      let s = stylesByFamily.get(f.fontName.family)
+      if (!s) { s = new Set(); stylesByFamily.set(f.fontName.family, s) }
+      s.add(f.fontName.style)
+    }
+  } catch { /* every resolve below then lands on Inter */ }
+
+  const resolvedFont = new Map<string, FontName>()
+  const pick = (fam: string, logical: LogicalStyle): string | undefined => {
+    const have = stylesByFamily.get(fam)
+    if (!have) return undefined
+    for (const cand of STYLE_PREF[logical]) if (have.has(cand)) return cand
+    return [...have].find((st) => !/italic|oblique/i.test(st)) ?? [...have][0]
+  }
+  async function loadLogical(family: string, logical: LogicalStyle): Promise<void> {
+    const key = `${family}|${logical}`
+    if (resolvedFont.has(key)) return
+    const wantStyle = pick(family, logical)
+    if (wantStyle) {
+      try {
+        await figma.loadFontAsync({ family, style: wantStyle })
+        resolvedFont.set(key, { family, style: wantStyle })
+        return
+      } catch { /* installed per the list but unloadable — fall back */ }
+    }
+    const interStyle = pick('Inter', logical) ?? 'Regular'
+    try { await figma.loadFontAsync({ family: 'Inter', style: interStyle }) } catch { /* Inter is always present */ }
+    resolvedFont.set(key, { family: 'Inter', style: interStyle })
+  }
+  for (const family of new Set([bodyFamily, headingFamily])) {
+    for (const logical of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) await loadLogical(family, logical)
+  }
+  const loadedFamilies = new Set<string>()
+  for (const family of new Set([bodyFamily, headingFamily])) {
+    if ([...resolvedFont.entries()].some(([k, fn]) => k.startsWith(`${family}|`) && fn.family === family)) {
+      loadedFamilies.add(family)
+    }
+  }
+  return {
+    bodyFamily,
+    headingFamily,
+    loadedFamilies,
+    fontFor: (style, heading = false) =>
+      resolvedFont.get(`${heading ? headingFamily : bodyFamily}|${style}`) ?? { family: 'Inter', style },
+  }
+}
+
+/** The system owns the token values. Figma's installed-font catalogue only
+ *  decides whether generated text can render that value, never what we write
+ *  into Typography. Warn once per import for every distinct role/family that
+ *  the system requests but this Figma workspace does not provide. */
+async function warnUnavailableSystemFonts(tokens: DesignTokens): Promise<void> {
+  const body = normalizeFontFamilyName(tokens.typography?.fontFamily)
+  const display = normalizeFontFamilyName(tokens.typography?.headingFontFamily ?? body)
+  const available = new Set<string>()
+  try {
+    for (const f of await figma.listAvailableFontsAsync()) available.add(f.fontName.family)
+  } catch {
+    log('⚠ Could not inspect fonts available in this Figma workspace; Typography values were still synced from the system.')
+    return
+  }
+  for (const [role, family] of [['body', body], ['display', display]] as const) {
+    if (!available.has(family)) {
+      log(`⚠ Font family "${family}" for ${role} is not available in this Figma workspace. The system value was kept in Typography; install or enable the font, then sync again to render generated text with it.`)
+    }
+  }
+}
+
 function weightKeyFromStyle(style: string): string {
   if (style === 'Bold') return 'bold'
   if (style === 'Semi Bold') return 'semibold'
@@ -204,8 +330,10 @@ function bindAllTextFields(
   opts: { sizeKey?: string; roleKey?: string; weightKey?: string; heading?: boolean },
 ) {
   const family = opts.roleKey
-    ? (typo.get(`role/${opts.roleKey}/family`) ?? (opts.heading ? typo.get('heading-family') : undefined) ?? typo.get('family'))
-    : (opts.heading ? (typo.get('heading-family') ?? typo.get('family')) : typo.get('family'))
+    ? (typo.get(`role/${opts.roleKey}/family`) ?? (opts.heading ? (typo.get(TYPOGRAPHY_FAMILY_VARS.display) ?? typo.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) : undefined) ?? typo.get(TYPOGRAPHY_FAMILY_VARS.body) ?? typo.get(TYPOGRAPHY_FAMILY_VARS.legacyBody))
+    : (opts.heading
+      ? (typo.get(TYPOGRAPHY_FAMILY_VARS.display) ?? typo.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) ?? typo.get(TYPOGRAPHY_FAMILY_VARS.body) ?? typo.get(TYPOGRAPHY_FAMILY_VARS.legacyBody))
+      : (typo.get(TYPOGRAPHY_FAMILY_VARS.body) ?? typo.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)))
   if (family) { try { t.setBoundVariable('fontFamily', family) } catch {} }
 
   const sizeVar = (opts.roleKey ? typo.get(`role/${opts.roleKey}/size`) : undefined)
@@ -455,7 +583,7 @@ function scopesForCollection(collName: string, varName: string): VariableScope[]
       if (varName.startsWith('weight/') || varName.endsWith('/weight')) return ['FONT_WEIGHT']
       if (varName.startsWith('line-height/')) return ['LINE_HEIGHT']
       if (varName.startsWith('letter-spacing/')) return ['LETTER_SPACING']
-      if (varName === 'family' || varName === 'heading-family' || varName.endsWith('/family')) return ['FONT_FAMILY']
+      if (varName === TYPOGRAPHY_FAMILY_VARS.body || varName === TYPOGRAPHY_FAMILY_VARS.display || varName === TYPOGRAPHY_FAMILY_VARS.legacyBody || varName === TYPOGRAPHY_FAMILY_VARS.legacyDisplay || varName.endsWith('/family')) return ['FONT_FAMILY']
       return undefined
     }
     default: return undefined
@@ -1171,7 +1299,22 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     scopes?: VariableScope[],
   ): Variable {
     const safe = figmaVarName(name)
-    const found = cache.get(safe)
+    let found = cache.get(safe)
+    if (found) {
+      // A wrong type can't be updated in place. An alias can: assigning a
+      // concrete value replaces the alias while retaining its variable id and
+      // therefore all existing Figma bindings.
+      const stale = found.resolvedType !== type
+      if (stale) {
+        try {
+          found.remove()
+          const i = allVars.indexOf(found)
+          if (i !== -1) allVars.splice(i, 1)
+          cache.delete(safe)
+          found = undefined
+        } catch { /* still bound — update in place below */ }
+      }
+    }
     if (found) {
       if (scopes) { try { found.scopes = scopes } catch { /* plan may reject a scope */ } }
       return found
@@ -1204,9 +1347,13 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     return created
   }
 
-  // Single-mode collections resolve the same everywhere — write the default mode.
+  // Single-mode collections resolve the same everywhere — write every mode in
+  // case a designer added extras; only updating defaultModeId left a font-family
+  // stuck on an old value while the panel showed a different mode column.
   function setDefault(collection: VariableCollection, v: Variable, value: VariableValue) {
-    v.setValueForMode(collection.defaultModeId, value)
+    for (const mode of collection.modes) {
+      v.setValueForMode(mode.modeId, value)
+    }
   }
 
   // Theme columns (modes) the CURRENT payload no longer names are stale: they
@@ -1296,6 +1443,136 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       n++
     }
     return n
+  }
+
+  // ── Typography FIRST ───────────────────────────────────────────────────────
+  // family / size/* / weight/* / role/* must sync even when Color Semantics
+  // throws later (mode cap, rebuild, a bound stale variable…). Those failures
+  // used to abort importVariables before this block ran — the Activity log
+  // showed "Synced ✓" while `family` stayed on Open Sans.
+  try {
+    const typoCol = findOrCreateCollection(COLLECTIONS.typography)
+    const typoCache = cacheFor(typoCol)
+    function typoVar(name: string, type: VariableResolvedDataType, value: VariableValue) {
+      const variable = upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name))
+      setDefault(typoCol, variable, value)
+    }
+    // FONT_FAMILY values are the point of the typography sync. Do not treat a
+    // successful fetch as proof that Figma accepted the write: re-read the
+    // exact variable object after writing every collection mode. This turns a
+    // silent stale value (the UI says Roboto while Variables still says
+    // Montserrat) into a failed sync that is retried on the next Live Sync tick.
+    async function writeFontFamily(name: string, family: string): Promise<void> {
+      const variable = upsertVarIn(typoCol, typoCache, name, 'STRING', scopesForCollection(COLLECTIONS.typography, name))
+      setDefault(typoCol, variable, family)
+      const verify = async () => {
+        const current = await figma.variables.getVariableByIdAsync(variable.id)
+        if (!current) return false
+        return typoCol.modes.every((mode) => current.valuesByMode[mode.modeId] === family)
+      }
+      if (await verify()) return
+      // One retry uses a freshly fetched Variable object rather than the
+      // import cache, which can be stale after a Figma-side edit.
+      const fresh = await figma.variables.getVariableByIdAsync(variable.id)
+      if (fresh) setDefault(typoCol, fresh, family)
+      if (!await verify()) throw new Error(`Figma kept a stale value for Typography/${name}; expected "${family}"`)
+    }
+    Object.entries(tokens.typography.sizes).forEach(([key, val]) => typoVar(`size/${key}`, 'FLOAT', pxToFloat(val)))
+    Object.entries(tokens.typography.weights).forEach(([key, val]) => typoVar(`weight/${key}`, 'FLOAT', val))
+    const bodyFamily = normalizeFontFamilyName(tokens.typography.fontFamily)
+    const headingFamily = normalizeFontFamilyName(tokens.typography.headingFontFamily ?? bodyFamily)
+    // An old file can have only `family` / `heading-family`. Rename those
+    // variables when their canonical counterpart does not exist: Figma keeps
+    // the variable id, so every existing text binding survives, but the
+    // Variables panel now exposes the same role name as the platform.
+    function migrateLegacyFamilyName(legacy: string, canonical: string) {
+      const legacyVar = typoCache.get(legacy)
+      if (!legacyVar || typoCache.has(canonical)) return
+      try {
+        legacyVar.name = canonical
+        typoCache.delete(legacy)
+        typoCache.set(canonical, legacyVar)
+      } catch {
+        // A Figma permission or name collision should never prevent the new
+        // canonical token from being created below.
+      }
+    }
+    migrateLegacyFamilyName(TYPOGRAPHY_FAMILY_VARS.legacyBody, TYPOGRAPHY_FAMILY_VARS.body)
+    migrateLegacyFamilyName(TYPOGRAPHY_FAMILY_VARS.legacyDisplay, TYPOGRAPHY_FAMILY_VARS.display)
+
+    const prevFamily = (() => {
+      const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body)
+      return v ? varStringAt(v, typoCol.defaultModeId) : undefined
+    })()
+    await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily)
+    await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily)
+    // If a previous plugin build already created the legacy names alongside
+    // the canonical ones, retain their ids but write the actual family names
+    // directly. An alias is not an acceptable final value for a FONT_FAMILY
+    // token: designers need to see and select the concrete family in Figma.
+    if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
+      setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)!, bodyFamily)
+    }
+    if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
+      setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)!, headingFamily)
+    }
+    const familyNow = (() => {
+      const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body)
+      return v ? varStringAt(v, typoCol.defaultModeId) : undefined
+    })()
+    if (familyNow === bodyFamily) {
+      if (prevFamily && prevFamily !== bodyFamily) {
+        log(`↻ Typography family "${prevFamily}" → "${bodyFamily}"`)
+      } else {
+        log(`✓ Typography family → "${bodyFamily}"`)
+      }
+    } else {
+      log(`✗ Typography "${TYPOGRAPHY_FAMILY_VARS.body}" is still "${familyNow ?? '?'}" — wanted "${bodyFamily}" from the payload`)
+    }
+    const displayNow = (() => {
+      const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.display)
+      return v ? varStringAt(v, typoCol.defaultModeId) : undefined
+    })()
+    if (displayNow === headingFamily) {
+      log(`✓ Typography families — body: "${bodyFamily}", display: "${headingFamily}"`)
+    } else {
+      log(`✗ Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow ?? '?'}" — wanted "${headingFamily}" from the payload`)
+    }
+    if (tokens.typography.lineHeights) {
+      Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar(`line-height/${key}`, 'FLOAT', pxToFloat(val)))
+    }
+    if (tokens.typography.letterSpacings) {
+      Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar(`letter-spacing/${key}`, 'FLOAT', pxToFloat(val)))
+    }
+    const typeRoles = tokens.typography.roles
+    if (typeRoles) {
+      let roleCount = 0
+      for (const [key, modes] of Object.entries(typeRoles)) {
+        const d = modes?.desktop
+        if (!d) continue
+        const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`))
+        const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`))
+        const familyName = d.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body
+        const familyPrim = typoCache.get(figmaVarName(familyName))
+        if (sizePrim) {
+          typoVar(`role/${key}/size`, 'FLOAT', figma.variables.createVariableAlias(sizePrim))
+          roleCount++
+        }
+        if (weightPrim) {
+          typoVar(`role/${key}/weight`, 'FLOAT', figma.variables.createVariableAlias(weightPrim))
+        }
+        if (familyPrim) {
+          typoVar(`role/${key}/family`, 'STRING', figma.variables.createVariableAlias(familyPrim))
+        }
+      }
+      if (roleCount > 0) log(`✓ Typography roles (${roleCount} aliased to size/weight/family)`)
+    }
+    const sizeCount = Object.keys(tokens.typography.sizes).length
+    if (sizeCount > 0) log(`✓ Typography sizes (${sizeCount} steps — change them on the web and sync updates size/* here)`)
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e)
+    log(`✗ Typography failed: ${m}`)
+    throw new Error(`Typography failed: ${m}`)
   }
 
   // ── Color Primitives — the raw scale, single mode ──────────────────────────
@@ -1651,53 +1928,6 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     } catch (e) { /* still referenced — leave it rather than fail the import */ }
   }
 
-  // ── Typography — one collection, mixed types (size/weight FLOAT, family STRING) ─
-  const typoCol = findOrCreateCollection(COLLECTIONS.typography)
-  const typoCache = cacheFor(typoCol)
-  function typoVar(name: string, type: VariableResolvedDataType, value: VariableValue) {
-    setDefault(typoCol, upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name)), value)
-  }
-  Object.entries(tokens.typography.sizes).forEach(([key, val]) => typoVar(`size/${key}`, 'FLOAT', pxToFloat(val)))
-  Object.entries(tokens.typography.weights).forEach(([key, val]) => typoVar(`weight/${key}`, 'FLOAT', val))
-  typoVar('family', 'STRING', tokens.typography.fontFamily)
-  // Separate heading font family when it differs from the body font
-  if (tokens.typography.headingFontFamily &&
-      tokens.typography.headingFontFamily !== tokens.typography.fontFamily) {
-    typoVar('heading-family', 'STRING', tokens.typography.headingFontFamily)
-  }
-  if (tokens.typography.lineHeights) {
-    Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar(`line-height/${key}`, 'FLOAT', pxToFloat(val)))
-  }
-  if (tokens.typography.letterSpacings) {
-    Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar(`letter-spacing/${key}`, 'FLOAT', pxToFloat(val)))
-  }
-  const typeRoles = tokens.typography.roles
-  if (typeRoles) {
-    let roleCount = 0
-    for (const [key, modes] of Object.entries(typeRoles)) {
-      const d = modes?.desktop
-      if (!d) continue
-      const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`))
-      const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`))
-      const familyName = d.family === 'display' && typoCache.get('heading-family')
-        ? 'heading-family'
-        : 'family'
-      const familyPrim = typoCache.get(figmaVarName(familyName))
-      if (sizePrim) {
-        typoVar(`role/${key}/size`, 'FLOAT', figma.variables.createVariableAlias(sizePrim))
-        roleCount++
-      }
-      if (weightPrim) {
-        typoVar(`role/${key}/weight`, 'FLOAT', figma.variables.createVariableAlias(weightPrim))
-      }
-      if (familyPrim) {
-        typoVar(`role/${key}/family`, 'STRING', figma.variables.createVariableAlias(familyPrim))
-      }
-    }
-    if (roleCount > 0) log(`✓ Typography roles (${roleCount} aliased to size/weight/family)`)
-  }
-  log(`✓ Typography tokens`)
-
   // ── Remaining single-mode categories ───────────────────────────────────────
   emitCollection(COLLECTIONS.spacing, Object.entries(tokens.spacing), 'FLOAT', pxToFloat)
   const spacingRoleCount = emitRoleAliases(COLLECTIONS.spacing, tokens.spacingRoles, (s) => s)
@@ -1883,8 +2113,8 @@ function assignedGradient(tokens: DesignTokens, surface: 'cover' | 'avatar'): Gr
 
 async function importStyles(tokens: DesignTokens): Promise<number> {
   let count = 0
-  const fontFamily = tokens.typography.fontFamily || 'Inter'
-  const headingFamily = tokens.typography.headingFontFamily || fontFamily
+  const fontFamily = normalizeFontFamilyName(tokens.typography.fontFamily)
+  const headingFamily = normalizeFontFamilyName(tokens.typography.headingFontFamily ?? fontFamily)
 
   const textByName = new Map(
     (await figma.getLocalTextStylesAsync()).map((s) => [s.name, s] as const),
@@ -1971,7 +2201,8 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
   }
 
   // Typography variables — text styles bind to the same variables the stubs
-  // use (family / heading-family / size / line-height / letter-spacing), so
+    // use (font-family-body / font-family-display / size / line-height /
+    // letter-spacing), so
   // styles and variables can never drift apart.
   const typoVars = new Map<string, Variable>()
   {
@@ -1989,19 +2220,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
   }
 
   // ── Text styles: one per typography size ────────────────────────────────
-  // Preload fonts needed for text style creation (body + heading families)
-  const loadedFamilies = new Set<string>()
-  for (const family of new Set([fontFamily, headingFamily])) {
-    let ok = false
-    for (const style of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) {
-      try { await figma.loadFontAsync({ family, style }); ok = true } catch {}
-    }
-    if (ok) loadedFamilies.add(family)
-    else {
-      try { await figma.loadFontAsync({ family: 'Inter', style: 'Regular' }) } catch {}
-      log(`⚠ Font "${family}" is not available in this file — text styles fall back to Inter and won't match the Typography "family" variable ("${family}"). Install/enable the font and re-import.`)
-    }
-  }
+  const { loadedFamilies, fontFor: fontForStyle } = await createFontResolver(tokens)
 
   // Weight map: find the weight value for each key. Size keys (text-sm,
   // display-xl…) don't exist in the weight map — display sizes read as
@@ -2027,14 +2246,15 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     ts.name = styleName
 
     // Font family — display/heading sizes use the heading typeface (matching
-    // the "heading-family" variable), everything else the body family
-    // (matching "family"). Falls back to Inter only when the font isn't
+    // the "font-family-display" variable), everything else the body family
+    // (matching "font-family-body"). Falls back to Inter only when the font isn't
     // available (warned above).
     const isHeading = /^(display|heading)/.test(sizeKey)
     const wantedFamily = isHeading ? headingFamily : fontFamily
     const fontStyle = resolvedStyle(sizeKey)
+    const resolved = fontForStyle(fontStyle, isHeading)
     try {
-      ts.fontName = { family: loadedFamilies.has(wantedFamily) ? wantedFamily : 'Inter', style: fontStyle }
+      ts.fontName = loadedFamilies.has(wantedFamily) ? resolved : { family: 'Inter', style: resolved.style }
     } catch {
       ts.fontName = { family: 'Inter', style: fontStyle }
     }
@@ -2054,10 +2274,12 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
       : { value: 0, unit: 'PIXELS' }
 
     // Bind the style to the Typography variables so both stay in lockstep:
-    // family (or heading-family), size/<key>, line-height/<key>,
+    // font-family-body (or font-family-display), size/<key>, line-height/<key>,
     // letter-spacing/<key>. Values above remain as fallbacks.
     bindTextStyle(ts, 'fontFamily',
-      (isHeading ? typoVars.get('heading-family') : undefined) ?? typoVars.get('family'))
+      (isHeading ? (typoVars.get(TYPOGRAPHY_FAMILY_VARS.display) ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) : undefined)
+      ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)
+      ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody))
     bindTextStyle(ts, 'fontSize', typoVars.get(`size/${sizeKey}`))
     bindTextStyle(ts, 'fontWeight', typoVars.get(`weight/${isHeading ? 'semibold' : 'regular'}`) ?? typoVars.get('weight/regular'))
     bindTextStyle(ts, 'lineHeight', typoVars.get(`line-height/${sizeKey}`))
@@ -2087,8 +2309,9 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
       const isHeading = d.family === 'display'
       const wantedFamily = isHeading ? headingFamily : fontFamily
       const fontStyle = resolvedStyle(d.weight)
+      const resolved = fontForStyle(fontStyle, isHeading)
       try {
-        ts.fontName = { family: loadedFamilies.has(wantedFamily) ? wantedFamily : 'Inter', style: fontStyle }
+        ts.fontName = loadedFamilies.has(wantedFamily) ? resolved : { family: 'Inter', style: resolved.style }
       } catch {
         ts.fontName = { family: 'Inter', style: fontStyle }
       }
@@ -2103,8 +2326,9 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
         : { value: 0, unit: 'PIXELS' }
       bindTextStyle(ts, 'fontFamily',
         typoVars.get(`role/${key}/family`)
-          ?? (isHeading ? typoVars.get('heading-family') : undefined)
-          ?? typoVars.get('family'))
+          ?? (isHeading ? (typoVars.get(TYPOGRAPHY_FAMILY_VARS.display) ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) : undefined)
+          ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)
+          ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody))
       bindTextStyle(ts, 'fontSize', typoVars.get(`role/${key}/size`) ?? typoVars.get(`size/${d.size}`))
       bindTextStyle(ts, 'fontWeight', typoVars.get(`role/${key}/weight`) ?? typoVars.get(`weight/${d.weight}`))
       bindTextStyle(ts, 'lineHeight', typoVars.get(`line-height/${d.size}`))
@@ -2472,7 +2696,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   const wRegular = bestVar(T, 'weight/regular')
   const wMedium  = bestVar(T, 'weight/medium')
   const wSemibold= bestVar(T, 'weight/semibold', 'weight/semi-bold')
-  const familyVar= findVar(T, 'family')
+  const familyVar= bestVar(T, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody)
   const radSm    = bestVar(COLLECTIONS.radius, 'sm')
   const radMd    = bestVar(COLLECTIONS.radius, 'md')
   const radLg    = bestVar(COLLECTIONS.radius, 'lg')
@@ -2557,66 +2781,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
 
   // ── Fonts ──────────────────────────────────────────────────────────────────
-  // Both families, not just the body one — display/heading roles bind
-  // `role/*/family` to `heading-family`, so the concrete fontName has to be the
-  // heading typeface too or Figma rejects the variable bind and the node stays
-  // on whatever it had (Inter).
-  const bodyFamily = tokens.typography?.fontFamily || 'Inter'
-  const headingFamily = tokens.typography?.headingFontFamily || bodyFamily
-  type LogicalStyle = 'Regular' | 'Medium' | 'Semi Bold' | 'Bold'
-  // Figma needs an EXACT {family, style} and the family has to actually be
-  // installed. Resolve against the REAL available-font list rather than
-  // guessing: "Semi Bold" is Inter's spelling, Poppins ships "SemiBold",
-  // Roboto has no semibold at all, and a family the workspace doesn't have
-  // must fall back to Inter loudly (logged) instead of silently.
-  const STYLE_PREF: Record<LogicalStyle, string[]> = {
-    'Regular': ['Regular', 'Normal', 'Book', 'Roman'],
-    'Medium': ['Medium', 'Regular', 'Book'],
-    'Semi Bold': ['Semi Bold', 'SemiBold', 'Semibold', 'Demi Bold', 'DemiBold', 'Demi', 'Bold', 'Medium'],
-    'Bold': ['Bold', 'Semi Bold', 'SemiBold', 'Black', 'Heavy', 'Extra Bold', 'ExtraBold', 'Medium'],
-  }
-  const stylesByFamily = new Map<string, Set<string>>()
-  try {
-    for (const f of await figma.listAvailableFontsAsync()) {
-      let s = stylesByFamily.get(f.fontName.family)
-      if (!s) { s = new Set(); stylesByFamily.set(f.fontName.family, s) }
-      s.add(f.fontName.style)
-    }
-  } catch { /* fall through — every resolve below then lands on Inter */ }
-
-  const resolvedFont = new Map<string, FontName>()
-  const fellBack = new Set<string>()
-  async function loadLogical(family: string, logical: LogicalStyle): Promise<void> {
-    const key = `${family}|${logical}`
-    if (resolvedFont.has(key)) return
-    const pick = (fam: string): string | undefined => {
-      const have = stylesByFamily.get(fam)
-      if (!have) return undefined
-      for (const cand of STYLE_PREF[logical]) if (have.has(cand)) return cand
-      // last resort: any style this family ships, preferring a non-italic one
-      return [...have].find((st) => !/italic|oblique/i.test(st)) ?? [...have][0]
-    }
-    const wantStyle = pick(family)
-    if (wantStyle) {
-      try {
-        await figma.loadFontAsync({ family, style: wantStyle })
-        resolvedFont.set(key, { family, style: wantStyle })
-        return
-      } catch { /* installed per the list but unloadable — fall back */ }
-    }
-    fellBack.add(family)
-    const interStyle = pick('Inter') ?? 'Regular'
-    try { await figma.loadFontAsync({ family: 'Inter', style: interStyle }) } catch { /* Inter is always present */ }
-    resolvedFont.set(key, { family: 'Inter', style: interStyle })
-  }
-  for (const family of new Set([bodyFamily, headingFamily])) {
-    for (const logical of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) await loadLogical(family, logical)
-  }
-  for (const fam of fellBack) {
-    log(`⚠ Font "${fam}" isn't available in this workspace — component text falls back to Inter. Add the font to the file (Figma › Assets › fonts) or via a font plugin, then re-sync.`)
-  }
-  const fontFor = (style: LogicalStyle, heading = false): FontName =>
-    resolvedFont.get(`${heading ? headingFamily : bodyFamily}|${style}`) ?? { family: 'Inter', style }
+  const { bodyFamily, headingFamily, fontFor } = await createFontResolver(tokens)
   // Back-compat alias for call sites that still read `fontFamily`.
   const fontFamily = bodyFamily
 
@@ -2637,7 +2802,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
   function txt(chars: string, o: TxtOpts = {}): TextNode {
     const t = figma.createText()
-    // Display / heading roles bind their family to `heading-family`; the
+    // Display / heading roles bind their family to `font-family-display`; the
     // concrete fontName must be that same typeface or the bind is rejected.
     const headingRole = !!o.roleKey && tokens.typography.roles?.[o.roleKey]?.desktop?.family === 'display'
     t.fontName = fontFor(o.style ?? 'Regular', headingRole)
@@ -6236,7 +6401,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
   const textVar    = docChromeVars.text
   const mutedVar   = docChromeVars.muted
   const borderVar  = docChromeVars.border
-  const familyVar  = findVar(COLLECTIONS.typography, 'family')
+  const familyVar  = bestVar(COLLECTIONS.typography, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody)
   const typoBind = new Map<string, Variable>()
   {
     const typoColVars = varsByCollection.get(COLLECTIONS.typography)
@@ -7028,7 +7193,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         spec.textAutoResize = 'WIDTH_AND_HEIGHT'
         bindField(spec, 'fontSize', bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`))
         bindField(spec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`))
-        bindField(spec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === 'display' ? 'heading-family' : 'family'))
+        bindField(spec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body))
         row.appendChild(spec)
         spec.layoutSizingHorizontal = 'HUG'
         spec.layoutSizingVertical = 'HUG'
@@ -8680,7 +8845,10 @@ figma.ui.onmessage = async (msg: {
     } else {
       if (!tokens.typography.sizes) tokens.typography.sizes = {}
       if (!tokens.typography.weights) tokens.typography.weights = {}
+      if (!tokens.typography.fontFamily) tokens.typography.fontFamily = 'Inter'
     }
+
+    await warnUnavailableSystemFonts(tokens)
 
     let totalVars = 0
     let totalStyles = 0
@@ -8811,7 +8979,7 @@ figma.ui.onmessage = async (msg: {
       ].filter(Boolean).join(' · ')
 
       log(`― Done${summary ? `: ${summary}` : ''}${hadError ? ' — some phases failed, see ✗ lines above' : ''} ―`)
-      figma.ui.postMessage({ type: 'done', summary })
+      figma.ui.postMessage({ type: 'done', summary, hadError })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       log(`✗ Error: ${msg}`)

@@ -49,6 +49,113 @@
   function pxToFloat(val) {
     return parseFloat(val.replace("px", "").replace("rem", "")) || 0;
   }
+  function normalizeFontFamilyName(raw) {
+    if (!raw || typeof raw !== "string") return "Inter";
+    const trimmed = raw.trim();
+    if (!trimmed) return "Inter";
+    const quoted = /^['"]([^'"]+)['"]/.exec(trimmed);
+    if (quoted == null ? void 0 : quoted[1]) return quoted[1].trim();
+    const first = trimmed.split(",")[0].trim().replace(/^['"]|['"]$/g, "");
+    return first || "Inter";
+  }
+  function varStringAt(v, modeId) {
+    const val = v.valuesByMode[modeId];
+    return typeof val === "string" ? val : void 0;
+  }
+  var STYLE_PREF = {
+    "Regular": ["Regular", "Normal", "Book", "Roman"],
+    "Medium": ["Medium", "Regular", "Book"],
+    "Semi Bold": ["Semi Bold", "SemiBold", "Semibold", "Demi Bold", "DemiBold", "Demi", "Bold", "Medium"],
+    "Bold": ["Bold", "Semi Bold", "SemiBold", "Black", "Heavy", "Extra Bold", "ExtraBold", "Medium"]
+  };
+  var TYPOGRAPHY_FAMILY_VARS = {
+    body: "font-family-body",
+    display: "font-family-display",
+    // Names emitted by pre-role plugin builds. They are only maintained when a
+    // file already has them, preserving existing variable bindings on upgrade.
+    legacyBody: "family",
+    legacyDisplay: "heading-family"
+  };
+  async function createFontResolver(tokens) {
+    var _a, _b, _c;
+    const bodyFamily = normalizeFontFamilyName((_a = tokens.typography) == null ? void 0 : _a.fontFamily);
+    const headingFamily = normalizeFontFamilyName((_c = (_b = tokens.typography) == null ? void 0 : _b.headingFontFamily) != null ? _c : bodyFamily);
+    const stylesByFamily = /* @__PURE__ */ new Map();
+    try {
+      for (const f of await figma.listAvailableFontsAsync()) {
+        let s = stylesByFamily.get(f.fontName.family);
+        if (!s) {
+          s = /* @__PURE__ */ new Set();
+          stylesByFamily.set(f.fontName.family, s);
+        }
+        s.add(f.fontName.style);
+      }
+    } catch (e) {
+    }
+    const resolvedFont = /* @__PURE__ */ new Map();
+    const pick = (fam, logical) => {
+      var _a2;
+      const have = stylesByFamily.get(fam);
+      if (!have) return void 0;
+      for (const cand of STYLE_PREF[logical]) if (have.has(cand)) return cand;
+      return (_a2 = [...have].find((st) => !/italic|oblique/i.test(st))) != null ? _a2 : [...have][0];
+    };
+    async function loadLogical(family, logical) {
+      var _a2;
+      const key = `${family}|${logical}`;
+      if (resolvedFont.has(key)) return;
+      const wantStyle = pick(family, logical);
+      if (wantStyle) {
+        try {
+          await figma.loadFontAsync({ family, style: wantStyle });
+          resolvedFont.set(key, { family, style: wantStyle });
+          return;
+        } catch (e) {
+        }
+      }
+      const interStyle = (_a2 = pick("Inter", logical)) != null ? _a2 : "Regular";
+      try {
+        await figma.loadFontAsync({ family: "Inter", style: interStyle });
+      } catch (e) {
+      }
+      resolvedFont.set(key, { family: "Inter", style: interStyle });
+    }
+    for (const family of /* @__PURE__ */ new Set([bodyFamily, headingFamily])) {
+      for (const logical of ["Regular", "Medium", "Semi Bold", "Bold"]) await loadLogical(family, logical);
+    }
+    const loadedFamilies = /* @__PURE__ */ new Set();
+    for (const family of /* @__PURE__ */ new Set([bodyFamily, headingFamily])) {
+      if ([...resolvedFont.entries()].some(([k, fn]) => k.startsWith(`${family}|`) && fn.family === family)) {
+        loadedFamilies.add(family);
+      }
+    }
+    return {
+      bodyFamily,
+      headingFamily,
+      loadedFamilies,
+      fontFor: (style, heading = false) => {
+        var _a2;
+        return (_a2 = resolvedFont.get(`${heading ? headingFamily : bodyFamily}|${style}`)) != null ? _a2 : { family: "Inter", style };
+      }
+    };
+  }
+  async function warnUnavailableSystemFonts(tokens) {
+    var _a, _b, _c;
+    const body = normalizeFontFamilyName((_a = tokens.typography) == null ? void 0 : _a.fontFamily);
+    const display = normalizeFontFamilyName((_c = (_b = tokens.typography) == null ? void 0 : _b.headingFontFamily) != null ? _c : body);
+    const available = /* @__PURE__ */ new Set();
+    try {
+      for (const f of await figma.listAvailableFontsAsync()) available.add(f.fontName.family);
+    } catch (e) {
+      log("\u26A0 Could not inspect fonts available in this Figma workspace; Typography values were still synced from the system.");
+      return;
+    }
+    for (const [role, family] of [["body", body], ["display", display]]) {
+      if (!available.has(family)) {
+        log(`\u26A0 Font family "${family}" for ${role} is not available in this Figma workspace. The system value was kept in Typography; install or enable the font, then sync again to render generated text with it.`);
+      }
+    }
+  }
   function weightKeyFromStyle(style) {
     if (style === "Bold") return "bold";
     if (style === "Semi Bold") return "semibold";
@@ -69,22 +176,22 @@
     return best;
   }
   function bindAllTextFields(t, typo, opts) {
-    var _a, _b, _c, _d, _e, _f;
-    const family = opts.roleKey ? (_b = (_a = typo.get(`role/${opts.roleKey}/family`)) != null ? _a : opts.heading ? typo.get("heading-family") : void 0) != null ? _b : typo.get("family") : opts.heading ? (_c = typo.get("heading-family")) != null ? _c : typo.get("family") : typo.get("family");
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+    const family = opts.roleKey ? (_d = (_c = (_b = typo.get(`role/${opts.roleKey}/family`)) != null ? _b : opts.heading ? (_a = typo.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _a : typo.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _c : typo.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _d : typo.get(TYPOGRAPHY_FAMILY_VARS.legacyBody) : opts.heading ? (_g = (_f = (_e = typo.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _e : typo.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) != null ? _f : typo.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _g : typo.get(TYPOGRAPHY_FAMILY_VARS.legacyBody) : (_h = typo.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _h : typo.get(TYPOGRAPHY_FAMILY_VARS.legacyBody);
     if (family) {
       try {
         t.setBoundVariable("fontFamily", family);
       } catch (e) {
       }
     }
-    const sizeVar = (_d = opts.roleKey ? typo.get(`role/${opts.roleKey}/size`) : void 0) != null ? _d : opts.sizeKey ? typo.get(`size/${opts.sizeKey}`) : void 0;
+    const sizeVar = (_i = opts.roleKey ? typo.get(`role/${opts.roleKey}/size`) : void 0) != null ? _i : opts.sizeKey ? typo.get(`size/${opts.sizeKey}`) : void 0;
     if (sizeVar) {
       try {
         t.setBoundVariable("fontSize", sizeVar);
       } catch (e) {
       }
     }
-    const weightVar = (_f = (_e = opts.roleKey ? typo.get(`role/${opts.roleKey}/weight`) : void 0) != null ? _e : opts.weightKey ? typo.get(`weight/${opts.weightKey}`) : void 0) != null ? _f : typo.get("weight/regular");
+    const weightVar = (_k = (_j = opts.roleKey ? typo.get(`role/${opts.roleKey}/weight`) : void 0) != null ? _j : opts.weightKey ? typo.get(`weight/${opts.weightKey}`) : void 0) != null ? _k : typo.get("weight/regular");
     if (weightVar) {
       try {
         t.setBoundVariable("fontWeight", weightVar);
@@ -246,7 +353,7 @@
         if (varName.startsWith("weight/") || varName.endsWith("/weight")) return ["FONT_WEIGHT"];
         if (varName.startsWith("line-height/")) return ["LINE_HEIGHT"];
         if (varName.startsWith("letter-spacing/")) return ["LETTER_SPACING"];
-        if (varName === "family" || varName === "heading-family" || varName.endsWith("/family")) return ["FONT_FAMILY"];
+        if (varName === TYPOGRAPHY_FAMILY_VARS.body || varName === TYPOGRAPHY_FAMILY_VARS.display || varName === TYPOGRAPHY_FAMILY_VARS.legacyBody || varName === TYPOGRAPHY_FAMILY_VARS.legacyDisplay || varName.endsWith("/family")) return ["FONT_FAMILY"];
         return void 0;
       }
       default:
@@ -678,7 +785,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     let count = 0;
     semanticsRebuilt = false;
     foundationsRebuilt = false;
@@ -731,7 +838,20 @@
     }
     function upsertVarIn(collection, cache, name, type, scopes) {
       const safe = figmaVarName(name);
-      const found = cache.get(safe);
+      let found = cache.get(safe);
+      if (found) {
+        const stale = found.resolvedType !== type;
+        if (stale) {
+          try {
+            found.remove();
+            const i = allVars.indexOf(found);
+            if (i !== -1) allVars.splice(i, 1);
+            cache.delete(safe);
+            found = void 0;
+          } catch (e) {
+          }
+        }
+      }
       if (found) {
         if (scopes) {
           try {
@@ -767,7 +887,9 @@
       return created;
     }
     function setDefault(collection, v, value) {
-      v.setValueForMode(collection.defaultModeId, value);
+      for (const mode of collection.modes) {
+        v.setValueForMode(mode.modeId, value);
+      }
     }
     function pruneModes(col, wanted, collLabel) {
       const stale = col.modes.filter((m) => m.modeId !== col.defaultModeId && !wanted.has(m.name));
@@ -823,6 +945,112 @@
         n++;
       }
       return n;
+    }
+    try {
+      let typoVar2 = function(name, type, value) {
+        const variable = upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name));
+        setDefault(typoCol, variable, value);
+      }, migrateLegacyFamilyName2 = function(legacy, canonical) {
+        const legacyVar = typoCache.get(legacy);
+        if (!legacyVar || typoCache.has(canonical)) return;
+        try {
+          legacyVar.name = canonical;
+          typoCache.delete(legacy);
+          typoCache.set(canonical, legacyVar);
+        } catch (e) {
+        }
+      };
+      var typoVar = typoVar2, migrateLegacyFamilyName = migrateLegacyFamilyName2;
+      const typoCol = findOrCreateCollection(COLLECTIONS.typography);
+      const typoCache = cacheFor(typoCol);
+      async function writeFontFamily(name, family) {
+        const variable = upsertVarIn(typoCol, typoCache, name, "STRING", scopesForCollection(COLLECTIONS.typography, name));
+        setDefault(typoCol, variable, family);
+        const verify = async () => {
+          const current = await figma.variables.getVariableByIdAsync(variable.id);
+          if (!current) return false;
+          return typoCol.modes.every((mode) => current.valuesByMode[mode.modeId] === family);
+        };
+        if (await verify()) return;
+        const fresh = await figma.variables.getVariableByIdAsync(variable.id);
+        if (fresh) setDefault(typoCol, fresh, family);
+        if (!await verify()) throw new Error(`Figma kept a stale value for Typography/${name}; expected "${family}"`);
+      }
+      Object.entries(tokens.typography.sizes).forEach(([key, val]) => typoVar2(`size/${key}`, "FLOAT", pxToFloat(val)));
+      Object.entries(tokens.typography.weights).forEach(([key, val]) => typoVar2(`weight/${key}`, "FLOAT", val));
+      const bodyFamily = normalizeFontFamilyName(tokens.typography.fontFamily);
+      const headingFamily = normalizeFontFamilyName((_b = tokens.typography.headingFontFamily) != null ? _b : bodyFamily);
+      migrateLegacyFamilyName2(TYPOGRAPHY_FAMILY_VARS.legacyBody, TYPOGRAPHY_FAMILY_VARS.body);
+      migrateLegacyFamilyName2(TYPOGRAPHY_FAMILY_VARS.legacyDisplay, TYPOGRAPHY_FAMILY_VARS.display);
+      const prevFamily = (() => {
+        const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body);
+        return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
+      })();
+      await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily);
+      await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily);
+      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
+        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody), bodyFamily);
+      }
+      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
+        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay), headingFamily);
+      }
+      const familyNow = (() => {
+        const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body);
+        return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
+      })();
+      if (familyNow === bodyFamily) {
+        if (prevFamily && prevFamily !== bodyFamily) {
+          log(`\u21BB Typography family "${prevFamily}" \u2192 "${bodyFamily}"`);
+        } else {
+          log(`\u2713 Typography family \u2192 "${bodyFamily}"`);
+        }
+      } else {
+        log(`\u2717 Typography "${TYPOGRAPHY_FAMILY_VARS.body}" is still "${familyNow != null ? familyNow : "?"}" \u2014 wanted "${bodyFamily}" from the payload`);
+      }
+      const displayNow = (() => {
+        const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.display);
+        return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
+      })();
+      if (displayNow === headingFamily) {
+        log(`\u2713 Typography families \u2014 body: "${bodyFamily}", display: "${headingFamily}"`);
+      } else {
+        log(`\u2717 Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow != null ? displayNow : "?"}" \u2014 wanted "${headingFamily}" from the payload`);
+      }
+      if (tokens.typography.lineHeights) {
+        Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar2(`line-height/${key}`, "FLOAT", pxToFloat(val)));
+      }
+      if (tokens.typography.letterSpacings) {
+        Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar2(`letter-spacing/${key}`, "FLOAT", pxToFloat(val)));
+      }
+      const typeRoles = tokens.typography.roles;
+      if (typeRoles) {
+        let roleCount = 0;
+        for (const [key, modes] of Object.entries(typeRoles)) {
+          const d = modes == null ? void 0 : modes.desktop;
+          if (!d) continue;
+          const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`));
+          const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`));
+          const familyName = d.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body;
+          const familyPrim = typoCache.get(figmaVarName(familyName));
+          if (sizePrim) {
+            typoVar2(`role/${key}/size`, "FLOAT", figma.variables.createVariableAlias(sizePrim));
+            roleCount++;
+          }
+          if (weightPrim) {
+            typoVar2(`role/${key}/weight`, "FLOAT", figma.variables.createVariableAlias(weightPrim));
+          }
+          if (familyPrim) {
+            typoVar2(`role/${key}/family`, "STRING", figma.variables.createVariableAlias(familyPrim));
+          }
+        }
+        if (roleCount > 0) log(`\u2713 Typography roles (${roleCount} aliased to size/weight/family)`);
+      }
+      const sizeCount = Object.keys(tokens.typography.sizes).length;
+      if (sizeCount > 0) log(`\u2713 Typography sizes (${sizeCount} steps \u2014 change them on the web and sync updates size/* here)`);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      log(`\u2717 Typography failed: ${m}`);
+      throw new Error(`Typography failed: ${m}`);
     }
     const primCol = findOrCreateCollection(COLLECTIONS.primitives);
     const primCache = cacheFor(primCol);
@@ -903,7 +1131,7 @@
       if (v && !primByHex.has(norm2)) primByHex.set(norm2, v);
     }
     const primAlphaByHex = /* @__PURE__ */ new Map();
-    for (const [key, hex] of Object.entries((_b = tokens.colors.primitiveAlpha) != null ? _b : {})) {
+    for (const [key, hex] of Object.entries((_c = tokens.colors.primitiveAlpha) != null ? _c : {})) {
       if (!hex) continue;
       const v = primCache.get(primitiveAlphaVarName(key));
       const norm2 = rgbaToHex8(hexToRgba(hex));
@@ -914,7 +1142,7 @@
     const themes = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({
       light: tokens.colors.semantic || {}
     }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const ordered = ((_c = tokens.colors.themeOrder) != null ? _c : []).filter((t) => themes[t]);
+    const ordered = ((_d = tokens.colors.themeOrder) != null ? _d : []).filter((t) => themes[t]);
     const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))];
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const arch = tokens.colors.architecture;
@@ -973,7 +1201,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_d = tok.byMode[modeKey]) != null ? _d : "", lookup);
+            const rgba = archValueRgba((_e = tok.byMode[modeKey]) != null ? _e : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -1034,7 +1262,7 @@
       for (const [mid, value] of entry.values) v.setValueForMode(mid, value);
     }
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_e = ARCH_LABEL[arch.kind]) != null ? _e : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_f = ARCH_LABEL[arch.kind]) != null ? _f : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -1048,47 +1276,6 @@
       } catch (e) {
       }
     }
-    const typoCol = findOrCreateCollection(COLLECTIONS.typography);
-    const typoCache = cacheFor(typoCol);
-    function typoVar(name, type, value) {
-      setDefault(typoCol, upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name)), value);
-    }
-    Object.entries(tokens.typography.sizes).forEach(([key, val]) => typoVar(`size/${key}`, "FLOAT", pxToFloat(val)));
-    Object.entries(tokens.typography.weights).forEach(([key, val]) => typoVar(`weight/${key}`, "FLOAT", val));
-    typoVar("family", "STRING", tokens.typography.fontFamily);
-    if (tokens.typography.headingFontFamily && tokens.typography.headingFontFamily !== tokens.typography.fontFamily) {
-      typoVar("heading-family", "STRING", tokens.typography.headingFontFamily);
-    }
-    if (tokens.typography.lineHeights) {
-      Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar(`line-height/${key}`, "FLOAT", pxToFloat(val)));
-    }
-    if (tokens.typography.letterSpacings) {
-      Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar(`letter-spacing/${key}`, "FLOAT", pxToFloat(val)));
-    }
-    const typeRoles = tokens.typography.roles;
-    if (typeRoles) {
-      let roleCount = 0;
-      for (const [key, modes] of Object.entries(typeRoles)) {
-        const d = modes == null ? void 0 : modes.desktop;
-        if (!d) continue;
-        const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`));
-        const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`));
-        const familyName = d.family === "display" && typoCache.get("heading-family") ? "heading-family" : "family";
-        const familyPrim = typoCache.get(figmaVarName(familyName));
-        if (sizePrim) {
-          typoVar(`role/${key}/size`, "FLOAT", figma.variables.createVariableAlias(sizePrim));
-          roleCount++;
-        }
-        if (weightPrim) {
-          typoVar(`role/${key}/weight`, "FLOAT", figma.variables.createVariableAlias(weightPrim));
-        }
-        if (familyPrim) {
-          typoVar(`role/${key}/family`, "STRING", figma.variables.createVariableAlias(familyPrim));
-        }
-      }
-      if (roleCount > 0) log(`\u2713 Typography roles (${roleCount} aliased to size/weight/family)`);
-    }
-    log(`\u2713 Typography tokens`);
     emitCollection(COLLECTIONS.spacing, Object.entries(tokens.spacing), "FLOAT", pxToFloat);
     const spacingRoleCount = emitRoleAliases(COLLECTIONS.spacing, tokens.spacingRoles, (s) => s);
     log(`\u2713 Spacing tokens (${Object.keys(tokens.spacing).length} steps${spacingRoleCount ? ` \xB7 ${spacingRoleCount} roles` : ""})`);
@@ -1100,7 +1287,7 @@
     const radiusRoleCount = emitRoleAliases(COLLECTIONS.radius, tokens.radiusRoles, (s) => s);
     log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""}`);
     const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_f = tokens.borders) == null ? void 0 : _f.width;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_g = tokens.borders) == null ? void 0 : _g.width;
     if (strokeMap) {
       const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
       emitCollection(COLLECTIONS.border, Object.entries(strokeMap), "FLOAT", pxToFloat, nameOf);
@@ -1121,7 +1308,7 @@
       const bpRoleCount = emitRoleAliases(COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`);
       log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_g = tokens.icons) == null ? void 0 : _g.library) {
+    if ((_h = tokens.icons) == null ? void 0 : _h.library) {
       emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
     }
     if (tokens.copy) {
@@ -1244,10 +1431,10 @@
     return css ? parseCssGradient(css) : null;
   }
   async function importStyles(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w;
     let count = 0;
-    const fontFamily = tokens.typography.fontFamily || "Inter";
-    const headingFamily = tokens.typography.headingFontFamily || fontFamily;
+    const fontFamily = normalizeFontFamilyName(tokens.typography.fontFamily);
+    const headingFamily = normalizeFontFamilyName((_a = tokens.typography.headingFontFamily) != null ? _a : fontFamily);
     const textByName = new Map(
       (await figma.getLocalTextStylesAsync()).map((s) => [s.name, s])
     );
@@ -1268,7 +1455,7 @@
     if (inheritedDropped > 0) {
       log(`\u2713 Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? "" : "s"} prefixed with a previous project name`);
     }
-    const gradients = (_a = tokens.gradients) != null ? _a : {};
+    const gradients = (_b = tokens.gradients) != null ? _b : {};
     if (Object.keys(gradients).length > 0) {
       const paintByName = new Map(
         (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s])
@@ -1283,7 +1470,7 @@
         style.name = name;
         style.paints = [paint];
       };
-      const assigned = (_b = tokens.gradientAssignments) != null ? _b : {};
+      const assigned = (_c = tokens.gradientAssignments) != null ? _c : {};
       let made = 0;
       let darkMade = 0;
       const unparsed = [];
@@ -1295,7 +1482,7 @@
         }
         upsertPaint(`Gradient/${slug}`, paint);
         made++;
-        const darkCss = (_c = tokens.gradientsDark) == null ? void 0 : _c[slug];
+        const darkCss = (_d = tokens.gradientsDark) == null ? void 0 : _d[slug];
         if (darkCss && darkCss !== css) {
           const darkPaint = parseCssGradient(darkCss);
           if (darkPaint) {
@@ -1329,26 +1516,8 @@
       } catch (e) {
       }
     }
-    const loadedFamilies = /* @__PURE__ */ new Set();
-    for (const family of /* @__PURE__ */ new Set([fontFamily, headingFamily])) {
-      let ok = false;
-      for (const style of ["Regular", "Medium", "Semi Bold", "Bold"]) {
-        try {
-          await figma.loadFontAsync({ family, style });
-          ok = true;
-        } catch (e) {
-        }
-      }
-      if (ok) loadedFamilies.add(family);
-      else {
-        try {
-          await figma.loadFontAsync({ family: "Inter", style: "Regular" });
-        } catch (e) {
-        }
-        log(`\u26A0 Font "${family}" is not available in this file \u2014 text styles fall back to Inter and won't match the Typography "family" variable ("${family}"). Install/enable the font and re-import.`);
-      }
-    }
-    const weightMap = (_d = tokens.typography.weights) != null ? _d : {};
+    const { loadedFamilies, fontFor: fontForStyle } = await createFontResolver(tokens);
+    const weightMap = (_e = tokens.typography.weights) != null ? _e : {};
     function resolvedStyle(weightKey) {
       var _a2, _b2;
       const val = (_b2 = weightMap[weightKey]) != null ? _b2 : weightKey.startsWith("display") ? (_a2 = weightMap.semibold) != null ? _a2 : 600 : 400;
@@ -1371,23 +1540,24 @@
       const isHeading = /^(display|heading)/.test(sizeKey);
       const wantedFamily = isHeading ? headingFamily : fontFamily;
       const fontStyle = resolvedStyle(sizeKey);
+      const resolved = fontForStyle(fontStyle, isHeading);
       try {
-        ts.fontName = { family: loadedFamilies.has(wantedFamily) ? wantedFamily : "Inter", style: fontStyle };
+        ts.fontName = loadedFamilies.has(wantedFamily) ? resolved : { family: "Inter", style: resolved.style };
       } catch (e) {
         ts.fontName = { family: "Inter", style: fontStyle };
       }
       ts.fontSize = sizePx;
-      const lhVal = (_e = tokens.typography.lineHeights) == null ? void 0 : _e[sizeKey];
+      const lhVal = (_f = tokens.typography.lineHeights) == null ? void 0 : _f[sizeKey];
       ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
-      const lsVal = (_f = tokens.typography.letterSpacings) == null ? void 0 : _f[sizeKey];
+      const lsVal = (_g = tokens.typography.letterSpacings) == null ? void 0 : _g[sizeKey];
       ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
       bindTextStyle(
         ts,
         "fontFamily",
-        (_g = isHeading ? typoVars.get("heading-family") : void 0) != null ? _g : typoVars.get("family")
+        (_j = (_i = isHeading ? (_h = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _h : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _i : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _j : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
       );
       bindTextStyle(ts, "fontSize", typoVars.get(`size/${sizeKey}`));
-      bindTextStyle(ts, "fontWeight", (_h = typoVars.get(`weight/${isHeading ? "semibold" : "regular"}`)) != null ? _h : typoVars.get("weight/regular"));
+      bindTextStyle(ts, "fontWeight", (_k = typoVars.get(`weight/${isHeading ? "semibold" : "regular"}`)) != null ? _k : typoVars.get("weight/regular"));
       bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${sizeKey}`));
       bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${sizeKey}`));
     }
@@ -1414,23 +1584,24 @@
         const isHeading = d.family === "display";
         const wantedFamily = isHeading ? headingFamily : fontFamily;
         const fontStyle = resolvedStyle(d.weight);
+        const resolved = fontForStyle(fontStyle, isHeading);
         try {
-          ts.fontName = { family: loadedFamilies.has(wantedFamily) ? wantedFamily : "Inter", style: fontStyle };
+          ts.fontName = loadedFamilies.has(wantedFamily) ? resolved : { family: "Inter", style: resolved.style };
         } catch (e) {
           ts.fontName = { family: "Inter", style: fontStyle };
         }
         ts.fontSize = sizePx;
-        const lhVal = (_i = tokens.typography.lineHeights) == null ? void 0 : _i[d.size];
+        const lhVal = (_l = tokens.typography.lineHeights) == null ? void 0 : _l[d.size];
         ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
-        const lsVal = (_j = tokens.typography.letterSpacings) == null ? void 0 : _j[d.size];
+        const lsVal = (_m = tokens.typography.letterSpacings) == null ? void 0 : _m[d.size];
         ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
         bindTextStyle(
           ts,
           "fontFamily",
-          (_l = (_k = typoVars.get(`role/${key}/family`)) != null ? _k : isHeading ? typoVars.get("heading-family") : void 0) != null ? _l : typoVars.get("family")
+          (_q = (_p = (_o = typoVars.get(`role/${key}/family`)) != null ? _o : isHeading ? (_n = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _n : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _p : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _q : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
         );
-        bindTextStyle(ts, "fontSize", (_m = typoVars.get(`role/${key}/size`)) != null ? _m : typoVars.get(`size/${d.size}`));
-        bindTextStyle(ts, "fontWeight", (_n = typoVars.get(`role/${key}/weight`)) != null ? _n : typoVars.get(`weight/${d.weight}`));
+        bindTextStyle(ts, "fontSize", (_r = typoVars.get(`role/${key}/size`)) != null ? _r : typoVars.get(`size/${d.size}`));
+        bindTextStyle(ts, "fontWeight", (_s = typoVars.get(`role/${key}/weight`)) != null ? _s : typoVars.get(`weight/${d.weight}`));
         bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${d.size}`));
         bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${d.size}`));
         roleStyles++;
@@ -1460,7 +1631,7 @@
       for (const [key, css] of Object.entries(tokens.shadows)) {
         if (upsertEffect(`Shadow/${key}`, css)) made++;
         else unparsed.push(key);
-        const darkCss = (_o = tokens.shadowsDark) == null ? void 0 : _o[key];
+        const darkCss = (_t = tokens.shadowsDark) == null ? void 0 : _t[key];
         if (darkCss && darkCss !== css) {
           if (upsertEffect(`Shadow/${key} (Dark)`, darkCss)) darkMade++;
         }
@@ -1472,7 +1643,7 @@
         log(`\u26A0 ${unparsed.length} shadow${unparsed.length > 1 ? "s" : ""} couldn't be converted to a Figma effect (${unparsed.join(", ")}) \u2014 unsupported CSS box-shadow form`);
       }
     }
-    if ((_p = tokens.grid) == null ? void 0 : _p.columns) {
+    if ((_u = tokens.grid) == null ? void 0 : _u.columns) {
       const name = `Grid/${tokens.grid.columns} columns`;
       const gridByName = new Map(
         (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s])
@@ -1485,8 +1656,8 @@
         pattern: "COLUMNS",
         alignment: "STRETCH",
         count: parseInt(tokens.grid.columns) || 12,
-        gutterSize: pxToFloat((_q = tokens.grid.gutter) != null ? _q : "24px"),
-        offset: pxToFloat((_r = tokens.grid.margin) != null ? _r : "32px")
+        gutterSize: pxToFloat((_v = tokens.grid.gutter) != null ? _v : "24px"),
+        offset: pxToFloat((_w = tokens.grid.margin) != null ? _w : "32px")
       }];
       log(`\u2713 Grid style (${name})`);
     }
@@ -1609,7 +1780,7 @@
     return { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard };
   }
   async function importSample(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q;
     const atoms = (_b = (_a = tokens.atoms) != null ? _a : tokens.components) != null ? _b : [];
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
@@ -1737,7 +1908,7 @@
     const wRegular = bestVar(T, "weight/regular");
     const wMedium = bestVar(T, "weight/medium");
     const wSemibold = bestVar(T, "weight/semibold", "weight/semi-bold");
-    const familyVar = findVar(T, "family");
+    const familyVar = bestVar(T, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody);
     const radSm = bestVar(COLLECTIONS.radius, "sm");
     const radMd = bestVar(COLLECTIONS.radius, "md");
     const radLg = bestVar(COLLECTIONS.radius, "lg");
@@ -1820,66 +1991,7 @@
         blendMode: "NORMAL"
       }];
     }
-    const bodyFamily = ((_q = tokens.typography) == null ? void 0 : _q.fontFamily) || "Inter";
-    const headingFamily = ((_r = tokens.typography) == null ? void 0 : _r.headingFontFamily) || bodyFamily;
-    const STYLE_PREF = {
-      "Regular": ["Regular", "Normal", "Book", "Roman"],
-      "Medium": ["Medium", "Regular", "Book"],
-      "Semi Bold": ["Semi Bold", "SemiBold", "Semibold", "Demi Bold", "DemiBold", "Demi", "Bold", "Medium"],
-      "Bold": ["Bold", "Semi Bold", "SemiBold", "Black", "Heavy", "Extra Bold", "ExtraBold", "Medium"]
-    };
-    const stylesByFamily = /* @__PURE__ */ new Map();
-    try {
-      for (const f of await figma.listAvailableFontsAsync()) {
-        let s = stylesByFamily.get(f.fontName.family);
-        if (!s) {
-          s = /* @__PURE__ */ new Set();
-          stylesByFamily.set(f.fontName.family, s);
-        }
-        s.add(f.fontName.style);
-      }
-    } catch (e) {
-    }
-    const resolvedFont = /* @__PURE__ */ new Map();
-    const fellBack = /* @__PURE__ */ new Set();
-    async function loadLogical(family, logical) {
-      var _a2;
-      const key = `${family}|${logical}`;
-      if (resolvedFont.has(key)) return;
-      const pick = (fam) => {
-        var _a3;
-        const have = stylesByFamily.get(fam);
-        if (!have) return void 0;
-        for (const cand of STYLE_PREF[logical]) if (have.has(cand)) return cand;
-        return (_a3 = [...have].find((st) => !/italic|oblique/i.test(st))) != null ? _a3 : [...have][0];
-      };
-      const wantStyle = pick(family);
-      if (wantStyle) {
-        try {
-          await figma.loadFontAsync({ family, style: wantStyle });
-          resolvedFont.set(key, { family, style: wantStyle });
-          return;
-        } catch (e) {
-        }
-      }
-      fellBack.add(family);
-      const interStyle = (_a2 = pick("Inter")) != null ? _a2 : "Regular";
-      try {
-        await figma.loadFontAsync({ family: "Inter", style: interStyle });
-      } catch (e) {
-      }
-      resolvedFont.set(key, { family: "Inter", style: interStyle });
-    }
-    for (const family of /* @__PURE__ */ new Set([bodyFamily, headingFamily])) {
-      for (const logical of ["Regular", "Medium", "Semi Bold", "Bold"]) await loadLogical(family, logical);
-    }
-    for (const fam of fellBack) {
-      log(`\u26A0 Font "${fam}" isn't available in this workspace \u2014 component text falls back to Inter. Add the font to the file (Figma \u203A Assets \u203A fonts) or via a font plugin, then re-sync.`);
-    }
-    const fontFor = (style, heading = false) => {
-      var _a2;
-      return (_a2 = resolvedFont.get(`${heading ? headingFamily : bodyFamily}|${style}`)) != null ? _a2 : { family: "Inter", style };
-    };
+    const { bodyFamily, headingFamily, fontFor } = await createFontResolver(tokens);
     const fontFamily = bodyFamily;
     function txt(chars, o = {}) {
       var _a2, _b2, _c2, _d2, _e2, _f2, _g2, _h2, _i2, _j2, _k2;
@@ -5087,7 +5199,7 @@
     let plannedDone = 0;
     const legacySamplePage = pageByName("\u2B21 Sample");
     if (legacySamplePage) legacySamplePage.name = SAMPLE_PAGE;
-    const samplePage = (_s = makePage(SAMPLE_PAGE)) != null ? _s : oldPage != null ? oldPage : figma.currentPage;
+    const samplePage = (_q = makePage(SAMPLE_PAGE)) != null ? _q : oldPage != null ? oldPage : figma.currentPage;
     await harvest(samplePage);
     for (const { entry } of planned) {
       const legacy = pageByName(ITEM_PREFIX + entry.page);
@@ -5179,7 +5291,7 @@
     const textVar = docChromeVars.text;
     const mutedVar = docChromeVars.muted;
     const borderVar = docChromeVars.border;
-    const familyVar = findVar(COLLECTIONS.typography, "family");
+    const familyVar = bestVar(COLLECTIONS.typography, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody);
     const typoBind = /* @__PURE__ */ new Map();
     {
       const typoColVars = varsByCollection.get(COLLECTIONS.typography);
@@ -5858,7 +5970,7 @@
           spec.textAutoResize = "WIDTH_AND_HEIGHT";
           bindField(spec, "fontSize", bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`));
           bindField(spec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`));
-          bindField(spec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === "display" ? "heading-family" : "family"));
+          bindField(spec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body));
           row.appendChild(spec);
           spec.layoutSizingHorizontal = "HUG";
           spec.layoutSizingVertical = "HUG";
@@ -7248,7 +7360,9 @@
       } else {
         if (!tokens.typography.sizes) tokens.typography.sizes = {};
         if (!tokens.typography.weights) tokens.typography.weights = {};
+        if (!tokens.typography.fontFamily) tokens.typography.fontFamily = "Inter";
       }
+      await warnUnavailableSystemFonts(tokens);
       let totalVars = 0;
       let totalStyles = 0;
       let totalComponents = 0;
@@ -7345,7 +7459,7 @@
           totalDocs > 0 ? `docs (${totalDocs} boards)` : null
         ].filter(Boolean).join(" \xB7 ");
         log(`\u2015 Done${summary ? `: ${summary}` : ""}${hadError ? " \u2014 some phases failed, see \u2717 lines above" : ""} \u2015`);
-        figma.ui.postMessage({ type: "done", summary });
+        figma.ui.postMessage({ type: "done", summary, hadError });
       } catch (err) {
         const msg2 = err instanceof Error ? err.message : String(err);
         log(`\u2717 Error: ${msg2}`);
