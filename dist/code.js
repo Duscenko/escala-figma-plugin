@@ -2444,21 +2444,6 @@
       f.fills = [];
       f.resize(size, size);
       f.clipsContent = false;
-      const master = kind === "square" ? squareMaster : circleMaster;
-      if (master && !master.removed) {
-        try {
-          const inst = master.createInstance();
-          inst.name = kind === "square" ? "square-dashed" : "circle-dashed";
-          if (Math.abs(inst.width - size) > 0.05 && inst.width > 0) inst.rescale(size / inst.width);
-          paintSolidTree(inst, fillP(colorPr));
-          f.appendChild(inst);
-          inst.x = 0;
-          inst.y = 0;
-          return f;
-        } catch (e) {
-          log(`\u26A0 placeholder instance failed (${e instanceof Error ? e.message : String(e)}) \u2014 inline SVG`);
-        }
-      }
       try {
         const path = kind === "square" ? SQUARE_DASHED_PATH : CIRCLE_DASHED_PATH;
         const glyph = svgGlyphFromPath(path, size);
@@ -2523,7 +2508,8 @@
       LG: { padV: 12, padH: 20, f: 15, fv: sizeMd, gap: 8 },
       XL: { padV: 14, padH: 24, f: 16, fv: sizeMd, gap: 10 }
     };
-    function buildButton(c, out, color, style, state, size = "MD") {
+    const BTN_ICON_POS = ["None", "Leading", "Trailing"];
+    function buildButton(c, out, color, style, state, size = "MD", iconPos = "Leading") {
       var _a2;
       const k = BTN_COLORS[color];
       const sz = (_a2 = BTN_SIZES[size]) != null ? _a2 : BTN_SIZES.MD;
@@ -2564,12 +2550,15 @@
         c.fills = hoverish ? [fillP(k.soft, 0.5 * dim)] : [];
       }
       if (state === "Focused") focusRing(c, k.ringHex);
+      const makeIcon = () => {
+        const icon = txt("+", { style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP });
+        icon.name = "icon";
+        return icon;
+      };
       if (state === "Loading") {
         c.appendChild(miniSpinner(sz.f, textP));
-      } else {
-        const lead = iconSlot(sz.f, textP, "icon-leading", "circle");
-        c.appendChild(lead);
-        out.push({ node: lead, prop: "Show leading icon", def: true });
+      } else if (iconPos === "Leading") {
+        c.appendChild(makeIcon());
       }
       const label = txt("Button", {
         roleKey: "button",
@@ -2582,10 +2571,10 @@
       });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Button" });
-      if (state !== "Loading") {
-        const trail = iconSlot(sz.f, textP, "icon-trailing", "square");
-        c.appendChild(trail);
-        out.push({ node: trail, prop: "Show trailing icon", def: true });
+      if (iconPos === "Trailing" && state !== "Loading") {
+        const icon = makeIcon();
+        icon.name = "icon-trailing";
+        c.appendChild(icon);
       }
     }
     const INPUT_STATES = ["Default", "Hover", "Focused", "Filled", "Error", "Loading", "Disabled"];
@@ -4581,14 +4570,16 @@
     const SPECS = {
       Button: {
         cols: BTN_COLORS ? Object.keys(BTN_COLORS).length * BTN_STYLES.length : 12,
-        description: "Universal action button. Size \xD7 Color \xD7 Style \xD7 State; Show leading/trailing icon are set-level toggles bound to icon/circle-dashed \xB7 icon/square-dashed instances.",
+        description: "Universal action button. Size \xD7 Color \xD7 Style \xD7 State \xD7 Icon (None/Leading/Trailing) matrix; fills \u2192 component tokens \u2192 semantics.",
         variants: BTN_SIZE_KEYS.flatMap(
           (size) => STATES.flatMap(
             (state) => Object.keys(BTN_COLORS).flatMap(
-              (color) => BTN_STYLES.map((style) => ({
-                props: { Size: size, Color: color, Style: style, State: state },
-                build: (c, out) => buildButton(c, out, color, style, state, size)
-              }))
+              (color) => BTN_STYLES.flatMap(
+                (style) => BTN_ICON_POS.map((iconPos) => ({
+                  props: { Size: size, Color: color, Style: style, State: state, Icon: iconPos },
+                  build: (c, out) => buildButton(c, out, color, style, state, size, iconPos)
+                }))
+              )
             )
           )
         )
@@ -5038,9 +5029,9 @@
         spec: "Button",
         page: "Button",
         cols: 4,
-        // Size=MD keeps Overview readable; full State ladder for Brand Solid so
-        // Loading / Focused show up. Other Color×Style combos stay at Default.
-        keep: (p2) => p2.Size === "MD" && (p2.Color === "Brand" && p2.Style === "Solid" && (p2.State === "Default" || p2.State === "Hover" || p2.State === "Pressed" || p2.State === "Focused" || p2.State === "Loading" || p2.State === "Disabled") || p2.State === "Default" && !(p2.Color === "Brand" && p2.Style === "Solid"))
+        // Size=MD + Icon=None keeps Overview readable; full State ladder for
+        // Brand Solid so Loading / Focused show up. Other Color×Style stay Default.
+        keep: (p2) => p2.Size === "MD" && p2.Icon === "None" && (p2.Color === "Brand" && p2.Style === "Solid" && (p2.State === "Default" || p2.State === "Hover" || p2.State === "Pressed" || p2.State === "Focused" || p2.State === "Loading" || p2.State === "Disabled") || p2.State === "Default" && !(p2.Color === "Brand" && p2.Style === "Solid"))
       },
       {
         set: "Input",
@@ -5823,7 +5814,7 @@
       const legacy = pageByName(ITEM_PREFIX + entry.page);
       if (legacy) await harvest(legacy);
     }
-    {
+    try {
       const PLACEHOLDERS_PAGE = "\u2B21 Icon Placeholders";
       let host = pageByName(PLACEHOLDERS_PAGE);
       if (!host) host = makePage(PLACEHOLDERS_PAGE);
@@ -5867,7 +5858,7 @@
         sub.name = "label/placeholder-sub";
         sub.fontName = { family: "Inter", style: "Regular" };
         sub.fontSize = 12;
-        sub.characters = "Swap these instances inside Buttons, Inputs, Alerts\u2026 for a real glyph from Assets (icon/\u2026).";
+        sub.characters = "Reference marks (circle-dashed \xB7 square-dashed). Component slots draw the same paths inline \u2014 swap in a real glyph from Assets when you need one.";
         sub.fills = [{ type: "SOLID", color: { r: 0.4, g: 0.4, b: 0.45 } }];
         host.appendChild(sub);
         sub.x = 80;
@@ -5878,7 +5869,9 @@
         host.backgrounds = [{ type: "SOLID", color: { r: 0.96, g: 0.96, b: 0.97 } }];
       } catch (e) {
       }
-      log("\u2713 Icon placeholders: circle-dashed \xB7 square-dashed");
+      log("\u2713 Icon placeholders: circle-dashed \xB7 square-dashed (Assets reference)");
+    } catch (e) {
+      log(`\u26A0 Icon placeholders page skipped: ${e instanceof Error ? e.message : String(e)}`);
     }
     const catPageName = (c) => `\u2B21 Components \xB7 ${c}`;
     const builtCatPages = [];
@@ -5910,7 +5903,12 @@
       startCategoryRow(category, pg, entries.length, categoryList.indexOf(category), categoryList.length);
       for (const { entry, spec } of entries) {
         progress("Components", plannedDone, plannedTotal, entry.page);
-        buildEntry(entry, spec, pg, category);
+        try {
+          buildEntry(entry, spec, pg, category);
+        } catch (e) {
+          const m = e instanceof Error ? e.message : String(e);
+          log(`\u2717 ${entry.set} failed: ${m}`);
+        }
         plannedDone++;
         await yieldToUI();
       }

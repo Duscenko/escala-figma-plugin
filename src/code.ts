@@ -3249,7 +3249,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     return comp
   }
 
-  // Called once after harvest, before any buildEntry — see ensurePlaceholderMasters.
+  // Inline dashed glyph — NEVER a nested component instance. Nesting
+  // `icon/circle-dashed` instances inside every variant set broke combines /
+  // left empty slots on re-import. Masters on `⬡ Icon Placeholders` stay as
+  // Assets to swap by hand; slots themselves paint a local SVG (or ring).
   function iconSlot(
     size: number,
     colorPr: Pair,
@@ -3262,23 +3265,6 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     f.resize(size, size)
     f.clipsContent = false
 
-    const master = kind === 'square' ? squareMaster : circleMaster
-    if (master && !master.removed) {
-      try {
-        const inst = master.createInstance()
-        inst.name = kind === 'square' ? 'square-dashed' : 'circle-dashed'
-        if (Math.abs(inst.width - size) > 0.05 && inst.width > 0) inst.rescale(size / inst.width)
-        paintSolidTree(inst, fillP(colorPr))
-        f.appendChild(inst)
-        inst.x = 0
-        inst.y = 0
-        return f
-      } catch (e) {
-        log(`⚠ placeholder instance failed (${e instanceof Error ? e.message : String(e)}) — inline SVG`)
-      }
-    }
-
-    // Fallback when masters aren't ready (shouldn't happen after ensure…).
     try {
       const path = kind === 'square' ? SQUARE_DASHED_PATH : CIRCLE_DASHED_PATH
       const glyph = svgGlyphFromPath(path, size)
@@ -3370,10 +3356,12 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     XL: { padV: 14, padH: 24, f: 16, fv: sizeMd, gap: 10 },
   }
 
-  // Icons are set-level BOOLEAN toggles (Show leading / Show trailing), not an
-  // Icon variant axis — one matrix of Size × Color × Style × State, both slots
-  // always present as instances of icon/circle-dashed · icon/square-dashed.
-  function buildButton(c: ComponentNode, out: PendingProp[], color: string, style: string, state: BtnState, size = 'MD') {
+  // Icon is a VARIANT axis (None | Leading | Trailing) — not set-level booleans
+  // with nested placeholder instances. Nested instances inside variant sets
+  // were leaving empty slots / broken combines on re-import; the text glyph
+  // matches the stable pre-placeholder Button and keeps the matrix simple.
+  const BTN_ICON_POS = ['None', 'Leading', 'Trailing'] as const
+  function buildButton(c: ComponentNode, out: PendingProp[], color: string, style: string, state: BtnState, size = 'MD', iconPos: string = 'Leading') {
     const k = BTN_COLORS[color]
     const sz = BTN_SIZES[size] ?? BTN_SIZES.MD
     c.layoutMode = 'HORIZONTAL'
@@ -3415,12 +3403,16 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     }
     if (state === 'Focused') focusRing(c, k.ringHex)
 
+    const makeIcon = () => {
+      const icon = txt('+', { style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP })
+      icon.name = 'icon'
+      return icon
+    }
+
     if (state === 'Loading') {
       c.appendChild(miniSpinner(sz.f, textP))
-    } else {
-      const lead = iconSlot(sz.f, textP, 'icon-leading', 'circle')
-      c.appendChild(lead)
-      out.push({ node: lead, prop: 'Show leading icon', def: true })
+    } else if (iconPos === 'Leading') {
+      c.appendChild(makeIcon())
     }
     const label = txt('Button', {
       roleKey: 'button',
@@ -3429,10 +3421,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Button' })
-    if (state !== 'Loading') {
-      const trail = iconSlot(sz.f, textP, 'icon-trailing', 'square')
-      c.appendChild(trail)
-      out.push({ node: trail, prop: 'Show trailing icon', def: true })
+    if (iconPos === 'Trailing' && state !== 'Loading') {
+      const icon = makeIcon()
+      icon.name = 'icon-trailing'
+      c.appendChild(icon)
     }
   }
 
@@ -5520,14 +5512,16 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const SPECS: Record<string, AtomSpec> = {
     Button: {
       cols: BTN_COLORS ? Object.keys(BTN_COLORS).length * BTN_STYLES.length : 12,
-      description: 'Universal action button. Size × Color × Style × State; Show leading/trailing icon are set-level toggles bound to icon/circle-dashed · icon/square-dashed instances.',
+      description: 'Universal action button. Size × Color × Style × State × Icon (None/Leading/Trailing) matrix; fills → component tokens → semantics.',
       variants: BTN_SIZE_KEYS.flatMap((size) =>
         STATES.flatMap((state) =>
           Object.keys(BTN_COLORS).flatMap((color) =>
-            BTN_STYLES.map((style) => ({
-              props: { Size: size, Color: color, Style: style, State: state },
-              build: (c: ComponentNode, out: PendingProp[]) => buildButton(c, out, color, style, state, size),
-            })),
+            BTN_STYLES.flatMap((style) =>
+              BTN_ICON_POS.map((iconPos) => ({
+                props: { Size: size, Color: color, Style: style, State: state, Icon: iconPos },
+                build: (c: ComponentNode, out: PendingProp[]) => buildButton(c, out, color, style, state, size, iconPos),
+              })),
+            ),
           ),
         ),
       ),
@@ -6018,15 +6012,14 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const SAMPLE_PAGE = '⬡ Components Overview'
   // Axis values referenced below, for the record: Button size MD|SM|LG|XL,
   // state Default|Hover|Pressed|Focused|Loading|Disabled, colour Brand|Danger|
-  // Success, style Solid|Outline|Soft|Ghost. Icons are BOOLEAN toggles on the
-  // set (Show leading / Show trailing), not a variant axis.
+  // Success, style Solid|Outline|Soft|Ghost, icon None|Leading|Trailing.
   // Input's Type axis has NO 'Text' value — its plain variant is 'Default'.
   const SAMPLE: SampleEntry[] = [
     {
       set: 'Button', spec: 'Button', page: 'Button', cols: 4,
-      // Size=MD keeps Overview readable; full State ladder for Brand Solid so
-      // Loading / Focused show up. Other Color×Style combos stay at Default.
-      keep: (p) => p.Size === 'MD' && (
+      // Size=MD + Icon=None keeps Overview readable; full State ladder for
+      // Brand Solid so Loading / Focused show up. Other Color×Style stay Default.
+      keep: (p) => p.Size === 'MD' && p.Icon === 'None' && (
         (p.Color === 'Brand' && p.Style === 'Solid' &&
           (p.State === 'Default' || p.State === 'Hover' || p.State === 'Pressed' ||
            p.State === 'Focused' || p.State === 'Loading' || p.State === 'Disabled')) ||
@@ -6699,8 +6692,8 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
 
     if (isVariantSet) {
       let existingSet = existingSets.get(entry.set)
-      // Axis change (e.g. Button dropped Icon=None|Leading|Trailing for boolean
-      // Show leading/trailing toggles): Figma refuses to append a child whose
+      // Axis change (e.g. Button Icon=None|Leading|Trailing added/removed, or an
+      // older boolean Show-icon experiment): Figma refuses to append a child whose
       // variant props don't match the set. Deleting the old axis AFTER append
       // never runs — combine/append throws and the whole Components phase
       // stops, so the file "no longer extracts components". Detect mismatch
@@ -7007,10 +7000,11 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     if (legacy) await harvest(legacy)
   }
 
-  // Two shared placeholder Components — every iconSlot is an instance of one.
-  // Page is dedicated so Masters aren't buried inside a category board, and we
-  // never findOne across unloaded pages (dynamic-page would throw).
-  {
+  // Two shared placeholder Components on their own page (Assets reference).
+  // Component slots paint INLINE glyphs — they must not nest instances of these
+  // masters (that broke variant sets on re-import). Failure here must not abort
+  // the Components phase.
+  try {
     const PLACEHOLDERS_PAGE = '⬡ Icon Placeholders'
     let host = pageByName(PLACEHOLDERS_PAGE)
     if (!host) host = makePage(PLACEHOLDERS_PAGE)
@@ -7060,7 +7054,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       sub.name = 'label/placeholder-sub'
       sub.fontName = { family: 'Inter', style: 'Regular' }
       sub.fontSize = 12
-      sub.characters = 'Swap these instances inside Buttons, Inputs, Alerts… for a real glyph from Assets (icon/…).'
+      sub.characters = 'Reference marks (circle-dashed · square-dashed). Component slots draw the same paths inline — swap in a real glyph from Assets when you need one.'
       sub.fills = [{ type: 'SOLID', color: { r: 0.4, g: 0.4, b: 0.45 } }]
       host.appendChild(sub)
       sub.x = 80
@@ -7068,7 +7062,9 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     } catch { /* fonts may still be loading — masters alone are enough */ }
 
     try { host.backgrounds = [{ type: 'SOLID', color: { r: 0.96, g: 0.96, b: 0.97 } }] } catch {}
-    log('✓ Icon placeholders: circle-dashed · square-dashed')
+    log('✓ Icon placeholders: circle-dashed · square-dashed (Assets reference)')
+  } catch (e) {
+    log(`⚠ Icon placeholders page skipped: ${e instanceof Error ? e.message : String(e)}`)
   }
 
   const catPageName = (c: string) => `⬡ Components · ${c}`
