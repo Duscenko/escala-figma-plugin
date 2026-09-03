@@ -262,7 +262,7 @@
   var PLUGIN_COLLECTION_NAMES = new Set(Object.values(COLLECTIONS));
   var PLUGIN_STYLE_ROOTS = /* @__PURE__ */ new Set(["Type", "Shadow", "Gradient", "Grid"]);
   var INHERITED_STYLE_FOLDERS = ["Type", "Shadow", "Gradient", "Grid", "Scale", "Semantic"];
-  var DOCS_REV = 10;
+  var DOCS_REV = 11;
   var FILE_DOCS_REV_KEY = "sd-docs-rev";
   var FILE_PRIMITIVES_HIDDEN_KEY = "sd-primitives-hidden-v1";
   function collectionPanelOrder(tokens) {
@@ -473,7 +473,16 @@
       "border-tertiary": ["border", "subtle"],
       "border-focus": ["border", "focus"],
       "border-brand": ["border", "accent"],
-      "border-error": ["border", "critical"],
+      // The CONTROL BOUNDARY of an invalid / status-state field. `border.critical`
+      // moved into the `status` group as `status.<sev>.border-strong` (configurator
+      // audit F1/F3 — a severity-family stroke belongs beside `status.<sev>.border`,
+      // and `info` joined so all four are symmetric). `status.<sev>.border` (mapped
+      // above as `status-<sev>-border`) is the softer ALPHA edge of a message; this
+      // is the solved solid stroke of a form control.
+      "border-error": ["status", "critical.border-strong"],
+      "border-warning": ["status", "warning.border-strong"],
+      "border-success": ["status", "success.border-strong"],
+      "border-info": ["status", "info.border-strong"],
       "content-primary": ["content", "primary"],
       "content-secondary": ["content", "secondary"],
       "content-tertiary": ["content", "subtle"],
@@ -603,6 +612,19 @@
     if (!collection) return void 0;
     const firstTheme = (_b = ((_a = tokens.colors.themeOrder) != null ? _a : ["light"])[0]) != null ? _b : "light";
     const mode = (_c = collection.modes.find((m) => m.name.toLowerCase() === firstTheme.toLowerCase())) != null ? _c : collection.modes[0];
+    return mode ? { collection, modeId: mode.modeId } : void 0;
+  }
+  function componentThemeKey(tokens) {
+    var _a, _b, _c;
+    const order = (_a = tokens.colors.themeOrder) != null ? _a : ["light"];
+    return order.length > 2 ? (_b = order[order.length - 1]) != null ? _b : "light" : (_c = order[0]) != null ? _c : "light";
+  }
+  function componentModePin(tokens, allCols) {
+    var _a;
+    const collection = allCols.find((c) => c.name === COLLECTIONS.semantics);
+    if (!collection) return void 0;
+    const key = componentThemeKey(tokens);
+    const mode = (_a = collection.modes.find((m) => m.name.toLowerCase() === key.toLowerCase())) != null ? _a : collection.modes[0];
     return mode ? { collection, modeId: mode.modeId } : void 0;
   }
   function pinToLightMode(node, pin) {
@@ -1771,10 +1793,6 @@
       }
       log(`\u2713 Removed ${stalePaints.length} legacy color paint styles (colors are variables-only now)`);
     }
-    const inheritedDropped = await removeInheritedStyles();
-    if (inheritedDropped > 0) {
-      log(`\u2713 Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? "" : "s"} prefixed with a previous project name`);
-    }
     const gradients = (_b = tokens.gradients) != null ? _b : {};
     if (Object.keys(gradients).length > 0) {
       const paintByName = new Map(
@@ -2012,8 +2030,20 @@
     };
     function docText(chars, size, style, hex, opacity = 1, v) {
       const t = figma.createText();
-      t.fontName = fontFor(style);
-      t.characters = chars;
+      const applyFont = (s) => {
+        t.fontName = fontFor(s);
+      };
+      try {
+        applyFont(style);
+        t.characters = chars;
+      } catch (e) {
+        try {
+          applyFont("Regular");
+          t.characters = chars;
+        } catch (e2) {
+          t.characters = chars;
+        }
+      }
       t.fontSize = size;
       t.fills = [docSolid(hex, opacity, v)];
       if (typo && typo.size > 0) {
@@ -2099,6 +2129,11 @@
     }
     return { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard };
   }
+  var CIRCLE_DASHED_PATH = "M96.26 37.05a8 8 0 0 1 5.74-9.76a104.1 104.1 0 0 1 52 0a8 8 0 0 1-2 15.75a8.2 8.2 0 0 1-2-.26a88.1 88.1 0 0 0-44 0a8 8 0 0 1-9.74-5.73M53.79 55.14a104.05 104.05 0 0 0-26 45a8 8 0 0 0 15.42 4.27a88 88 0 0 1 22-38.09a8 8 0 0 0-11.42-11.18m-10.58 96.41a8 8 0 1 0-15.42 4.28a104.1 104.1 0 0 0 26 45a8 8 0 0 0 11.41-11.22a88.14 88.14 0 0 1-21.99-38.06M150 213.22a88 88 0 0 1-44 0a8 8 0 1 0-4 15.49a104.1 104.1 0 0 0 52 0a8 8 0 0 0-4-15.49M222.65 146a8 8 0 0 0-9.85 5.58a87.9 87.9 0 0 1-22 38.08a8 8 0 1 0 11.42 11.21a104 104 0 0 0 26-45a8 8 0 0 0-5.57-9.87m-9.86-41.54a8 8 0 0 0 15.42-4.28a104 104 0 0 0-26-45A8 8 0 1 0 190.8 66.4a88 88 0 0 1 21.99 38.05Z";
+  var SQUARE_DASHED_PATH = "M80,48a8,8,0,0,1-8,8H40V72a8,8,0,0,1-16,0V56A16,16,0,0,1,40,40H72A8,8,0,0,1,80,48ZM32,152a8,8,0,0,0,8-8V112a8,8,0,0,0-16,0v32A8,8,0,0,0,32,152Zm40,48H40V184a8,8,0,0,0-16,0v16a16,16,0,0,0,16,16H72a8,8,0,0,0,0-16Zm72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm80-24a8,8,0,0,0-8,8v16H184a8,8,0,0,0,0,16h32a16,16,0,0,0,16-16V184A8,8,0,0,0,224,176Zm0-72a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V112A8,8,0,0,0,224,104Zm-8-64H184a8,8,0,0,0,0,16h32V72a8,8,0,0,0,16,0V56A16,16,0,0,0,216,40Zm-72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Z";
+  var PLACEHOLDER_MASTER_SIZE = 24;
+  var PLACEHOLDER_CIRCLE_NAME = "icon/circle-dashed";
+  var PLACEHOLDER_SQUARE_NAME = "icon/square-dashed";
   async function importSample(tokens, includeFullCatalogue = false) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
     const allVars = await figma.variables.getLocalVariablesAsync();
@@ -2183,7 +2218,11 @@
       borderSubtle: pair(["border/tertiary", "border/subtle", "border/default", "border"], ["border-tertiary", "border-subtle", "border-default"], "#2a2a2a"),
       borderBrand: pair(["border/brand", "border/accent"], ["border-brand"], "#3B82F6"),
       borderDisabled: pair(["border/disabled"], ["border-disabled"], "#2e2e2e"),
-      borderError: pair(["border/error"], ["border-error"], "#f04438"),
+      // Error-state control stroke. `border.critical` became
+      // `status.critical.border-strong` (configurator audit F1) — a categorical
+      // export now creates `Status/critical/border-strong`, so alias that first;
+      // `border/error` stays as the pre-F1 / flat-catalogue name.
+      borderError: pair(["Status/critical/border-strong", "Status/critical.border-strong", "status/critical/border-strong", "status/critical.border-strong", "border/error"], ["border-error"], "#f04438"),
       // Icon roles — no icon-* family exists any more; alias the matching
       // content-* role (Radix convention: icon and text share their tint).
       iconPrimary: pair(["content/primary", "icon/primary", "fg/primary", "text/primary"], ["content-primary", "icon-primary", "fg-primary", "text-primary"], "#f5f5f5"),
@@ -2409,6 +2448,7 @@
     }
     let circleMaster = null;
     let squareMaster = null;
+    let iconSwapPreferred = [];
     function paintSolidTree(root, paint) {
       const nodes = "findAll" in root ? [root, ...root.findAll()] : [root];
       for (const n of nodes) {
@@ -2428,22 +2468,41 @@
       return glyph;
     }
     function createPlaceholderMaster(name, path) {
-      const frame = svgGlyphFromPath(path, PLACEHOLDER_MASTER_SIZE);
-      frame.name = "glyph";
-      const comp = figma.createComponentFromNode(frame);
+      const comp = figma.createComponent();
       comp.name = name;
+      comp.resize(PLACEHOLDER_MASTER_SIZE, PLACEHOLDER_MASTER_SIZE);
+      comp.fills = [];
+      const glyph = svgGlyphFromPath(path, PLACEHOLDER_MASTER_SIZE);
+      glyph.name = "glyph";
+      comp.appendChild(glyph);
+      glyph.x = 0;
+      glyph.y = 0;
       try {
         comp.description = name === PLACEHOLDER_CIRCLE_NAME ? "Empty circular icon slot (Phosphor circle-dashed). Swap this instance for any icon/<library>/\u2026 set." : "Empty square icon slot (Phosphor rectangle-dashed). Swap this instance for any icon/<library>/\u2026 set.";
       } catch (e) {
       }
       return comp;
     }
-    function iconSlot(size, colorPr, name = "icon", kind = "circle") {
+    function makeIconSlot(size, colorPr, name = "icon", kind = "circle") {
       const f = figma.createFrame();
       f.name = name;
       f.fills = [];
       f.resize(size, size);
       f.clipsContent = false;
+      const master = kind === "square" ? squareMaster : circleMaster;
+      if (master && !master.removed) {
+        try {
+          const inst = master.createInstance();
+          inst.name = kind === "square" ? "square-dashed" : "circle-dashed";
+          if (size !== PLACEHOLDER_MASTER_SIZE) inst.rescale(size / PLACEHOLDER_MASTER_SIZE);
+          paintSolidTree(inst, fillP(colorPr));
+          f.appendChild(inst);
+          inst.x = 0;
+          inst.y = 0;
+          return { frame: f, instance: inst };
+        } catch (e) {
+        }
+      }
       try {
         const path = kind === "square" ? SQUARE_DASHED_PATH : CIRCLE_DASHED_PATH;
         const glyph = svgGlyphFromPath(path, size);
@@ -2465,8 +2524,12 @@
         ring.x = 0;
         ring.y = 0;
       }
-      return f;
+      return { frame: f, instance: null };
     }
+    function iconSlot(size, colorPr, name = "icon", kind = "circle") {
+      return makeIconSlot(size, colorPr, name, kind).frame;
+    }
+    const FULL_CATALOGUE_BUDGET = 24;
     const STATES = ["Default", "Hover", "Pressed", "Focused", "Loading", "Disabled"];
     const BTN_COLORS = {
       Brand: {
@@ -2508,8 +2571,7 @@
       LG: { padV: 12, padH: 20, f: 15, fv: sizeMd, gap: 8 },
       XL: { padV: 14, padH: 24, f: 16, fv: sizeMd, gap: 10 }
     };
-    const BTN_ICON_POS = ["None", "Leading", "Trailing"];
-    function buildButton(c, out, color, style, state, size = "MD", iconPos = "Leading") {
+    function buildButton(c, out, color, style, state, size = "MD") {
       var _a2;
       const k = BTN_COLORS[color];
       const sz = (_a2 = BTN_SIZES[size]) != null ? _a2 : BTN_SIZES.MD;
@@ -2550,15 +2612,25 @@
         c.fills = hoverish ? [fillP(k.soft, 0.5 * dim)] : [];
       }
       if (state === "Focused") focusRing(c, k.ringHex);
-      const makeIcon = () => {
-        const icon = txt("+", { style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP });
-        icon.name = "icon";
-        return icon;
+      const addIconSlot = (propPrefix, name) => {
+        const { frame, instance } = makeIconSlot(sz.f, textP, name);
+        c.appendChild(frame);
+        out.push({ node: frame, prop: `${propPrefix} visible`, def: false });
+        if (instance && circleMaster) {
+          out.push({
+            node: instance,
+            prop: `${propPrefix} icon`,
+            def: "",
+            swapDefaultId: circleMaster.id,
+            swapPreferred: iconSwapPreferred
+          });
+        }
+        return frame;
       };
       if (state === "Loading") {
         c.appendChild(miniSpinner(sz.f, textP));
-      } else if (iconPos === "Leading") {
-        c.appendChild(makeIcon());
+      } else {
+        addIconSlot("Icon leading", "icon-leading");
       }
       const label = txt("Button", {
         roleKey: "button",
@@ -2571,10 +2643,8 @@
       });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Button" });
-      if (iconPos === "Trailing" && state !== "Loading") {
-        const icon = makeIcon();
-        icon.name = "icon-trailing";
-        c.appendChild(icon);
+      if (state !== "Loading") {
+        addIconSlot("Icon trailing", "icon-trailing");
       }
     }
     const INPUT_STATES = ["Default", "Hover", "Focused", "Filled", "Error", "Loading", "Disabled"];
@@ -4570,16 +4640,22 @@
     const SPECS = {
       Button: {
         cols: BTN_COLORS ? Object.keys(BTN_COLORS).length * BTN_STYLES.length : 12,
-        description: "Universal action button. Size \xD7 Color \xD7 Style \xD7 State \xD7 Icon (None/Leading/Trailing) matrix; fills \u2192 component tokens \u2192 semantics.",
+        description: "Universal action button. Size \xD7 Color \xD7 Style \xD7 State matrix, each variant carrying independent Icon leading / Icon trailing boolean + swap properties; fills \u2192 component tokens \u2192 semantics.",
+        // Size/Style/State are what a designer actually picks between — a
+        // button's height, its emphasis, and what it's doing. Color still
+        // appears (every value ships, see budgetedCross), just not crossed
+        // against the other three: a Danger XL Ghost Loading button is not a
+        // combination anyone reaches for. Icon is NOT an axis at all any more —
+        // see buildButton — so it never multiplies this matrix in the first
+        // place; every variant below carries both icon slots as toggles.
+        primaryAxes: ["Size", "Style", "State"],
         variants: BTN_SIZE_KEYS.flatMap(
           (size) => STATES.flatMap(
             (state) => Object.keys(BTN_COLORS).flatMap(
-              (color) => BTN_STYLES.flatMap(
-                (style) => BTN_ICON_POS.map((iconPos) => ({
-                  props: { Size: size, Color: color, Style: style, State: state, Icon: iconPos },
-                  build: (c, out) => buildButton(c, out, color, style, state, size, iconPos)
-                }))
-              )
+              (color) => BTN_STYLES.map((style) => ({
+                props: { Size: size, Color: color, Style: style, State: state },
+                build: (c, out) => buildButton(c, out, color, style, state, size)
+              }))
             )
           )
         )
@@ -4587,6 +4663,10 @@
       Input: {
         cols: INPUT_TYPES.length,
         description: "Text input field \u2014 Type \xD7 State \xD7 Size with label, description and helper rows. Every context ships its exact inner layout; styling bound to input/* tokens.",
+        // Size × State is the interaction ladder; Type (icon-leading, password,
+        // search…) is a content variation, still fully represented but only
+        // against the Default size/state baseline.
+        primaryAxes: ["Size", "State"],
         variants: INPUT_SIZE_KEYS.flatMap(
           (size) => INPUT_STATES.flatMap(
             (state) => INPUT_TYPES.map((type) => ({
@@ -4633,6 +4713,11 @@
       Badge: {
         cols: 6,
         description: "Badge \u2014 Size \xD7 Style (Solid/Soft/Outline) \xD7 Color (semantic status roles) \xD7 Icon (None/Leading/Trailing).",
+        // Style × Color is the axis pair that actually needs to be SEEN
+        // together — it's how a reviewer confirms every status colour looks
+        // right in every treatment. Size and Icon still ship every value, just
+        // against the MD/None baseline.
+        primaryAxes: ["Style", "Color"],
         variants: ["MD", "SM", "LG"].flatMap(
           (size) => ["Solid", "Soft", "Outline"].flatMap(
             (style) => Object.keys(BADGE_COLORS).flatMap(
@@ -5029,9 +5114,15 @@
         spec: "Button",
         page: "Button",
         cols: 4,
-        // Size=MD + Icon=None keeps Overview readable; full State ladder for
-        // Brand Solid so Loading / Focused show up. Other Color×Style stay Default.
-        keep: (p2) => p2.Size === "MD" && p2.Icon === "None" && (p2.Color === "Brand" && p2.Style === "Solid" && (p2.State === "Default" || p2.State === "Hover" || p2.State === "Pressed" || p2.State === "Focused" || p2.State === "Loading" || p2.State === "Disabled") || p2.State === "Default" && !(p2.Color === "Brand" && p2.Style === "Solid"))
+        // Icon is no longer a variant prop at all (see buildButton — every
+        // variant carries its own Icon leading/trailing boolean + swap
+        // properties, always), so there's nothing left to sweep or pin for it
+        // here. Size=MD keeps the Color×Style×State sweep readable; full State
+        // ladder for Brand Solid so Loading/Focused show up, other Color×Style
+        // stay Default. The one remaining sweep is Size itself (every size, at
+        // the resting Brand/Solid/Default combo) — otherwise Size pins to MD
+        // and `sampleSpec` below strips it as a property.
+        keep: (p2) => p2.Size === "MD" && (p2.Color === "Brand" && p2.Style === "Solid" && (p2.State === "Default" || p2.State === "Hover" || p2.State === "Pressed" || p2.State === "Focused" || p2.State === "Loading" || p2.State === "Disabled") || p2.State === "Default" && !(p2.Color === "Brand" && p2.Style === "Solid")) || p2.Color === "Brand" && p2.Style === "Solid" && p2.State === "Default"
       },
       {
         set: "Input",
@@ -5099,10 +5190,59 @@
       }));
       return { cols: (_a2 = e.cols) != null ? _a2 : base.cols, variants, description: base.description };
     }
+    function budgetedCross(base, primaryAxes) {
+      const axisOrder = Object.keys(base.variants[0].props);
+      const sig = (props) => axisOrder.map((a) => props[a]).join("\0");
+      const bySig = new Map(base.variants.map((v) => [sig(v.props), v]));
+      const defaultProps = base.variants[0].props;
+      const orderedValues = (axis) => {
+        const seen = /* @__PURE__ */ new Set();
+        const out = [];
+        for (const v of base.variants) {
+          const val = v.props[axis];
+          if (val !== void 0 && !seen.has(val)) {
+            seen.add(val);
+            out.push(val);
+          }
+        }
+        return out;
+      };
+      let primaryCombos = [{}];
+      for (const axis of primaryAxes) {
+        const next = [];
+        for (const combo of primaryCombos) {
+          for (const val of orderedValues(axis)) next.push(__spreadProps(__spreadValues({}, combo), { [axis]: val }));
+        }
+        primaryCombos = next;
+      }
+      const chosen = [];
+      const chosenSigs = /* @__PURE__ */ new Set();
+      const take = (props) => {
+        const key = sig(props);
+        if (chosenSigs.has(key)) return;
+        const v = bySig.get(key);
+        if (!v) return;
+        chosen.push(v);
+        chosenSigs.add(key);
+      };
+      for (const combo of primaryCombos) take(__spreadValues(__spreadValues({}, defaultProps), combo));
+      const secondaryAxes = axisOrder.filter((a) => !primaryAxes.includes(a));
+      for (const axis of secondaryAxes) {
+        for (const val of orderedValues(axis)) {
+          if (val === defaultProps[axis]) continue;
+          take(__spreadProps(__spreadValues({}, defaultProps), { [axis]: val }));
+        }
+      }
+      return chosen;
+    }
     function representativeSpec(specKey) {
       const base = SPECS[specKey];
       if (!base || base.variants.length === 0) return void 0;
-      if (base.variants.length <= 24) return __spreadProps(__spreadValues({}, base), { representative: true });
+      if (base.variants.length <= FULL_CATALOGUE_BUDGET) return __spreadProps(__spreadValues({}, base), { representative: true });
+      if (base.primaryAxes && base.primaryAxes.length > 0) {
+        const variants = budgetedCross(base, base.primaryAxes);
+        if (variants.length > 0) return __spreadProps(__spreadValues({}, base), { variants, representative: true });
+      }
       const uncovered = /* @__PURE__ */ new Set();
       for (const variant of base.variants) {
         for (const [key, value] of Object.entries(variant.props)) uncovered.add(`${key}\0${value}`);
@@ -5181,6 +5321,7 @@
     const GAP_Y = 24;
     const MARGIN = 80;
     const BOARD_GAP = 160;
+    const STAGE_STEP = 900;
     let builtVariants = 0;
     let builtAtoms = 0;
     let boardX = 0;
@@ -5192,10 +5333,12 @@
     const HEAD_GAP = 48;
     const BAND_W = 560;
     const cursorByPage = /* @__PURE__ */ new Map();
+    let inFlight = [];
     let firstBuiltPage;
     const sampleTypo = await typoVarMap();
     const sampleChrome = docChromeVarsFrom(semLookup);
     const sampleModePin = docModePin(tokens, allCols);
+    const componentThemePin = componentModePin(tokens, allCols);
     const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes, sampleChrome, sampleModePin);
     const DOC_INTRO = {
       Button: "The core action component of the system. It covers primary, destructive and success intents across four visual styles and the full interaction lifecycle, so a generic button never has to be rebuilt.",
@@ -5520,13 +5663,28 @@
       return wrapper;
     }
     function applyPendingProps(owner, pending) {
-      var _a2;
+      var _a2, _b2, _c2;
       for (const pp of pending) {
         try {
           const defs = owner.componentPropertyDefinitions;
           let id = Object.keys(defs).find((k) => k === pp.prop || k.startsWith(`${pp.prop}#`));
           const refs = __spreadValues({}, (_a2 = pp.node.componentPropertyReferences) != null ? _a2 : {});
-          if (typeof pp.def === "boolean") {
+          if (pp.swapDefaultId) {
+            if (!id) {
+              id = owner.addComponentProperty(
+                pp.prop,
+                "INSTANCE_SWAP",
+                pp.swapDefaultId,
+                ((_b2 = pp.swapPreferred) == null ? void 0 : _b2.length) ? { preferredValues: pp.swapPreferred } : void 0
+              );
+            } else if ((_c2 = pp.swapPreferred) == null ? void 0 : _c2.length) {
+              try {
+                owner.editComponentProperty(id, { preferredValues: pp.swapPreferred });
+              } catch (e) {
+              }
+            }
+            refs.mainComponent = id;
+          } else if (typeof pp.def === "boolean") {
             if (!id) id = owner.addComponentProperty(pp.prop, "BOOLEAN", pp.def);
             refs.visible = id;
           } else {
@@ -5552,6 +5710,7 @@
       const pending = [];
       const isVariantSet = spec.variants.length > 1;
       const cursorY = (_a2 = cursorByPage.get(pg.id)) != null ? _a2 : 120;
+      cursorByPage.set(pg.id, cursorY + STAGE_STEP);
       let placedNode;
       let variantNodes;
       if (isVariantSet) {
@@ -5609,15 +5768,36 @@
           }
           nodes.push(comp);
         });
-        const cellW = Math.max(...nodes.map((n) => n.width)) + GAP_X;
-        const cellH = Math.max(...nodes.map((n) => n.height)) + GAP_Y;
+        inFlight.push(...nodes);
+        const widths = nodes.map((n) => n.width).filter((w) => Number.isFinite(w) && w > 0);
+        const heights = nodes.map((n) => n.height).filter((h) => Number.isFinite(h) && h > 0);
+        const cellW = (widths.length ? Math.max(...widths) : 80) + GAP_X;
+        const cellH = (heights.length ? Math.max(...heights) : 40) + GAP_Y;
         let set = existingSet;
         if (!set) {
           nodes.forEach((n, i) => {
+            if (n.parent !== pg) try {
+              pg.appendChild(n);
+            } catch (e) {
+            }
             n.x = MARGIN + i % spec.cols * cellW;
             n.y = cursorY + Math.floor(i / spec.cols) * cellH;
           });
-          set = figma.combineAsVariants(nodes, pg);
+          try {
+            set = figma.combineAsVariants(nodes, pg);
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            log(`\u21BB ${entry.set}: combineAsVariants failed (${m}) \u2014 retrying`);
+            nodes.forEach((n, i) => {
+              try {
+                pg.appendChild(n);
+              } catch (e2) {
+              }
+              n.x = MARGIN + i % spec.cols * cellW;
+              n.y = cursorY + Math.floor(i / spec.cols) * cellH;
+            });
+            set = figma.combineAsVariants(nodes, pg);
+          }
           set.name = entry.set;
           existingSets.set(entry.set, set);
         } else {
@@ -5659,6 +5839,7 @@
           set.description = spec.description;
         } catch (e) {
         }
+        inFlight.push(set);
         set.x = MARGIN;
         set.y = cursorY;
         applyPendingProps(set, pending);
@@ -5687,11 +5868,13 @@
           comp.description = spec.description;
         } catch (e) {
         }
+        inFlight.push(comp);
         applyPendingProps(comp, pending);
         comp.x = MARGIN;
         comp.y = cursorY;
         placedNode = comp;
       }
+      if (!spec.representative) pinToLightMode(placedNode, componentThemePin);
       const propNames = [...new Set(pending.filter((pp) => typeof pp.def === "string").map((pp) => pp.prop))];
       const toggleNames = [...new Set(pending.filter((pp) => typeof pp.def === "boolean").map((pp) => pp.prop))];
       const panel = buildDocPanel(entry, spec, category, propNames, toggleNames);
@@ -5711,7 +5894,23 @@
       const leftCol = docFrame("leftCol", "VERTICAL", 24);
       leftCol.appendChild(bar);
       leftCol.appendChild(panel);
-      const rightContent = isVariantSet && variantNodes ? buildVariantMatrix(entry, spec, variantNodes, placedNode) : placedNode;
+      let rightContent = placedNode;
+      if (isVariantSet && variantNodes) {
+        try {
+          rightContent = buildVariantMatrix(entry, spec, variantNodes, placedNode);
+        } catch (e) {
+          const m = e instanceof Error ? e.message : String(e);
+          log(`\u26A0 ${entry.set} matrix layout failed (${m}) \u2014 showing raw set`);
+          placedNode.visible = true;
+          if (placedNode.parent !== pg) {
+            try {
+              pg.appendChild(placedNode);
+            } catch (e2) {
+            }
+          }
+          rightContent = placedNode;
+        }
+      }
       const idx = String(++boardIndex).padStart(2, "0");
       const board = docFrame(`${idx} \xB7 ${entry.page}`, "HORIZONTAL", 24);
       board.fills = [docSolid(DOC.board, 1, sampleChrome.board)];
@@ -5723,6 +5922,7 @@
       board.counterAxisAlignItems = "MIN";
       pinToLightMode(board, sampleModePin);
       pg.appendChild(board);
+      inFlight.push(board);
       board.appendChild(leftCol);
       board.appendChild(rightContent);
       board.x = boardX;
@@ -5730,6 +5930,7 @@
       boardX += Math.ceil(board.width) + BOARD_GAP;
       rowH = Math.max(rowH, Math.ceil(board.height));
       builtAtoms++;
+      inFlight = [];
     }
     function startCategoryRow(category, pg, count, index, total) {
       if (rowCategory !== void 0) boardY += rowH + CATEGORY_GAP;
@@ -5873,6 +6074,17 @@
     } catch (e) {
       log(`\u26A0 Icon placeholders page skipped: ${e instanceof Error ? e.message : String(e)}`);
     }
+    try {
+      const iconsPage = pageByName("\u2B21 Icons");
+      if (iconsPage) {
+        await iconsPage.loadAsync();
+        const sets = iconsPage.children.filter(
+          (n) => n.type === "COMPONENT_SET" && n.name.startsWith("icon/")
+        );
+        iconSwapPreferred = sets.slice(0, 40).map((s) => ({ type: "COMPONENT_SET", key: s.key }));
+      }
+    } catch (e) {
+    }
     const catPageName = (c) => `\u2B21 Components \xB7 ${c}`;
     const builtCatPages = [];
     let firstCatPage;
@@ -5900,7 +6112,16 @@
         boardIndex = 0;
       }
       lastPage = pg;
-      startCategoryRow(category, pg, entries.length, categoryList.indexOf(category), categoryList.length);
+      try {
+        startCategoryRow(category, pg, entries.length, categoryList.indexOf(category), categoryList.length);
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e);
+        log(`\u26A0 Category band "${category}" skipped: ${m}`);
+        if (rowCategory !== void 0) boardY += rowH + CATEGORY_GAP;
+        rowCategory = category;
+        rowH = 0;
+        boardX = 0;
+      }
       for (const { entry, spec } of entries) {
         progress("Components", plannedDone, plannedTotal, entry.page);
         try {
@@ -5908,6 +6129,15 @@
         } catch (e) {
           const m = e instanceof Error ? e.message : String(e);
           log(`\u2717 ${entry.set} failed: ${m}`);
+          for (const leftover of inFlight) {
+            try {
+              if (!leftover.removed) leftover.remove();
+            } catch (e2) {
+            }
+          }
+          inFlight = [];
+          existingSets.delete(entry.set);
+          existingSingles.delete(entry.set);
         }
         plannedDone++;
         await yieldToUI();
@@ -7024,11 +7254,6 @@
     radix: "radix-icons",
     material: "material-symbols"
   };
-  var CIRCLE_DASHED_PATH = "M96.26 37.05a8 8 0 0 1 5.74-9.76a104.1 104.1 0 0 1 52 0a8 8 0 0 1-2 15.75a8.2 8.2 0 0 1-2-.26a88.1 88.1 0 0 0-44 0a8 8 0 0 1-9.74-5.73M53.79 55.14a104.05 104.05 0 0 0-26 45a8 8 0 0 0 15.42 4.27a88 88 0 0 1 22-38.09a8 8 0 0 0-11.42-11.18m-10.58 96.41a8 8 0 1 0-15.42 4.28a104.1 104.1 0 0 0 26 45a8 8 0 0 0 11.41-11.22a88.14 88.14 0 0 1-21.99-38.06M150 213.22a88 88 0 0 1-44 0a8 8 0 1 0-4 15.49a104.1 104.1 0 0 0 52 0a8 8 0 0 0-4-15.49M222.65 146a8 8 0 0 0-9.85 5.58a87.9 87.9 0 0 1-22 38.08a8 8 0 1 0 11.42 11.21a104 104 0 0 0 26-45a8 8 0 0 0-5.57-9.87m-9.86-41.54a8 8 0 0 0 15.42-4.28a104 104 0 0 0-26-45A8 8 0 1 0 190.8 66.4a88 88 0 0 1 21.99 38.05Z";
-  var SQUARE_DASHED_PATH = "M80,48a8,8,0,0,1-8,8H40V72a8,8,0,0,1-16,0V56A16,16,0,0,1,40,40H72A8,8,0,0,1,80,48ZM32,152a8,8,0,0,0,8-8V112a8,8,0,0,0-16,0v32A8,8,0,0,0,32,152Zm40,48H40V184a8,8,0,0,0-16,0v16a16,16,0,0,0,16,16H72a8,8,0,0,0,0-16Zm72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm80-24a8,8,0,0,0-8,8v16H184a8,8,0,0,0,0,16h32a16,16,0,0,0,16-16V184A8,8,0,0,0,224,176Zm0-72a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V112A8,8,0,0,0,224,104Zm-8-64H184a8,8,0,0,0,0,16h32V72a8,8,0,0,0,16,0V56A16,16,0,0,0,216,40Zm-72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Z";
-  var PLACEHOLDER_MASTER_SIZE = 24;
-  var PLACEHOLDER_CIRCLE_NAME = "icon/circle-dashed";
-  var PLACEHOLDER_SQUARE_NAME = "icon/square-dashed";
   var ICON_FIGMA_FILES = {
     phosphor: {
       label: "Phosphor Icons \u2014 Figma Community",
@@ -8202,9 +8427,18 @@
       const p = inheritedStylePrefix(name);
       if (p) found.add(p);
     };
-    for (const s of await figma.getLocalTextStylesAsync()) note(s.name);
-    for (const s of await figma.getLocalPaintStylesAsync()) note(s.name);
-    for (const s of await figma.getLocalEffectStylesAsync()) note(s.name);
+    try {
+      for (const s of await figma.getLocalTextStylesAsync()) note(s.name);
+    } catch (e) {
+    }
+    try {
+      for (const s of await figma.getLocalPaintStylesAsync()) note(s.name);
+    } catch (e) {
+    }
+    try {
+      for (const s of await figma.getLocalEffectStylesAsync()) note(s.name);
+    } catch (e) {
+    }
     try {
       for (const s of await figma.getLocalGridStylesAsync()) note(s.name);
     } catch (e) {
@@ -8309,7 +8543,7 @@
     figma.root.setPluginData(FILE_DOCS_REV_KEY, "");
   }
   async function collectLocalEdits(baseline) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     const rejected = [];
     const supported = {};
     let supportedCount = 0;
@@ -8357,6 +8591,48 @@
         supportedCount++;
       }
     }
+    const TONE9_LABELS = ["9", "700", "90"];
+    const PRIMITIVE_FAMILY_FIELD = {
+      accent: "primaryColor",
+      error: "errorColor",
+      warning: "warningColor",
+      success: "successColor",
+      info: "infoColor"
+    };
+    const primCol = cols.find((c) => c.name === COLLECTIONS.primitives);
+    if (primCol) {
+      const primVars = (_l = byColl.get(primCol.id)) != null ? _l : [];
+      const primByName = new Map(primVars.map((v) => [v.name, v]));
+      const mid = primCol.defaultModeId;
+      const primitives = (_n = (_m = baseline.colors) == null ? void 0 : _m.primitive) != null ? _n : {};
+      const colorAt = (v) => {
+        const raw = v.valuesByMode[mid];
+        if (!raw || typeof raw !== "object" || !("r" in raw)) return void 0;
+        return rgbaToHex(raw);
+      };
+      for (const [family, field] of Object.entries(PRIMITIVE_FAMILY_FIELD)) {
+        const baseKey = TONE9_LABELS.map((t) => `${family}-${t}`).find((k) => typeof primitives[k] === "string");
+        if (!baseKey) continue;
+        const wantHex = normHex(primitives[baseKey]);
+        const v = primByName.get(primitiveVarName(baseKey));
+        const nowHex = v && colorAt(v);
+        if (nowHex && nowHex !== wantHex) {
+          supported.primitives = __spreadProps(__spreadValues({}, supported.primitives), { [field]: nowHex });
+          supportedCount++;
+        }
+        for (const [key, hex] of Object.entries(primitives)) {
+          if (!key.startsWith(`${family}-`) || key === baseKey) continue;
+          const kv = primByName.get(primitiveVarName(key));
+          const kNow = kv && colorAt(kv);
+          if (kNow && typeof hex === "string" && kNow !== normHex(hex)) {
+            rejected.push({
+              kind: "unsupported-value",
+              detail: `Colors Primitives/${primitiveVarName(key)} \u2014 only the family's anchor tone (${primitiveVarName(baseKey)}) round-trips; every other step is derived from it in Escala.`
+            });
+          }
+        }
+      }
+    }
     for (const pg of figma.root.children) {
       if (pg.type !== "PAGE" || pg.name.startsWith("\u2B21")) continue;
       try {
@@ -8390,13 +8666,26 @@
       collections = (await figma.variables.getLocalVariableCollectionsAsync()).length;
     } catch (e) {
     }
+    let sample = false;
+    for (const pg of figma.root.children) {
+      const n = pg.name.trim();
+      if (n !== "\u2B21 Components Overview" && !n.startsWith("\u2B21 Components \xB7 ")) continue;
+      try {
+        await pg.loadAsync();
+        if (pg.children.some(
+          (ch) => ch.type === "COMPONENT_SET" || ch.type === "COMPONENT" || ch.type === "FRAME" && /^\d{2} · /.test(ch.name)
+        )) {
+          sample = true;
+          break;
+        }
+      } catch (e) {
+      }
+    }
     return {
       cover: names.has("\u2B21 Cover"),
       documentation: names.has("\u2B21 Documentation"),
       gettingStarted: names.has("\u2B21 Getting started"),
-      // Any category page counts as "components present" — plus the legacy
-      // single page, until it's split on the next import.
-      sample: names.has("\u2B21 Components Overview") || [...names].some((n) => n.startsWith("\u2B21 Components \xB7 ")),
+      sample,
       icons: names.has("\u2B21 Icons"),
       variables,
       collections
@@ -8489,141 +8778,151 @@
     if (msg.type === "import") {
       const { tokens, options } = msg;
       if (!tokens || !options) return;
-      log(`\u2015 Starting import for "${tokens.project || "Untitled"}" \u2015`);
-      checkSchema(tokens);
       try {
-        const staleArtefacts = figma.root.children.find((p) => p.name === "\u2B21 Artefacts");
-        if (staleArtefacts) {
-          staleArtefacts.remove();
-          log('\u2713 Removed the retired "\u2B21 Artefacts" page');
-        }
-      } catch (e) {
-      }
-      const inheritedPrefixes = await scanInheritedStylePrefixes();
-      const staleDocs = readDocsRev() < DOCS_REV;
-      let docsMustRebuild = inheritedPrefixes.length > 0 || staleDocs;
-      if (docsMustRebuild) {
-        const why = inheritedPrefixes.length > 0 ? `inherited project folder${inheritedPrefixes.length > 1 ? "s" : ""} ${inheritedPrefixes.join(", ")}` : "documentation is from an older plugin";
-        log(`\u21BB Documentation will rebuild \u2014 ${why}`);
-      }
-      if (!tokens.typography || typeof tokens.typography !== "object") {
-        log(`\u26A0 Payload is missing "typography" \u2014 using a fallback (Inter, no custom sizes/weights).`);
-        tokens.typography = { fontFamily: "Inter", sizes: {}, weights: {} };
-      } else {
-        if (!tokens.typography.sizes) tokens.typography.sizes = {};
-        if (!tokens.typography.weights) tokens.typography.weights = {};
-        if (!tokens.typography.fontFamily) tokens.typography.fontFamily = "Inter";
-      }
-      await warnUnavailableSystemFonts(tokens);
-      let totalVars = 0;
-      let totalStyles = 0;
-      let totalComponents = 0;
-      let totalIcons = 0;
-      let totalDocs = 0;
-      let hasCover = false;
-      let hadError = false;
-      let wantComponents = options.importComponents;
-      let wantCover = (_f = options.importCover) != null ? _f : options.importDocs !== false;
-      let wantDocumentation = (_g = options.importDocumentation) != null ? _g : options.importDocs !== false;
-      const planned = [
-        options.importVariables && "Variables",
-        options.importStyles && "Styles",
-        wantComponents && "Components",
-        options.importIcons && "Icons",
-        wantCover && "Cover",
-        // Getting started rides with Documentation — same phase gate, no toggle
-        // of its own (it's a fixed handoff page, like Cover).
-        wantDocumentation && "Getting started",
-        wantDocumentation && "Documentation"
-      ].filter(Boolean);
-      let phaseIdx = 0;
-      async function phase(name, run) {
-        progress(name, phaseIdx, planned.length);
-        await yieldToUI();
+        log(`\u2015 Starting import for "${tokens.project || "Untitled"}" \u2015`);
+        checkSchema(tokens);
         try {
-          await run();
-        } catch (err) {
-          hadError = true;
-          const m = err instanceof Error ? err.message : String(err);
-          log(`\u2717 ${name} failed: ${m}`);
+          const staleArtefacts = figma.root.children.find((p) => p.name === "\u2B21 Artefacts");
+          if (staleArtefacts) {
+            staleArtefacts.remove();
+            log('\u2713 Removed the retired "\u2B21 Artefacts" page');
+          }
+        } catch (e) {
         }
-        phaseIdx++;
-        progress(name, phaseIdx, planned.length);
-        await yieldToUI();
-      }
-      try {
-        if (options.importVariables) {
-          await phase("Variables", async () => {
-            totalVars = await importVariables(tokens);
-          });
-          if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
-            const added = [];
-            if ((semanticsRebuilt || docsMustRebuild) && !wantComponents) {
-              wantComponents = true;
-              added.push("Components");
-            }
-            if (!wantCover) {
-              wantCover = true;
-              added.push("Cover");
-            }
-            if (!wantDocumentation) {
-              wantDocumentation = true;
-              added.push("Getting started", "Documentation");
-            }
-            if (added.length > 0) {
-              planned.push(...added);
-              const why = semanticsRebuilt ? "the new semantic variables" : docsMustRebuild ? "updated documentation (roles + leftover project folders)" : "the restacked Spacing / Radius / Type collections";
-              log(`\u21BB Recalibrating: ${added.join(", ")} rebuilt too, so everything binds to ${why}`);
+        const inheritedPrefixes = await scanInheritedStylePrefixes();
+        const staleDocs = readDocsRev() < DOCS_REV;
+        let docsMustRebuild = inheritedPrefixes.length > 0 || staleDocs;
+        if (docsMustRebuild) {
+          const why = inheritedPrefixes.length > 0 ? `inherited project folder${inheritedPrefixes.length > 1 ? "s" : ""} ${inheritedPrefixes.join(", ")}` : "documentation is from an older plugin";
+          log(`\u21BB Documentation will rebuild \u2014 ${why}`);
+        }
+        if (!tokens.typography || typeof tokens.typography !== "object") {
+          log(`\u26A0 Payload is missing "typography" \u2014 using a fallback (Inter, no custom sizes/weights).`);
+          tokens.typography = { fontFamily: "Inter", sizes: {}, weights: {} };
+        } else {
+          if (!tokens.typography.sizes) tokens.typography.sizes = {};
+          if (!tokens.typography.weights) tokens.typography.weights = {};
+          if (!tokens.typography.fontFamily) tokens.typography.fontFamily = "Inter";
+        }
+        await warnUnavailableSystemFonts(tokens);
+        let totalVars = 0;
+        let totalStyles = 0;
+        let totalComponents = 0;
+        let totalIcons = 0;
+        let totalDocs = 0;
+        let hasCover = false;
+        let hadError = false;
+        let wantComponents = options.importComponents;
+        let wantCover = (_f = options.importCover) != null ? _f : options.importDocs !== false;
+        let wantDocumentation = (_g = options.importDocumentation) != null ? _g : options.importDocs !== false;
+        const planned = [
+          options.importVariables && "Variables",
+          options.importStyles && "Styles",
+          wantComponents && "Components",
+          options.importIcons && "Icons",
+          wantCover && "Cover",
+          // Getting started rides with Documentation — same phase gate, no toggle
+          // of its own (it's a fixed handoff page, like Cover).
+          wantDocumentation && "Getting started",
+          wantDocumentation && "Documentation"
+        ].filter(Boolean);
+        let phaseIdx = 0;
+        async function phase(name, run) {
+          progress(name, phaseIdx, planned.length);
+          await yieldToUI();
+          try {
+            await run();
+          } catch (err) {
+            hadError = true;
+            const m = err instanceof Error ? err.message : String(err);
+            log(`\u2717 ${name} failed: ${m}`);
+          }
+          phaseIdx++;
+          progress(name, phaseIdx, planned.length);
+          await yieldToUI();
+        }
+        try {
+          if (options.importVariables) {
+            await phase("Variables", async () => {
+              totalVars = await importVariables(tokens);
+            });
+            if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
+              const added = [];
+              if ((semanticsRebuilt || docsMustRebuild) && !wantComponents) {
+                wantComponents = true;
+                added.push("Components");
+              }
+              if (!wantCover) {
+                wantCover = true;
+                added.push("Cover");
+              }
+              if (!wantDocumentation) {
+                wantDocumentation = true;
+                added.push("Getting started", "Documentation");
+              }
+              if (added.length > 0) {
+                planned.push(...added);
+                const why = semanticsRebuilt ? "the new semantic variables" : docsMustRebuild ? "updated documentation (roles + leftover project folders)" : "the restacked Spacing / Radius / Type collections";
+                log(`\u21BB Recalibrating: ${added.join(", ")} rebuilt too, so everything binds to ${why}`);
+              }
             }
           }
+          if (options.importStyles) {
+            await phase("Styles", async () => {
+              totalStyles = await importStyles(tokens);
+            });
+          }
+          if (wantComponents) {
+            await phase("Components", async () => {
+              totalComponents = await importSample(tokens, options.importAllComponents === true);
+            });
+          }
+          if (options.importIcons) {
+            await phase("Icons", async () => {
+              totalIcons = await importIcons(tokens);
+            });
+          }
+          if (wantCover) {
+            await phase("Cover", async () => {
+              hasCover = await importCover(tokens);
+            });
+          }
+          if (wantDocumentation) {
+            await phase("Getting started", async () => {
+              await importGettingStarted(tokens);
+            });
+            await phase("Documentation", async () => {
+              totalDocs = await importDocumentation(tokens);
+            });
+            writeDocsRev();
+          }
+          await purgeInheritedCollections(tokens.project || "");
+          const inheritedDropped = await removeInheritedStyles();
+          if (inheritedDropped > 0) {
+            log(`\u2713 Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? "" : "s"} prefixed with a previous project name`);
+          }
+          writeFileTokens(tokens);
+          const summary = [
+            totalVars > 0 ? `${totalVars} variables` : null,
+            totalStyles > 0 ? `${totalStyles} styles` : null,
+            totalComponents > 0 ? `${totalComponents} components` : null,
+            totalIcons > 0 ? `${totalIcons} icons` : null,
+            hasCover ? "cover" : null,
+            totalDocs > 0 ? `docs (${totalDocs} boards)` : null
+          ].filter(Boolean).join(" \xB7 ");
+          log(`\u2015 Done${summary ? `: ${summary}` : ""}${hadError ? " \u2014 some phases failed, see \u2717 lines above" : ""} \u2015`);
+          figma.ui.postMessage({ type: "done", summary, hadError });
+        } catch (err) {
+          const msg2 = err instanceof Error ? err.message : String(err);
+          log(`\u2717 Error: ${msg2}`);
+          figma.ui.postMessage({ type: "error", message: msg2 });
+        } finally {
+          ensureFoundationPageOrder();
         }
-        if (options.importStyles) {
-          await phase("Styles", async () => {
-            totalStyles = await importStyles(tokens);
-          });
-        }
-        if (wantComponents) {
-          await phase("Components", async () => {
-            totalComponents = await importSample(tokens, options.importAllComponents === true);
-          });
-        }
-        if (options.importIcons) {
-          await phase("Icons", async () => {
-            totalIcons = await importIcons(tokens);
-          });
-        }
-        if (wantCover) {
-          await phase("Cover", async () => {
-            hasCover = await importCover(tokens);
-          });
-        }
-        if (wantDocumentation) {
-          await phase("Getting started", async () => {
-            await importGettingStarted(tokens);
-          });
-          await phase("Documentation", async () => {
-            totalDocs = await importDocumentation(tokens);
-          });
-          writeDocsRev();
-        }
-        await purgeInheritedCollections(tokens.project || "");
-        writeFileTokens(tokens);
-        const summary = [
-          totalVars > 0 ? `${totalVars} variables` : null,
-          totalStyles > 0 ? `${totalStyles} styles` : null,
-          totalComponents > 0 ? `${totalComponents} components` : null,
-          totalIcons > 0 ? `${totalIcons} icons` : null,
-          hasCover ? "cover" : null,
-          totalDocs > 0 ? `docs (${totalDocs} boards)` : null
-        ].filter(Boolean).join(" \xB7 ");
-        log(`\u2015 Done${summary ? `: ${summary}` : ""}${hadError ? " \u2014 some phases failed, see \u2717 lines above" : ""} \u2015`);
-        figma.ui.postMessage({ type: "done", summary, hadError });
-      } catch (err) {
-        const msg2 = err instanceof Error ? err.message : String(err);
-        log(`\u2717 Error: ${msg2}`);
-        figma.ui.postMessage({ type: "error", message: msg2 });
-      } finally {
-        ensureFoundationPageOrder();
+      } catch (outerErr) {
+        const outerErrMsg = outerErr instanceof Error ? outerErr.message : String(outerErr);
+        log(`\u2717 Error: ${outerErrMsg}`);
+        figma.ui.postMessage({ type: "error", message: outerErrMsg });
       }
     }
     if (msg.type === "close") {

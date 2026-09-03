@@ -509,7 +509,9 @@ const INHERITED_STYLE_FOLDERS = ['Type', 'Shadow', 'Gradient', 'Grid', 'Scale', 
 //     category-band header is a token-bound card instead of flat hex text.
 // 10 — Selector collection + per-theme foundation modes; Getting started listed
 //     in Overview's file checklist.
-const DOCS_REV = 10
+// 11 — Empty `⬡ Components · …` shells no longer count as "present"; rebuild
+//     Components so per-category boards ship again after the icon-slot regression.
+const DOCS_REV = 11
 const FILE_DOCS_REV_KEY = 'sd-docs-rev'
 // One-time sweep: files created before primitives defaulted to hidden-from-
 // publishing (see upsertVarIn) never get that default applied retroactively —
@@ -806,7 +808,16 @@ const ARCH_ROLE_MAP: Record<'astryx' | 'shadcn' | 'categorical', Record<string, 
     'border-tertiary':              ['border', 'subtle'],
     'border-focus':                 ['border', 'focus'],
     'border-brand':                 ['border', 'accent'],
-    'border-error':                 ['border', 'critical'],
+    // The CONTROL BOUNDARY of an invalid / status-state field. `border.critical`
+    // moved into the `status` group as `status.<sev>.border-strong` (configurator
+    // audit F1/F3 — a severity-family stroke belongs beside `status.<sev>.border`,
+    // and `info` joined so all four are symmetric). `status.<sev>.border` (mapped
+    // above as `status-<sev>-border`) is the softer ALPHA edge of a message; this
+    // is the solved solid stroke of a form control.
+    'border-error':                 ['status', 'critical.border-strong'],
+    'border-warning':               ['status', 'warning.border-strong'],
+    'border-success':               ['status', 'success.border-strong'],
+    'border-info':                  ['status', 'info.border-strong'],
     'content-primary':              ['content', 'primary'],
     'content-secondary':            ['content', 'secondary'],
     'content-tertiary':             ['content', 'subtle'],
@@ -1024,6 +1035,45 @@ function docModePin(tokens: DesignTokens, allCols: VariableCollection[]): { coll
   const mode = collection.modes.find((m) => m.name.toLowerCase() === firstTheme.toLowerCase()) ?? collection.modes[0]
   return mode ? { collection, modeId: mode.modeId } : undefined
 }
+
+// Which theme's mode the GENERATED COMPONENTS (Button, Badge, …) should
+// resolve their bound fills to, by default. `themeOrder[0]` — what
+// `docModePin` above uses for the docs page's own CHROME — is the wrong
+// answer here: `addTheme` only ever APPENDS
+// (`themeOrder: [...state.themeOrder, key]`, useDesignStore.ts), so
+// `themeOrder[0]` stays whichever built-in theme was there before the user
+// ever touched anything. Anyone who starts from the defaults and adds ONE
+// real style — the ordinary path, via "Add to system" on a style card —
+// gets components pinned to the UNTOUCHED original, not the theme they
+// actually built. Reported as "el plugin me está enviando una escala de
+// colores morada siempre que exporto, no está tomando el accent como
+// accent": both families exist correctly in Primitives (nothing was lost —
+// see `primitive` in tokenGenerator.ts, which ships every family), the
+// generated Button was just bound to the wrong MODE by default.
+//
+// Only kicks in once a real theme has been added: `themeOrder.length > 2`
+// means something beyond the built-in light/dark pair exists (themeOrder
+// only ever grows by exactly one key at a time). With 2 or fewer themes —
+// the untouched default, or someone who edited 'light'/'dark' directly
+// without ever using "+Theme" — this is IDENTICAL to `docModePin`'s answer,
+// so nothing changes for the common case that was never broken.
+//
+// This is a DEFAULT DISPLAY choice, not a data fix — every theme's variables
+// exist in the file either way (Figma's own mode switcher, or the plugin's
+// re-import, can always show the others). It only decides what a freshly
+// opened file shows without anyone touching a mode toggle.
+function componentThemeKey(tokens: DesignTokens): string {
+  const order = tokens.colors.themeOrder ?? ['light']
+  return order.length > 2 ? (order[order.length - 1] ?? 'light') : (order[0] ?? 'light')
+}
+function componentModePin(tokens: DesignTokens, allCols: VariableCollection[]): { collection: VariableCollection; modeId: string } | undefined {
+  const collection = allCols.find((c) => c.name === COLLECTIONS.semantics)
+  if (!collection) return undefined
+  const key = componentThemeKey(tokens)
+  const mode = collection.modes.find((m) => m.name.toLowerCase() === key.toLowerCase()) ?? collection.modes[0]
+  return mode ? { collection, modeId: mode.modeId } : undefined
+}
+
 function pinToLightMode(node: SceneNode | PageNode, pin: { collection: VariableCollection; modeId: string } | undefined) {
   if (!pin) return
   try { node.setExplicitVariableModeForCollection(pin.collection, pin.modeId) } catch {}
@@ -2427,13 +2477,17 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     log(`✓ Removed ${stalePaints.length} legacy color paint styles (colors are variables-only now)`)
   }
 
-  // Drop every project-prefixed leftover (`Jasdy/Type/…`, `Escala/Shadow/…`).
-  // New styles live at Type/ Shadow/ Gradient/ Grid/ with no project folder,
-  // so a previous system's name cannot keep showing up in the panel.
-  const inheritedDropped = await removeInheritedStyles()
-  if (inheritedDropped > 0) {
-    log(`✓ Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? '' : 's'} prefixed with a previous project name`)
-  }
+  // NOTE: dropping the project-prefixed leftovers (`Jasdy/Type/…`) used to
+  // happen HERE, and it was the cause of a permanent Live Sync rebuild loop.
+  // The Styles phase runs BEFORE Components/Cover/Documentation, so the old
+  // boards were still referencing those styles and `s.remove()` threw — the
+  // "still referenced" branch — leaving the prefix in the file. The import
+  // handler's `scanInheritedStylePrefixes()` then found it again on the next
+  // tick, set `docsMustRebuild`, and escalated Variables-only sync into a full
+  // Components + Cover + Docs rebuild. Every tick. Forever.
+  // It now runs at the END of the import, next to purgeInheritedCollections,
+  // whose own comment already states the rule: purge after the boards that
+  // bind to it have been redrawn.
 
   // ── Gradient paint styles ─────────────────────────────────────────────────
   // The one colour foundation that CANNOT be a variable: Figma has no gradient
@@ -2732,8 +2786,22 @@ function docChrome(
   }
   function docText(chars: string, size: number, style: DocFontStyle, hex: string, opacity = 1, v?: Variable): TextNode {
     const t = figma.createText()
-    t.fontName = fontFor(style)
-    t.characters = chars
+    // Prefer the requested weight; if Figma rejects it (font not loaded /
+    // style missing), fall back to Regular so a single missing face can't
+    // abort a whole Components page (startCategoryRow used to throw here and
+    // kill the entire phase before any board was built).
+    const applyFont = (s: DocFontStyle) => { t.fontName = fontFor(s) }
+    try {
+      applyFont(style)
+      t.characters = chars
+    } catch {
+      try {
+        applyFont('Regular')
+        t.characters = chars
+      } catch {
+        t.characters = chars
+      }
+    }
     t.fontSize = size
     t.fills = [docSolid(hex, opacity, v)]
     if (typo && typo.size > 0) {
@@ -2823,6 +2891,17 @@ function docChrome(
   }
   return { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard }
 }
+
+// Phosphor placeholder paths (viewBox 0 0 256 256). Defined BEFORE importSample
+// so icon slots never close over a TDZ const. Shared with the Icons docs page.
+// `square-dashed` is Phosphor's `rectangle-dashed` (no separate square glyph).
+const CIRCLE_DASHED_PATH =
+  'M96.26 37.05a8 8 0 0 1 5.74-9.76a104.1 104.1 0 0 1 52 0a8 8 0 0 1-2 15.75a8.2 8.2 0 0 1-2-.26a88.1 88.1 0 0 0-44 0a8 8 0 0 1-9.74-5.73M53.79 55.14a104.05 104.05 0 0 0-26 45a8 8 0 0 0 15.42 4.27a88 88 0 0 1 22-38.09a8 8 0 0 0-11.42-11.18m-10.58 96.41a8 8 0 1 0-15.42 4.28a104.1 104.1 0 0 0 26 45a8 8 0 0 0 11.41-11.22a88.14 88.14 0 0 1-21.99-38.06M150 213.22a88 88 0 0 1-44 0a8 8 0 1 0-4 15.49a104.1 104.1 0 0 0 52 0a8 8 0 0 0-4-15.49M222.65 146a8 8 0 0 0-9.85 5.58a87.9 87.9 0 0 1-22 38.08a8 8 0 1 0 11.42 11.21a104 104 0 0 0 26-45a8 8 0 0 0-5.57-9.87m-9.86-41.54a8 8 0 0 0 15.42-4.28a104 104 0 0 0-26-45A8 8 0 1 0 190.8 66.4a88 88 0 0 1 21.99 38.05Z'
+const SQUARE_DASHED_PATH =
+  'M80,48a8,8,0,0,1-8,8H40V72a8,8,0,0,1-16,0V56A16,16,0,0,1,40,40H72A8,8,0,0,1,80,48ZM32,152a8,8,0,0,0,8-8V112a8,8,0,0,0-16,0v32A8,8,0,0,0,32,152Zm40,48H40V184a8,8,0,0,0-16,0v16a16,16,0,0,0,16,16H72a8,8,0,0,0,0-16Zm72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm80-24a8,8,0,0,0-8,8v16H184a8,8,0,0,0,0,16h32a16,16,0,0,0,16-16V184A8,8,0,0,0,224,176Zm0-72a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V112A8,8,0,0,0,224,104Zm-8-64H184a8,8,0,0,0,0,16h32V72a8,8,0,0,0,16,0V56A16,16,0,0,0,216,40Zm-72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Z'
+const PLACEHOLDER_MASTER_SIZE = 24
+const PLACEHOLDER_CIRCLE_NAME = 'icon/circle-dashed'
+const PLACEHOLDER_SQUARE_NAME = 'icon/square-dashed'
 
 // Builds the '⬡ Components Overview' sheet. Default mode is the fixed SAMPLE
 // specimen; the explicit full mode uses the same builders for every CATALOG
@@ -2936,7 +3015,11 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     borderSubtle:   pair(['border/tertiary', 'border/subtle', 'border/default', 'border'], ['border-tertiary', 'border-subtle', 'border-default'], '#2a2a2a'),
     borderBrand:    pair(['border/brand', 'border/accent'], ['border-brand'], '#3B82F6'),
     borderDisabled: pair(['border/disabled'], ['border-disabled'], '#2e2e2e'),
-    borderError:    pair(['border/error'], ['border-error'], '#f04438'),
+    // Error-state control stroke. `border.critical` became
+    // `status.critical.border-strong` (configurator audit F1) — a categorical
+    // export now creates `Status/critical/border-strong`, so alias that first;
+    // `border/error` stays as the pre-F1 / flat-catalogue name.
+    borderError:    pair(['Status/critical/border-strong', 'Status/critical.border-strong', 'status/critical/border-strong', 'status/critical.border-strong', 'border/error'], ['border-error'], '#f04438'),
     // Icon roles — no icon-* family exists any more; alias the matching
     // content-* role (Radix convention: icon and text share their tint).
     iconPrimary:    pair(['content/primary', 'icon/primary', 'fg/primary', 'text/primary'], ['content-primary', 'icon-primary', 'fg-primary', 'text-primary'], '#f5f5f5'),
@@ -3216,6 +3299,14 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   type PlaceholderKind = 'circle' | 'square'
   let circleMaster: ComponentNode | null = null
   let squareMaster: ComponentNode | null = null
+  // Real INSTANCE_SWAP candidates for an icon-carrying property (Button's
+  // Icon leading/trailing) — the generated icon library, when one already
+  // exists in this file. Icons is its own later, opt-in phase (see the phase
+  // order in the import handler), so on a file's very first import this stays
+  // empty and the property offers only the dashed placeholder; it fills in
+  // once Icons has run at least once. Populated just before the build loop —
+  // see "Two shared placeholder Components" below.
+  let iconSwapPreferred: InstanceSwapPreferredValue[] = []
 
   function paintSolidTree(root: SceneNode, paint: SolidPaint) {
     const nodes: SceneNode[] = 'findAll' in root
@@ -3237,10 +3328,18 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   }
 
   function createPlaceholderMaster(name: string, path: string): ComponentNode {
-    const frame = svgGlyphFromPath(path, PLACEHOLDER_MASTER_SIZE)
-    frame.name = 'glyph'
-    const comp = figma.createComponentFromNode(frame)
+    // Prefer createComponent + append over createComponentFromNode — the latter
+    // is newer and dropped nodes on the current page in a way that raced the
+    // category-page reparent. A plain component is the same Assets result.
+    const comp = figma.createComponent()
     comp.name = name
+    comp.resize(PLACEHOLDER_MASTER_SIZE, PLACEHOLDER_MASTER_SIZE)
+    comp.fills = []
+    const glyph = svgGlyphFromPath(path, PLACEHOLDER_MASTER_SIZE)
+    glyph.name = 'glyph'
+    comp.appendChild(glyph)
+    glyph.x = 0
+    glyph.y = 0
     try {
       comp.description = name === PLACEHOLDER_CIRCLE_NAME
         ? 'Empty circular icon slot (Phosphor circle-dashed). Swap this instance for any icon/<library>/… set.'
@@ -3249,21 +3348,52 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     return comp
   }
 
-  // Inline dashed glyph — NEVER a nested component instance. Nesting
-  // `icon/circle-dashed` instances inside every variant set broke combines /
-  // left empty slots on re-import. Masters on `⬡ Icon Placeholders` stay as
-  // Assets to swap by hand; slots themselves paint a local SVG (or ring).
-  function iconSlot(
+  interface IconSlotResult { frame: FrameNode; instance: InstanceNode | null }
+
+  // A REAL instance of the shared placeholder master, when one is available —
+  // that's what makes "Swap instance" (right-click, or drag from Assets) work
+  // at all; a locally-drawn vector has nothing to swap. Falls back to painting
+  // the same path inline only if the master is missing or instancing it fails
+  // (e.g. `circleMaster`/`squareMaster` weren't set up this run — see the
+  // "ensure masters exist" step near the top of `importSample`, which runs
+  // BEFORE any component gets built specifically so this isn't null in the
+  // common case) — a slot must never come out empty just because the
+  // reference sheet had a hiccup.
+  //
+  // This used to always paint an inline vector, on purpose, with a comment
+  // explaining that nesting an instance here "broke combines / left empty
+  // slots on re-import." That was true under the OLD ordering, where the
+  // placeholder masters were only created by the Documentation phase — which
+  // runs AFTER Components, so on a fresh file's first import the masters
+  // didn't exist yet when a component tried to instantiate one. Masters are
+  // now created up front, before ANY component gets built (same run,
+  // reused/never recreated across runs via `existingSingles`), which is what
+  // makes it safe to instantiate them here.
+  function makeIconSlot(
     size: number,
     colorPr: Pair,
     name = 'icon',
     kind: PlaceholderKind = 'circle',
-  ): FrameNode {
+  ): IconSlotResult {
     const f = figma.createFrame()
     f.name = name
     f.fills = []
     f.resize(size, size)
     f.clipsContent = false
+
+    const master = kind === 'square' ? squareMaster : circleMaster
+    if (master && !master.removed) {
+      try {
+        const inst = master.createInstance()
+        inst.name = kind === 'square' ? 'square-dashed' : 'circle-dashed'
+        if (size !== PLACEHOLDER_MASTER_SIZE) inst.rescale(size / PLACEHOLDER_MASTER_SIZE)
+        paintSolidTree(inst, fillP(colorPr))
+        f.appendChild(inst)
+        inst.x = 0
+        inst.y = 0
+        return { frame: f, instance: inst }
+      } catch { /* master exists but instancing failed — inline fallback below */ }
+    }
 
     try {
       const path = kind === 'square' ? SQUARE_DASHED_PATH : CIRCLE_DASHED_PATH
@@ -3285,7 +3415,19 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       f.appendChild(ring)
       ring.x = 0; ring.y = 0
     }
-    return f
+    return { frame: f, instance: null }
+  }
+
+  /** Most callers just want the visual slot — `makeIconSlot` is the version
+   *  Button also uses to get the instance itself, for binding an
+   *  INSTANCE_SWAP component property (see buildButton). */
+  function iconSlot(
+    size: number,
+    colorPr: Pair,
+    name = 'icon',
+    kind: PlaceholderKind = 'circle',
+  ): FrameNode {
+    return makeIconSlot(size, colorPr, name, kind).frame
   }
 
   // ── No component-token tier ───────────────────────────────────────────────
@@ -3309,18 +3451,51 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   // Every editable text collects here; resolved to a SET-level TEXT property
   // (or a component property for single components) after nodes exist. A
   // boolean `def` makes it a BOOLEAN property bound to the node's visibility.
-  interface PendingProp { node: SceneNode; prop: string; def: string | boolean }
+  interface PendingProp {
+    node: SceneNode
+    prop: string
+    def: string | boolean
+    /**
+     * When set, this prop is INSTANCE_SWAP instead of BOOLEAN/TEXT — `def` is
+     * ignored, `swapDefaultId` (a node id already in this file — the
+     * placeholder master, typically) becomes the property's defaultValue,
+     * bound to `node`'s `mainComponent` reference. `swapPreferred` lists
+     * REAL candidates (the generated icon library, when it already exists in
+     * this file) so the property's dropdown suggests actual glyphs instead
+     * of only the dashed placeholder. See `applyPendingProps`.
+     */
+    swapDefaultId?: string
+    swapPreferred?: InstanceSwapPreferredValue[]
+  }
 
   interface VariantDef {
     props: Record<string, string>
     build: (c: ComponentNode, out: PendingProp[]) => void
   }
+  /** A spec whose full cartesian product is at or below this ships WHOLE, no
+   *  reduction of any kind — every other spec in `SPECS` is. Only a spec
+   *  ABOVE it needs `AtomSpec.primaryAxes` declared; see `representativeSpec`. */
+  const FULL_CATALOGUE_BUDGET = 24
   interface AtomSpec {
     cols: number                       // grid columns inside the set
     variants: VariantDef[]
     description: string
     /** Sparse axis-cover used by the opt-in full catalogue. */
     representative?: boolean
+    /**
+     * Axes (by `props` key) that should be FULLY CROSSED when the source
+     * matrix is too large to build in full — every other axis is pinned to
+     * its default (first-declared) value across that cross, then swept once
+     * per value against that same default combo so every declared value
+     * still appears at least once. See `budgetedCross()`.
+     *
+     * Only declare this for a spec whose full cartesian product exceeds
+     * `FULL_CATALOGUE_BUDGET` (today: Button 288, Input 168, Badge 162 —
+     * everything else in SPECS is small enough to ship whole). Order matters:
+     * it's the order axes are crossed in, and determines which axis "wins"
+     * when the budget forces a choice between fully-crossing more axes.
+     */
+    primaryAxes?: string[]
   }
 
   const STATES = ['Default', 'Hover', 'Pressed', 'Focused', 'Loading', 'Disabled'] as const
@@ -3356,12 +3531,22 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     XL: { padV: 14, padH: 24, f: 16, fv: sizeMd, gap: 10 },
   }
 
-  // Icon is a VARIANT axis (None | Leading | Trailing) — not set-level booleans
-  // with nested placeholder instances. Nested instances inside variant sets
-  // were leaving empty slots / broken combines on re-import; the text glyph
-  // matches the stable pre-placeholder Button and keeps the matrix simple.
-  const BTN_ICON_POS = ['None', 'Leading', 'Trailing'] as const
-  function buildButton(c: ComponentNode, out: PendingProp[], color: string, style: string, state: BtnState, size = 'MD', iconPos: string = 'Leading') {
+  // Icon USED to be a variant axis (None | Leading | Trailing) rather than
+  // set-level boolean switches with nested placeholder instances — deliberately,
+  // per a comment here that nesting an instance inside a variant broke
+  // `combineAsVariants` / left empty slots on re-import. That was true under
+  // the OLD ordering (the placeholder masters were only created by the
+  // Documentation phase, which runs AFTER Components — so on a fresh file's
+  // first import there was nothing yet to instantiate). Masters are now
+  // created up front in THIS function, before any component gets built (see
+  // "Two shared placeholder Components" above) — the ordering bug that made
+  // the axis necessary is gone, so it's gone too. Every Button variant now
+  // gets REAL, independently toggleable Icon leading / Icon trailing boolean
+  // properties (an actual "switcher", not a discrete no-icon/one-icon variant
+  // that can't represent both at once) with an INSTANCE_SWAP property so the
+  // slot is genuinely swappable from the properties panel, pre-populated with
+  // whatever the icon library already contains (`iconSwapPreferred`).
+  function buildButton(c: ComponentNode, out: PendingProp[], color: string, style: string, state: BtnState, size = 'MD') {
     const k = BTN_COLORS[color]
     const sz = BTN_SIZES[size] ?? BTN_SIZES.MD
     c.layoutMode = 'HORIZONTAL'
@@ -3403,16 +3588,40 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     }
     if (state === 'Focused') focusRing(c, k.ringHex)
 
-    const makeIcon = () => {
-      const icon = txt('+', { style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP })
-      icon.name = 'icon'
-      return icon
+    // A real icon slot (real component, real property) — bound to a BOOLEAN
+    // for "is it here" and an INSTANCE_SWAP for "what is it," both shared
+    // across the whole variant SET (applyPendingProps resolves the property
+    // once and rebinds every variant's own node to it — same mechanism Show
+    // Label/Show Description already use). Loading REPLACES both — a spinner
+    // and a leading/trailing icon competing for the same slot at once isn't
+    // a state a designer reaches for, and the old text-glyph version drew
+    // the same conclusion.
+    const addIconSlot = (propPrefix: string, name: string) => {
+      const { frame, instance } = makeIconSlot(sz.f, textP, name)
+      c.appendChild(frame)
+      out.push({ node: frame, prop: `${propPrefix} visible`, def: false })
+      // `instance` is only non-null when `makeIconSlot` actually found a
+      // live master to instantiate — which means `circleMaster` (the master
+      // it used, `iconSlot`'s default `kind`) is guaranteed non-null right
+      // here too, in the same synchronous call. `def` is a required field on
+      // PendingProp but is IGNORED whenever `swapDefaultId` is set — its
+      // value doesn't matter, it just has to satisfy the type.
+      if (instance && circleMaster) {
+        out.push({
+          node: instance,
+          prop: `${propPrefix} icon`,
+          def: '',
+          swapDefaultId: circleMaster.id,
+          swapPreferred: iconSwapPreferred,
+        })
+      }
+      return frame
     }
 
     if (state === 'Loading') {
       c.appendChild(miniSpinner(sz.f, textP))
-    } else if (iconPos === 'Leading') {
-      c.appendChild(makeIcon())
+    } else {
+      addIconSlot('Icon leading', 'icon-leading')
     }
     const label = txt('Button', {
       roleKey: 'button',
@@ -3421,10 +3630,8 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Button' })
-    if (iconPos === 'Trailing' && state !== 'Loading') {
-      const icon = makeIcon()
-      icon.name = 'icon-trailing'
-      c.appendChild(icon)
+    if (state !== 'Loading') {
+      addIconSlot('Icon trailing', 'icon-trailing')
     }
   }
 
@@ -5512,16 +5719,22 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const SPECS: Record<string, AtomSpec> = {
     Button: {
       cols: BTN_COLORS ? Object.keys(BTN_COLORS).length * BTN_STYLES.length : 12,
-      description: 'Universal action button. Size × Color × Style × State × Icon (None/Leading/Trailing) matrix; fills → component tokens → semantics.',
+      description: 'Universal action button. Size × Color × Style × State matrix, each variant carrying independent Icon leading / Icon trailing boolean + swap properties; fills → component tokens → semantics.',
+      // Size/Style/State are what a designer actually picks between — a
+      // button's height, its emphasis, and what it's doing. Color still
+      // appears (every value ships, see budgetedCross), just not crossed
+      // against the other three: a Danger XL Ghost Loading button is not a
+      // combination anyone reaches for. Icon is NOT an axis at all any more —
+      // see buildButton — so it never multiplies this matrix in the first
+      // place; every variant below carries both icon slots as toggles.
+      primaryAxes: ['Size', 'Style', 'State'],
       variants: BTN_SIZE_KEYS.flatMap((size) =>
         STATES.flatMap((state) =>
           Object.keys(BTN_COLORS).flatMap((color) =>
-            BTN_STYLES.flatMap((style) =>
-              BTN_ICON_POS.map((iconPos) => ({
-                props: { Size: size, Color: color, Style: style, State: state, Icon: iconPos },
-                build: (c: ComponentNode, out: PendingProp[]) => buildButton(c, out, color, style, state, size, iconPos),
-              })),
-            ),
+            BTN_STYLES.map((style) => ({
+              props: { Size: size, Color: color, Style: style, State: state },
+              build: (c: ComponentNode, out: PendingProp[]) => buildButton(c, out, color, style, state, size),
+            })),
           ),
         ),
       ),
@@ -5529,6 +5742,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     Input: {
       cols: INPUT_TYPES.length,
       description: 'Text input field — Type × State × Size with label, description and helper rows. Every context ships its exact inner layout; styling bound to input/* tokens.',
+      // Size × State is the interaction ladder; Type (icon-leading, password,
+      // search…) is a content variation, still fully represented but only
+      // against the Default size/state baseline.
+      primaryAxes: ['Size', 'State'],
       variants: INPUT_SIZE_KEYS.flatMap((size) =>
         INPUT_STATES.flatMap((state) =>
           INPUT_TYPES.map((type) => ({
@@ -5575,6 +5792,11 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     Badge: {
       cols: 6,
       description: 'Badge — Size × Style (Solid/Soft/Outline) × Color (semantic status roles) × Icon (None/Leading/Trailing).',
+      // Style × Color is the axis pair that actually needs to be SEEN
+      // together — it's how a reviewer confirms every status colour looks
+      // right in every treatment. Size and Icon still ship every value, just
+      // against the MD/None baseline.
+      primaryAxes: ['Style', 'Color'],
       variants: ['MD', 'SM', 'LG'].flatMap((size) =>
         ['Solid', 'Soft', 'Outline'].flatMap((style) =>
           Object.keys(BADGE_COLORS).flatMap((color) =>
@@ -5998,6 +6220,22 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   //
   // Full catalogue is now explicit and uses representativeSpec below: every
   // component type, without recreating that lock-up-prone cartesian product.
+  //
+  // UPDATE: representativeSpec's original greedy set-cover under-covered
+  // Button/Input/Badge badly — Button (864 source variants, back when Icon
+  // was still a 3-way variant axis) collapsed to 6, exposing every axis
+  // VALUE once but almost no real COMBINATION (an XL/Ghost/Hover button, say,
+  // existed nowhere). Those three specs now declare `primaryAxes` and go
+  // through `budgetedCross` instead: Button → 98 with Size×Style×State
+  // genuinely crossed, Input → 28 with Size×State crossed, Badge → 22 with
+  // Style×Color crossed. Reported symptom this fixes: "el botón tiene
+  // diferentes tamaños... que el plugin no muestra" in Full catalogue mode.
+  // The DEFAULT sample sheet's Button entry below had the same defect for a
+  // different reason (Size pinned to one value, then stripped as a property
+  // entirely by sampleSpec's single-value-axis drop) — fixed separately, in
+  // that entry's own keep(). Icon stopped being a variant axis for Button
+  // entirely in a later pass — see buildButton — which is also why Button's
+  // count above isn't ×3 any more.
   interface SampleEntry {
     set: string
     /** Key into SPECS — the real matrix this is a subset of. */
@@ -6017,13 +6255,23 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const SAMPLE: SampleEntry[] = [
     {
       set: 'Button', spec: 'Button', page: 'Button', cols: 4,
-      // Size=MD + Icon=None keeps Overview readable; full State ladder for
-      // Brand Solid so Loading / Focused show up. Other Color×Style stay Default.
-      keep: (p) => p.Size === 'MD' && p.Icon === 'None' && (
-        (p.Color === 'Brand' && p.Style === 'Solid' &&
-          (p.State === 'Default' || p.State === 'Hover' || p.State === 'Pressed' ||
-           p.State === 'Focused' || p.State === 'Loading' || p.State === 'Disabled')) ||
-        (p.State === 'Default' && !(p.Color === 'Brand' && p.Style === 'Solid'))
+      // Icon is no longer a variant prop at all (see buildButton — every
+      // variant carries its own Icon leading/trailing boolean + swap
+      // properties, always), so there's nothing left to sweep or pin for it
+      // here. Size=MD keeps the Color×Style×State sweep readable; full State
+      // ladder for Brand Solid so Loading/Focused show up, other Color×Style
+      // stay Default. The one remaining sweep is Size itself (every size, at
+      // the resting Brand/Solid/Default combo) — otherwise Size pins to MD
+      // and `sampleSpec` below strips it as a property.
+      keep: (p) => (
+        p.Size === 'MD' && (
+          (p.Color === 'Brand' && p.Style === 'Solid' &&
+            (p.State === 'Default' || p.State === 'Hover' || p.State === 'Pressed' ||
+             p.State === 'Focused' || p.State === 'Loading' || p.State === 'Disabled')) ||
+          (p.State === 'Default' && !(p.Color === 'Brand' && p.Style === 'Solid'))
+        )
+      ) || (
+        p.Color === 'Brand' && p.Style === 'Solid' && p.State === 'Default'
       ),
     },
     {
@@ -6091,16 +6339,88 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     return { cols: e.cols ?? base.cols, variants, description: base.description }
   }
 
+  /**
+   * Full cross of `primaryAxes`, every OTHER axis pinned to its default (the
+   * first variant's own values — a cartesian product always has every axis
+   * at its own first value there). Each secondary axis is then swept once
+   * per remaining value against that same default combo, so every declared
+   * value still ships somewhere — it just isn't crossed against every other
+   * axis. This is the difference from the set-cover below: `Size=XL` and
+   * `Style=Ghost` both exist in the result, and — because Size and Style are
+   * BOTH primary for Button — `Size=XL, Style=Ghost` together exists too. A
+   * set-cover only ever guarantees the first half of that.
+   */
+  function budgetedCross(base: AtomSpec, primaryAxes: string[]): AtomSpec['variants'] {
+    const axisOrder = Object.keys(base.variants[0].props)
+    const sig = (props: Record<string, string>) => axisOrder.map((a) => props[a]).join(' ')
+    const bySig = new Map(base.variants.map((v) => [sig(v.props), v] as const))
+    const defaultProps = base.variants[0].props
+
+    const orderedValues = (axis: string): string[] => {
+      const seen = new Set<string>()
+      const out: string[] = []
+      for (const v of base.variants) {
+        const val = v.props[axis]
+        if (val !== undefined && !seen.has(val)) { seen.add(val); out.push(val) }
+      }
+      return out
+    }
+
+    let primaryCombos: Record<string, string>[] = [{}]
+    for (const axis of primaryAxes) {
+      const next: Record<string, string>[] = []
+      for (const combo of primaryCombos) {
+        for (const val of orderedValues(axis)) next.push({ ...combo, [axis]: val })
+      }
+      primaryCombos = next
+    }
+
+    const chosen: AtomSpec['variants'] = []
+    const chosenSigs = new Set<string>()
+    const take = (props: Record<string, string>) => {
+      const key = sig(props)
+      if (chosenSigs.has(key)) return
+      const v = bySig.get(key)
+      if (!v) return // declared combo doesn't exist in the source matrix — skip, never fabricate
+      chosen.push(v)
+      chosenSigs.add(key)
+    }
+
+    for (const combo of primaryCombos) take({ ...defaultProps, ...combo })
+
+    const secondaryAxes = axisOrder.filter((a) => !primaryAxes.includes(a))
+    for (const axis of secondaryAxes) {
+      for (const val of orderedValues(axis)) {
+        if (val === defaultProps[axis]) continue // already in every primary combo above
+        take({ ...defaultProps, [axis]: val })
+      }
+    }
+
+    return chosen
+  }
+
   /** Keep the full catalogue practical inside Figma. Some source specs are a
    *  cartesian product (Button alone is 864 variants), but "all components"
    *  means every component TYPE, not thousands of redundant combinations.
-   *  This greedy cover keeps real source variants until every axis value has
-   *  appeared at least once. The resulting set still exposes every declared
-   *  Size/Style/State/etc. value while remaining fast enough to build. */
+   *
+   *  A spec that declares `primaryAxes` (Button, Input, Badge — see AtomSpec)
+   *  goes through `budgetedCross`: those axes are fully crossed with each
+   *  other, every other axis still ships every value at least once. Anything
+   *  else falls back to the OLD greedy set-cover below, which only
+   *  guarantees each axis value appears somewhere — it does not guarantee
+   *  any two axes are ever crossed together, so it's a defensive fallback
+   *  for a future spec that grows past budget without declaring
+   *  primaryAxes, not the intended path for a spec anyone actually reaches
+   *  for real combinations from. */
   function representativeSpec(specKey: string): AtomSpec | undefined {
     const base = SPECS[specKey]
     if (!base || base.variants.length === 0) return undefined
-    if (base.variants.length <= 24) return { ...base, representative: true }
+    if (base.variants.length <= FULL_CATALOGUE_BUDGET) return { ...base, representative: true }
+
+    if (base.primaryAxes && base.primaryAxes.length > 0) {
+      const variants = budgetedCross(base, base.primaryAxes)
+      if (variants.length > 0) return { ...base, variants, representative: true }
+    }
 
     const uncovered = new Set<string>()
     for (const variant of base.variants) {
@@ -6224,6 +6544,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const GAP_Y = 24
   const MARGIN = 80
   const BOARD_GAP = 160
+  // Vertical distance between two entries' page-level STAGING slots — see the
+  // inFlight note below. Only ever seen when an entry fails; a successful one
+  // leaves the slot the moment its board takes ownership.
+  const STAGE_STEP = 900
   let builtVariants = 0
   let builtAtoms = 0
   let boardX = 0
@@ -6253,6 +6577,25 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const HEAD_GAP = 48        // band → first board of its row
   const BAND_W = 560         // category-band card width
   const cursorByPage = new Map<string, number>()
+  // ── Failed entries must not leak onto the page ────────────────────────────
+  // buildEntry creates its component(s) ON THE PAGE first (combineAsVariants
+  // needs a page-level parent to grid the variants on) and only re-parents
+  // them into the board at the very end. Anything thrown in between — a
+  // rejected combineAsVariants is the common one — used to be caught by the
+  // caller and merely LOGGED, leaving those loose nodes behind.
+  //
+  // Two things then compounded into the reported "el plugin renderiza los
+  // componentes encimados": every entry staged at the SAME coordinate
+  // (MARGIN, cursorY) because `cursorByPage` was declared and read but never
+  // written — so cursorY was 120 for every entry on every page — and nothing
+  // ever removed the leftovers. N failures in one category therefore rendered
+  // as one unreadable pile of overlapping variant grids instead of N missing
+  // boards, which is why a handful of broken specs looked like the whole file
+  // was corrupt.
+  //
+  // Registered as soon as a node exists on the page, cleared once the board
+  // owns it. The caller's catch removes whatever is still listed.
+  let inFlight: SceneNode[] = []
   let firstBuiltPage: PageNode | undefined
 
   // ── Per-element documentation ──────────────────────────────────────────────
@@ -6263,7 +6606,14 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   // light chrome; the specimens inside it are what re-theme.
   const sampleTypo = await typoVarMap()
   const sampleChrome = docChromeVarsFrom(semLookup)
+  // sampleModePin stays the docs-chrome pin (light-polarity proxy — see
+  // docModePin) for the page/board/panel text and rules built below.
+  // componentThemePin is what the actual generated COMPONENT NODES (Button,
+  // Badge, …) get explicitly re-pinned to, right after each is built — see
+  // buildEntry and componentModePin's own comment for why these two can
+  // legitimately disagree.
   const sampleModePin = docModePin(tokens, allCols)
+  const componentThemePin = componentModePin(tokens, allCols)
   const { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard } = docChrome(fontFor, sampleTypo, tokens.typography.sizes, sampleChrome, sampleModePin)
 
   const DOC_INTRO: Record<string, string> = {
@@ -6663,7 +7013,19 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
         const defs = owner.componentPropertyDefinitions
         let id = Object.keys(defs).find((k) => k === pp.prop || k.startsWith(`${pp.prop}#`))
         const refs = { ...(pp.node.componentPropertyReferences ?? {}) }
-        if (typeof pp.def === 'boolean') {
+        if (pp.swapDefaultId) {
+          if (!id) {
+            id = owner.addComponentProperty(pp.prop, 'INSTANCE_SWAP', pp.swapDefaultId,
+              pp.swapPreferred?.length ? { preferredValues: pp.swapPreferred } : undefined)
+          } else if (pp.swapPreferred?.length) {
+            // Re-imports can find real icon sets that didn't exist yet on the
+            // run that first created this property (Icons is its own later
+            // phase) — refresh the suggestion list rather than leaving it
+            // pinned to whatever was available the first time.
+            try { owner.editComponentProperty(id, { preferredValues: pp.swapPreferred }) } catch {}
+          }
+          refs.mainComponent = id
+        } else if (typeof pp.def === 'boolean') {
           if (!id) id = owner.addComponentProperty(pp.prop, 'BOOLEAN', pp.def)
           refs.visible = id
         } else {
@@ -6687,6 +7049,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     const pending: PendingProp[] = []
     const isVariantSet = spec.variants.length > 1
     const cursorY = cursorByPage.get(pg.id) ?? 120
+    // Advance regardless of outcome: this is only a STAGING slot (a successful
+    // entry re-parents out of it immediately), but leaving it fixed is what let
+    // failures stack. STAGE_STEP just has to exceed a plausible staged grid.
+    cursorByPage.set(pg.id, cursorY + STAGE_STEP)
     let placedNode: SceneNode
     let variantNodes: ComponentNode[] | undefined
 
@@ -6750,17 +7116,35 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
         }
         nodes.push(comp)
       })
+      // Before combineAsVariants, not after: that call is the likely thrower,
+      // and until it succeeds these are loose page children.
+      inFlight.push(...nodes)
 
       // Grid-position variants, then combine (or reuse + move the set).
-      const cellW = Math.max(...nodes.map((n) => n.width)) + GAP_X
-      const cellH = Math.max(...nodes.map((n) => n.height)) + GAP_Y
+      const widths = nodes.map((n) => n.width).filter((w) => Number.isFinite(w) && w > 0)
+      const heights = nodes.map((n) => n.height).filter((h) => Number.isFinite(h) && h > 0)
+      const cellW = (widths.length ? Math.max(...widths) : 80) + GAP_X
+      const cellH = (heights.length ? Math.max(...heights) : 40) + GAP_Y
       let set = existingSet
       if (!set) {
         nodes.forEach((n, i) => {
+          if (n.parent !== pg) try { pg.appendChild(n) } catch { /* */ }
           n.x = MARGIN + (i % spec.cols) * cellW
           n.y = cursorY + Math.floor(i / spec.cols) * cellH
         })
-        set = figma.combineAsVariants(nodes, pg)
+        try {
+          set = figma.combineAsVariants(nodes, pg)
+        } catch (e) {
+          // Usually "same parent" or stale axis props — re-parent and retry once.
+          const m = e instanceof Error ? e.message : String(e)
+          log(`↻ ${entry.set}: combineAsVariants failed (${m}) — retrying`)
+          nodes.forEach((n, i) => {
+            try { pg.appendChild(n) } catch { /* */ }
+            n.x = MARGIN + (i % spec.cols) * cellW
+            n.y = cursorY + Math.floor(i / spec.cols) * cellH
+          })
+          set = figma.combineAsVariants(nodes, pg)
+        }
         set.name = entry.set
         existingSets.set(entry.set, set)
       } else {
@@ -6796,6 +7180,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
         })
       }
       try { set.description = spec.description } catch {}
+      inFlight.push(set)
       set.x = MARGIN
       set.y = cursorY
 
@@ -6824,11 +7209,39 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
         log(`⚠ ${entry.set}: ${e instanceof Error ? e.message : String(e)}`)
       }
       try { comp.description = spec.description } catch {}
+      inFlight.push(comp)
       applyPendingProps(comp, pending)
       comp.x = MARGIN
       comp.y = cursorY
       placedNode = comp
     }
+
+    // The whole PAGE is pinned to sampleModePin's (light-polarity) mode for
+    // chrome readability — see its own declaration above. Re-pin just this
+    // node (a more specific explicit mode wins over the page's for its own
+    // descendants) to whichever theme componentThemePin resolved, so the
+    // component itself shows the theme the user actually built, even when
+    // that disagrees with the chrome's light-proxy pin.
+    //
+    // SKIPPED for `spec.representative` (Full catalogue mode — EVERY entry
+    // there, even a 1-variant one, since representativeSpec marks all of them
+    // that way): `buildVariantMatrix`'s representative branch HIDES this exact
+    // node (`set.visible = false`) and displays fresh `variant.createInstance()`
+    // copies parented under its own `wrapper` instead — copies that resolve
+    // their OWN mode from THEIR OWN ancestor chain (wrapper → board → page),
+    // never from `placedNode`'s override. So this pin is provably inert for
+    // every Full-catalogue entry — it cannot affect what's shown — while still
+    // running a real mode-binding write on a node that's about to be
+    // reparented and hidden. Reported as boards/components badly overlapping
+    // across many unrelated component types on the Full-catalogue category
+    // pages, confirmed on a fresh file — i.e. something is corrupting layout
+    // on every entry, which is exactly this call's blast radius (it used to
+    // run unconditionally, on every entry, right before each board gets
+    // built). Removing it here costs nothing (it never did anything for this
+    // mode) and removes the newest, least-tested operation in the one path
+    // that broke. Sample/Overview mode (spec.representative unset there)
+    // keeps the real fix — its instances are the ORIGINAL set, still visible.
+    if (!spec.representative) pinToLightMode(placedNode, componentThemePin)
 
     // ── Each element lives INSIDE its own board ──────────────────────────────
     // These used to be loose siblings on the page: an absolutely-positioned
@@ -6871,9 +7284,33 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     // Multi-variant entries get the labeled spec grid instead of the raw
     // (now hidden) component set; single-variant entries still show
     // themselves directly — there's nothing to compare/label.
-    const rightContent: SceneNode = (isVariantSet && variantNodes)
-      ? buildVariantMatrix(entry, spec, variantNodes, placedNode as ComponentSetNode)
-      : placedNode
+    // Matrix layout is best-effort: if it throws (font, empty cells, instance
+    // limit), still ship the board with the raw set so the page isn't blank.
+    let rightContent: SceneNode = placedNode
+    if (isVariantSet && variantNodes) {
+      try {
+        rightContent = buildVariantMatrix(entry, spec, variantNodes, placedNode as ComponentSetNode)
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e)
+        log(`⚠ ${entry.set} matrix layout failed (${m}) — showing raw set`)
+        // buildVariantMatrix's representative branch (the ONLY branch Full
+        // catalogue mode ever uses — see componentThemePin's own note above)
+        // hides `set` (`visible = false`) and reparents it into its own
+        // `wrapper` BEFORE building the replacement instances. If it throws
+        // anywhere after that point (a font issue, an instance-creation
+        // failure, an empty cell), both mutations survive the throw. Falling
+        // back to `placedNode` without undoing them handed this board an
+        // INVISIBLE node — Figma's auto-layout skips invisible children when
+        // hugging content, so the board measured near-zero width — which is
+        // exactly what made every LATER board on the page pile on top of it
+        // (`boardX += Math.ceil(board.width) + BOARD_GAP` barely advancing).
+        // Reported as boards/components badly overlapping across many
+        // unrelated component types on Full-catalogue category pages.
+        placedNode.visible = true
+        if (placedNode.parent !== pg) { try { pg.appendChild(placedNode) } catch {} }
+        rightContent = placedNode
+      }
+    }
 
     const idx = String(++boardIndex).padStart(2, '0')
     const board = docFrame(`${idx} · ${entry.page}`, 'HORIZONTAL', 24)
@@ -6884,6 +7321,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     board.counterAxisAlignItems = 'MIN'
     pinToLightMode(board, sampleModePin)
     pg.appendChild(board)
+    inFlight.push(board)
     board.appendChild(leftCol)
     // (placement happens after the content is in — see below)
     // Re-parenting into the board is what stops it floating. Must happen
@@ -6896,6 +7334,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     rowH = Math.max(rowH, Math.ceil(board.height))
 
     builtAtoms++
+    inFlight = []
   }
 
   // Drops a category band at the top of the current row and rewinds x to the
@@ -7067,6 +7506,23 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     log(`⚠ Icon placeholders page skipped: ${e instanceof Error ? e.message : String(e)}`)
   }
 
+  // Real icon sets, if `⬡ Icons` already exists from an earlier import — see
+  // `iconSwapPreferred`. `pageByName` alone (no scan) keeps this cheap; a page
+  // that isn't there yet just means an empty list, not an error.
+  try {
+    const iconsPage = pageByName('⬡ Icons')
+    if (iconsPage) {
+      await iconsPage.loadAsync()
+      const sets = iconsPage.children.filter(
+        (n): n is ComponentSetNode => n.type === 'COMPONENT_SET' && n.name.startsWith('icon/'),
+      )
+      // Capped, not exhaustive — a real library runs to hundreds of sets
+      // (117 glyphs × 3 sizes in the default case), and a property's
+      // suggestion list is meant to be a shortcut, not the whole catalogue.
+      iconSwapPreferred = sets.slice(0, 40).map((s) => ({ type: 'COMPONENT_SET' as const, key: s.key }))
+    }
+  } catch { /* best-effort — the property still works with just the placeholder default */ }
+
   const catPageName = (c: string) => `⬡ Components · ${c}`
   const builtCatPages: PageNode[] = []
   let firstCatPage: PageNode | undefined
@@ -7099,7 +7555,17 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     }
     lastPage = pg
 
-    startCategoryRow(category, pg, entries.length, categoryList.indexOf(category), categoryList.length)
+    try {
+      startCategoryRow(category, pg, entries.length, categoryList.indexOf(category), categoryList.length)
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e)
+      log(`⚠ Category band "${category}" skipped: ${m}`)
+      // Still reset the row cursor so boards lay out left→right.
+      if (rowCategory !== undefined) boardY += rowH + CATEGORY_GAP
+      rowCategory = category
+      rowH = 0
+      boardX = 0
+    }
 
     for (const { entry, spec } of entries) {
       progress('Components', plannedDone, plannedTotal, entry.page)
@@ -7108,6 +7574,17 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e)
         log(`✗ ${entry.set} failed: ${m}`)
+        // Remove what the failed entry left on the page. A half-built set is
+        // bound to nothing and unusable, and leaving it is what turned a few
+        // broken specs into a page-wide pile of overlapping components. The
+        // log line above is the record that it was attempted.
+        for (const leftover of inFlight) {
+          try { if (!leftover.removed) leftover.remove() } catch { /* already gone with its parent */ }
+        }
+        inFlight = []
+        // Drop the registry entries too, or a later phase reuses a removed node.
+        existingSets.delete(entry.set)
+        existingSingles.delete(entry.set)
       }
       plannedDone++
       // One set per macrotask so Figma paints progress and never locks up.
@@ -8410,17 +8887,6 @@ const ICONIFY_PREFIXES: Record<string, string> = {
 // rather than a guessed file id. Add a library here only with its verified
 // link in hand.
 
-// Phosphor placeholder paths (viewBox 0 0 256 256). Shared by component icon
-// slots and the Icons docs specimen — one copy so the mark can't drift.
-// `square-dashed` is Phosphor's `rectangle-dashed` (no separate square glyph);
-// the component is named square-dashed to match Lucide / Figma Assets search.
-const CIRCLE_DASHED_PATH =
-  'M96.26 37.05a8 8 0 0 1 5.74-9.76a104.1 104.1 0 0 1 52 0a8 8 0 0 1-2 15.75a8.2 8.2 0 0 1-2-.26a88.1 88.1 0 0 0-44 0a8 8 0 0 1-9.74-5.73M53.79 55.14a104.05 104.05 0 0 0-26 45a8 8 0 0 0 15.42 4.27a88 88 0 0 1 22-38.09a8 8 0 0 0-11.42-11.18m-10.58 96.41a8 8 0 1 0-15.42 4.28a104.1 104.1 0 0 0 26 45a8 8 0 0 0 11.41-11.22a88.14 88.14 0 0 1-21.99-38.06M150 213.22a88 88 0 0 1-44 0a8 8 0 1 0-4 15.49a104.1 104.1 0 0 0 52 0a8 8 0 0 0-4-15.49M222.65 146a8 8 0 0 0-9.85 5.58a87.9 87.9 0 0 1-22 38.08a8 8 0 1 0 11.42 11.21a104 104 0 0 0 26-45a8 8 0 0 0-5.57-9.87m-9.86-41.54a8 8 0 0 0 15.42-4.28a104 104 0 0 0-26-45A8 8 0 1 0 190.8 66.4a88 88 0 0 1 21.99 38.05Z'
-const SQUARE_DASHED_PATH =
-  'M80,48a8,8,0,0,1-8,8H40V72a8,8,0,0,1-16,0V56A16,16,0,0,1,40,40H72A8,8,0,0,1,80,48ZM32,152a8,8,0,0,0,8-8V112a8,8,0,0,0-16,0v32A8,8,0,0,0,32,152Zm40,48H40V184a8,8,0,0,0-16,0v16a16,16,0,0,0,16,16H72a8,8,0,0,0,0-16Zm72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm80-24a8,8,0,0,0-8,8v16H184a8,8,0,0,0,0,16h32a16,16,0,0,0,16-16V184A8,8,0,0,0,224,176Zm0-72a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V112A8,8,0,0,0,224,104Zm-8-64H184a8,8,0,0,0,0,16h32V72a8,8,0,0,0,16,0V56A16,16,0,0,0,216,40Zm-72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Z'
-const PLACEHOLDER_MASTER_SIZE = 24
-const PLACEHOLDER_CIRCLE_NAME = 'icon/circle-dashed'
-const PLACEHOLDER_SQUARE_NAME = 'icon/square-dashed'
 const ICON_FIGMA_FILES: Record<string, { label: string; url: string }> = {
   phosphor: {
     label: 'Phosphor Icons — Figma Community',
@@ -9729,9 +10195,14 @@ async function scanInheritedStylePrefixes(): Promise<string[]> {
     const p = inheritedStylePrefix(name)
     if (p) found.add(p)
   }
-  for (const s of await figma.getLocalTextStylesAsync()) note(s.name)
-  for (const s of await figma.getLocalPaintStylesAsync()) note(s.name)
-  for (const s of await figma.getLocalEffectStylesAsync()) note(s.name)
+  // Each style-listing call gets its OWN guard, same reasoning the grid one
+  // already had ("not on every plan") — this runs on EVERY sync tick, before
+  // the phase-running try/catch even starts (see the 'import' handler's own
+  // note), so an unguarded throw here used to leave Live Sync permanently
+  // silent rather than just skipping this one best-effort scan.
+  try { for (const s of await figma.getLocalTextStylesAsync()) note(s.name) } catch { /* best-effort */ }
+  try { for (const s of await figma.getLocalPaintStylesAsync()) note(s.name) } catch { /* best-effort */ }
+  try { for (const s of await figma.getLocalEffectStylesAsync()) note(s.name) } catch { /* best-effort */ }
   try {
     for (const s of await figma.getLocalGridStylesAsync()) note(s.name)
   } catch { /* grid styles API not on every plan */ }
@@ -9864,6 +10335,12 @@ type FigmaEditsReport = {
   checkedAt: string
   supported: {
     typography?: { fontFamily?: string; headingFontFamily?: string }
+    /** Keyed by the exact store field name (`primaryColor`, `errorColor`, …) —
+     *  see `PRIMITIVE_FAMILY_FIELD` below. Only the ANCHOR tone (9, "the
+     *  family base") ever lands here; every other tone is DERIVED from it and
+     *  has no single store field to become, so an edit there is reported as
+     *  `unsupported-value` instead. */
+    primitives?: Record<string, string>
   }
   rejected: FigmaEditRejection[]
   summary: { supported: number; rejected: number }
@@ -9932,6 +10409,67 @@ async function collectLocalEdits(baseline: DesignTokens): Promise<FigmaEditsRepo
     }
   }
 
+  // ── Primitive family base colours ─────────────────────────────────────────
+  // Tone 9 ("the anchor" — BASE_TONE on the platform) is the ONE ramp step
+  // that maps onto a single store field: primaryColor/errorColor/
+  // warningColor/successColor/infoColor are exactly "the hex tone 9 was
+  // built from." Every OTHER tone is DERIVED from it (generateColorScale),
+  // so a hand-edit there has no field of its own to become — reported below
+  // as `unsupported-value`, not silently dropped.
+  //
+  // The export's tone LABEL depends on `colorNaming` (numeric "9" / hundreds
+  // "700" / tens "90" — see `toneLabel` on the platform), which isn't itself
+  // in the payload. Rather than guess the scheme, try all three candidate
+  // keys against the baseline JSON — exactly one exists, whichever the
+  // system was actually using at export time.
+  const TONE9_LABELS = ['9', '700', '90']
+  const PRIMITIVE_FAMILY_FIELD: Record<string, string> = {
+    accent: 'primaryColor',
+    error: 'errorColor',
+    warning: 'warningColor',
+    success: 'successColor',
+    info: 'infoColor',
+  }
+  const primCol = cols.find((c) => c.name === COLLECTIONS.primitives)
+  if (primCol) {
+    const primVars = byColl.get(primCol.id) ?? []
+    const primByName = new Map(primVars.map((v) => [v.name, v] as const))
+    const mid = primCol.defaultModeId
+    const primitives = baseline.colors?.primitive ?? {}
+    const colorAt = (v: Variable): string | undefined => {
+      const raw = v.valuesByMode[mid]
+      if (!raw || typeof raw !== 'object' || !('r' in raw)) return undefined
+      return rgbaToHex(raw as RGB)
+    }
+
+    for (const [family, field] of Object.entries(PRIMITIVE_FAMILY_FIELD)) {
+      const baseKey = TONE9_LABELS.map((t) => `${family}-${t}`).find((k) => typeof primitives[k] === 'string')
+      if (!baseKey) continue // this family isn't in the export (e.g. no custom error/warning primitive yet)
+      const wantHex = normHex(primitives[baseKey])
+      const v = primByName.get(primitiveVarName(baseKey))
+      const nowHex = v && colorAt(v)
+      if (nowHex && nowHex !== wantHex) {
+        supported.primitives = { ...supported.primitives, [field]: nowHex }
+        supportedCount++
+      }
+
+      // Every OTHER tone of this same family that changed can't apply as a
+      // value edit — it's ramp-internal, not a field. Reject explicitly so
+      // it isn't mistaken for "not noticed."
+      for (const [key, hex] of Object.entries(primitives)) {
+        if (!key.startsWith(`${family}-`) || key === baseKey) continue
+        const kv = primByName.get(primitiveVarName(key))
+        const kNow = kv && colorAt(kv)
+        if (kNow && typeof hex === 'string' && kNow !== normHex(hex)) {
+          rejected.push({
+            kind: 'unsupported-value',
+            detail: `Colors Primitives/${primitiveVarName(key)} — only the family's anchor tone (${primitiveVarName(baseKey)}) round-trips; every other step is derived from it in Escala.`,
+          })
+        }
+      }
+    }
+  }
+
   // Hand-made components on non-plugin pages — never invent a catalogue key.
   for (const pg of figma.root.children) {
     if (pg.type !== 'PAGE' || pg.name.startsWith('⬡')) continue
@@ -9988,14 +10526,31 @@ async function reportFileAssets(): Promise<FileAssets> {
     // Variables API unavailable (older editor) — report zero rather than fail
     // the whole panel; the page flags below are still useful on their own.
   }
+  // Empty `⬡ Components · …` shells used to count as "present" (name-only
+  // check). A failed Components phase leaves those pages with a category band
+  // and zero boards — Overview then skips auto-build forever and Live Sync
+  // never escalates. Require a real board (`01 · Button`) or a set/component.
+  let sample = false
+  for (const pg of figma.root.children) {
+    const n = pg.name.trim()
+    if (n !== '⬡ Components Overview' && !n.startsWith('⬡ Components · ')) continue
+    try {
+      await pg.loadAsync()
+      if (pg.children.some((ch) =>
+        ch.type === 'COMPONENT_SET' ||
+        ch.type === 'COMPONENT' ||
+        (ch.type === 'FRAME' && /^\d{2} · /.test(ch.name)),
+      )) {
+        sample = true
+        break
+      }
+    } catch { /* dynamic-page load failed — treat as missing */ }
+  }
   return {
     cover: names.has('⬡ Cover'),
     documentation: names.has('⬡ Documentation'),
     gettingStarted: names.has('⬡ Getting started'),
-    // Any category page counts as "components present" — plus the legacy
-    // single page, until it's split on the next import.
-    sample: names.has('⬡ Components Overview') ||
-      [...names].some((n) => n.startsWith('⬡ Components · ')),
+    sample,
     icons: names.has('⬡ Icons'),
     variables,
     collections,
@@ -10135,6 +10690,24 @@ figma.ui.onmessage = async (msg: {
     const { tokens, options } = msg
     if (!tokens || !options) return
 
+    // Everything below, up to the phase-running try/catch further down, runs
+    // UNGUARDED — scanInheritedStylePrefixes() in particular calls three
+    // Figma style-listing APIs with no try/catch of their own (only the grid
+    // one is guarded, "not on every plan"). A throw ANYWHERE in this
+    // pre-phase setup used to escape uncaught: no 'done', no 'error', ever
+    // posted back to the UI. `fetchAndSync` in ui.html sets `importInFlight
+    // = true` before sending this message and only ever clears it on 'done'/
+    // 'error' — so a single unlucky exception here (a transient Figma API
+    // hiccup, a huge file, a plan restriction) left Live Sync PERMANENTLY
+    // silent: every later tick's `if (importInFlight) return` no-ops with no
+    // log and no visible symptom, until the user thinks to close and reopen
+    // the plugin. Reported as "el plugin sigue sin querer hacer sync" with
+    // no error shown — this is the exact, reproducible shape of that. Wrap
+    // the WHOLE handler so a failure ANYWHERE always reaches the UI. The
+    // existing inner try/catch below still handles its own zone and never
+    // rethrows, so this outer catch only ever fires for exactly the gap it
+    // exists to close.
+    try {
     log(`― Starting import for "${tokens.project || 'Untitled'}" ―`)
     checkSchema(tokens)
 
@@ -10303,6 +10876,13 @@ figma.ui.onmessage = async (msg: {
       // old docs still bind to them. Purge AFTER Cover/Docs/Components so
       // those bindings are gone and the remove can succeed.
       await purgeInheritedCollections(tokens.project || '')
+    // Same ordering rule as the collection purge directly above: the styles a
+    // previous system left behind can only be removed once the boards that
+    // referenced them have been redrawn. See the note in importStyles.
+    const inheritedDropped = await removeInheritedStyles()
+    if (inheritedDropped > 0) {
+      log(`✓ Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? '' : 's'} prefixed with a previous project name`)
+    }
 
       // Keep the payload for manual export and Overview — scoped to THIS file
       // (see writeFileTokens), so it survives restarts without leaking into
@@ -10326,6 +10906,16 @@ figma.ui.onmessage = async (msg: {
       figma.ui.postMessage({ type: 'error', message: msg })
     } finally {
       ensureFoundationPageOrder()
+    }
+    } catch (outerErr) {
+      // The safety net the comment above promises: anything that escaped the
+      // pre-phase setup (schema check, style scan, font check) lands here
+      // instead of vanishing. Same message shape as the inner catch, so the
+      // UI's existing 'error' handling (clears importInFlight, shows the
+      // message) needs no changes to benefit from this.
+      const outerErrMsg = outerErr instanceof Error ? outerErr.message : String(outerErr)
+      log(`✗ Error: ${outerErrMsg}`)
+      figma.ui.postMessage({ type: 'error', message: outerErrMsg })
     }
   }
 

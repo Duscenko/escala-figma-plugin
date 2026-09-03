@@ -1209,10 +1209,13 @@
         <div class="card" style="margin-top:12px">
           <div class="card-title">Read from Figma</div>
           <p class="muted" style="margin:0 0 8px;font-size:12px;line-height:1.45">
-            Compares this file to the last imported system. <strong>Value</strong> edits
-            (e.g. font family) can go back to Escala. <strong>Structural</strong> edits —
-            new variables, renames, new components — are rejected with a warning; those
-            aren't system settings.
+            Compares this file to the last imported system. <strong>Value</strong> edits —
+            font family, and a family's anchor colour (<code>Accent/09</code>,
+            <code>Error/09</code>…, the tone every other step in that ramp is built from) —
+            can go back to Escala. <strong>Structural</strong> edits — new variables,
+            renames, new components, and any OTHER ramp tone (those are derived, not
+            stored on their own) — are rejected with a warning; those aren't system
+            settings.
           </p>
           <div class="card-row">
             <button class="btn btn-secondary btn-sm" id="checkLocalEditsBtn" type="button">Check local edits</button>
@@ -1443,6 +1446,28 @@ let pendingHash    = null   // hash of a fetch/import in flight — committed on
 let importInFlight = false  // an import is running in the sandbox — don't overlap
 let failCount      = 0
 let lastLocalEdits = null   // escala-figma-edits/v1 report from check-local-edits
+// Date.now() of the last time a real change actually landed (a successful
+// import, or sync just starting). A long streak of "no changes" ticks past
+// this is ambiguous by itself — the designer may simply not be editing — but
+// past SYNC_STALE_MS it's worth naming as a possibility rather than repeating
+// "Up to date" forever: the platform's own auto-publish can be off (its
+// default was OFF until it started turning itself on after a first publish),
+// or this file's saved URL can be pointed at a slug nobody publishes to any
+// more (a renamed project). Both look identical from here — a hash that never
+// changes — so this only ever SUGGESTS a cause, never asserts one.
+let noChangeSince  = null
+const SYNC_STALE_MS = 10 * 60 * 1000  // 10 minutes
+// A payload that fails to import must not be retried on every tick forever.
+// 'done' with hadError deliberately does NOT advance lastHash (a partial
+// import must not be recorded as current), which means the next tick sees the
+// same hash as "new" and re-runs the whole failing import — every interval,
+// with no backoff, for as long as the plugin is open. On a slow phase that
+// pins Figma permanently. We still retry, because most partial failures are
+// transient (a font that hadn't loaded, a plan limit), but we stop after
+// SYNC_MAX_RETRIES and say so instead of grinding.
+let failedHash  = null
+let failedTries = 0
+const SYNC_MAX_RETRIES = 3
 
 // Shell state: `view` is what the rail selects; in guided mode the Import view
 // is driven by `step` instead of showing every panel at once.
@@ -2595,9 +2620,23 @@ async function fetchAndSync(url) {
     // produce new blobs even when the payload is identical.
     const hash = hashStr(JSON.stringify(tokens))
     if (hash === lastHash) {
-      updateSyncStatus('active', 'Up to date — no changes')
+      if (noChangeSince == null) noChangeSince = Date.now()
+      const quiet = Date.now() - noChangeSince
+      updateSyncStatus('active', quiet > SYNC_STALE_MS
+        ? `Up to date — no changes for ${Math.round(quiet / 60000)}m. If you're editing on the platform, check that Keep Figma in sync is on there.`
+        : 'Up to date — no changes')
       return
     }
+    // A payload we already failed on, repeatedly. Retrying it a fourth time
+    // will fail the same way — hold, and let the user act on the log. Any
+    // genuinely new payload clears the block below.
+    if (hash === failedHash && failedTries >= SYNC_MAX_RETRIES) {
+      updateSyncStatus('error', `Import keeps failing for this payload (${failedTries}×) — paused. See Activity, then press Sync now to retry.`)
+      return
+    }
+    // A real change landed — the quiet streak (if any) is over.
+    noChangeSince = Date.now()
+    if (hash !== failedHash) { failedHash = null; failedTries = 0 }
     pendingHash = hash
     parsedTokens = tokens
     showPreview(tokens)
@@ -2681,6 +2720,7 @@ function startSync() {
   const interval = parseInt($('syncInterval').value) * 1000
   syncRunning = true
   failCount = 0
+  noChangeSince = Date.now()  // fresh baseline — don't escalate on the first ticks
   btn.textContent = 'Stop sync'
   btn.classList.remove('btn-secondary')
   btn.classList.add('btn-primary')
@@ -2751,6 +2791,10 @@ $('syncNowBtn').addEventListener('click', async () => {
   const url = $('syncUrl').value.trim()
   if (!url) { addLog('Enter a sync URL first', 'error'); return }
   if (importInFlight) { addLog('An import is already running — the check will follow it', 'error'); return }
+  // Explicit user action clears a retry pause — that is what the paused
+  // status tells them to press.
+  failedHash = null
+  failedTries = 0
   const btn = $('syncNowBtn')
   btn.disabled = true
   btn.textContent = 'Checking…'
@@ -2833,9 +2877,17 @@ window.onmessage = (event) => {
       // A partial import must not be marked as current. Keeping the old hash
       // means Live Sync retries this payload on its next tick instead of
       // claiming success while a Figma variable still holds an old value.
+      // Remember WHICH payload failed, so the retry cap above can stop an
+      // endless re-import of the same broken input.
+      if (pendingHash) {
+        failedTries = pendingHash === failedHash ? failedTries + 1 : 1
+        failedHash = pendingHash
+      }
       pendingHash = null
-      if (syncRunning) updateSyncStatus('error', 'Sync incomplete — see Activity')
+      if (syncRunning) updateSyncStatus('error', `Sync incomplete (${failedTries}/${SYNC_MAX_RETRIES}) — see Activity`)
     } else {
+      failedHash = null
+      failedTries = 0
       if (pendingHash) {
         lastHash = pendingHash
         pendingHash = null
@@ -2890,6 +2942,12 @@ window.onmessage = (event) => {
     }
     if (r.supported && r.supported.typography && r.supported.typography.headingFontFamily) {
       lines.push('  · heading family → ' + r.supported.typography.headingFontFamily)
+    }
+    var PRIM_LABEL = { primaryColor: 'accent', errorColor: 'error', warningColor: 'warning', successColor: 'success', infoColor: 'info' }
+    if (r.supported && r.supported.primitives) {
+      for (var field in r.supported.primitives) {
+        lines.push('  · ' + (PRIM_LABEL[field] || field) + ' base color → #' + r.supported.primitives[field])
+      }
     }
     lines.push('Rejected (not system settings): ' + r.summary.rejected)
     const rejs = r.rejected || []
