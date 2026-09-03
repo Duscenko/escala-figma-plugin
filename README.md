@@ -75,6 +75,7 @@ primitives and semantics.
 | `stroke` + `strokeRoles` (or `borders.width`) | **Border** | Stroke steps (`none`/`sm`/`md`/`lg`) + `role/{divider,control,focus}` aliases. `borders.width` is the v5 fallback the configurator still emits as a copy of `stroke` |
 | `opacity` | **Opacity** | `{key}` FLOAT variables (0–1 ratio) |
 | `sizes` + `sizeRoles` | **Size** | `{key}` FLOAT primitives + `role/{compact,control,touch,hit,fab}` aliases |
+| `selector` + `selectorRoles` | **Selector** | Checkbox / radio / switch glyph sizes (`xs`–`xl`) + `role/{control,compact,indicator}` aliases |
 | `grid` + `breakpointRoles` | **Grid** | `{key}` FLOAT variables (+ a column Grid Style); breakpoint roles alias `breakpoint-{step}` |
 | `shadows` (+ `shadowsDark`) | — | Effect Styles (multi-layer drop shadows); a differing dark CSS becomes `… (Dark)` |
 | `icons.library` | **Icons** | `library` STRING variable, **plus** the library's core UI glyphs (~95 across navigation, actions, communication, people, media, files, status, commerce, security, tech and layout) fetched from the Iconify API and generated as `icon/<library>/<name>` **variant sets — Size: Large 24 / Medium 20 / Small 16** — on "⬡ Icons", tinted with the `text/primary` variable so they re-theme. Works for Lucide, Heroicons, Phosphor, Radix and Material Symbols; needs network access to `api.iconify.design` (declared in the manifest) — without it, the import logs a warning and continues. Loose single-component icons from older imports upgrade in place to the Large variant. |
@@ -93,10 +94,12 @@ Documentation-style board, a black title bar, and the glyphs inside framed
 auto-layout cards — one card per library (switching families starts a new
 card and keeps the old one intact) plus a Custom Icons card. Whenever the
 plugin opens and after every import — even a failed one — the foundation
-pages are promoted to the top of the page list: **⬡ Cover, ⬡ Documentation,
-⬡ Components Overview, ⬡ Icons**.
+pages are promoted to the top of the page list: **⬡ Cover, ⬡ Getting started,
+⬡ Documentation, ⬡ Components · \<category\>, ⬡ Icons**.
 | `copy` | **Copy** | `{key}` STRING variables, bound to stub text — *plugin-ready; not yet emitted by the configurator* |
-| `atoms` | — | Read only to gate which component pages are generated. The Components Overview sheet is a fixed specimen and is not gated on it |
+| `foundationsByTheme` | (modes on foundation collections) | When a library theme overrides radius/type/spacing/etc., those collections gain a mode column per theme. Root fields stay the compatibility fallback. |
+| `descriptions` | (on each variable) | Collection → variable name → text. Sets Figma `Variable.description` on create/update from the same role catalogues the web Semantics table uses. |
+| `atoms` | — | Component specs selected in the configurator. The plugin's default Components Overview remains a fixed 9-type specimen; its explicit Full catalogue option renders all 58 available component types. |
 
 > **The theme columns and the semantic tokens mirror the payload — including
 > what it no longer has.** Every import renames the default mode to the first
@@ -191,22 +194,21 @@ specimens. Doc chrome is fixed light; the specimens are what re-theme.
 > board with the set still inside would delete the set and break every instance
 > placed from it. If you change the board structure, keep that rescue.
 
-> **Why this replaced a 58-component library.** The plugin used to generate the
-> configurator's whole catalogue: 58 sets, **~1403 variants across 63 pages**
-> (Button alone was Size × State × Color × Style × Icon = 864, built in one
-> synchronous pass). That locked Figma up on every import — and because Live
-> Sync re-ran the *same* full import on every token change, it locked up again
-> on every edit. Escala is a token generator: the components exist to show what
-> the tokens look like, not to be a component library, so the sheet mirrors the
-> configurator's own Color preview panel instead.
+> **Full catalogue is opt-in.** The Components scope offers **Overview ·
+> default** and **Full catalogue**. Full catalogue creates all 58 component
+> types on the same generated page, but deliberately chooses representative
+> source variants that cover every axis value instead of materializing the old
+> **~1,403-combination** cartesian product (Button alone had 864). That old
+> strategy locked Figma up; the new one yields after each component type and
+> keeps the default import compact.
 >
-> The sheet reuses the catalogue's specs and builders and only **filters** the
-> variant matrix (`SAMPLE` + `sampleSpec` in `code.ts`), so there's no second
-> rendering path to keep in sync — a fix to `buildButton` still lands here.
+> Both modes reuse the catalogue's specs and builders. Overview filters through
+> `SAMPLE` + `sampleSpec`; Full catalogue uses `representativeSpec`, so there is
+> still one rendering path — a fix to `buildButton` lands in both modes.
 > Axes that collapse to one value (Size, Icon) are stripped so Figma's variant
-> panel doesn't show single-option dropdowns. `CATALOG` and the 49 specs it
-> references are kept in the file, unwired, for reference — don't wire them
-> back up without re-measuring the freeze.
+> panel doesn't show single-option dropdowns. The full catalogue's sparse
+> variants render in a compact labeled grid rather than recreating the missing
+> cartesian combinations as empty cells.
 
 Unlike the old catalogue, the sheet is **not** gated on the payload's `atoms`:
 it's a fixed specimen of the token system, not a selection of the user's
@@ -256,27 +258,23 @@ Swatches and specimens are bound to the imported variables (switch the page's
 variable mode to preview themes); the board chrome itself is fixed light so the
 docs stay readable in every mode.
 
-Every payload carries a `schemaVersion` (currently `4` — every primitive family
-ships a real dark twin: `accent-dark-*`, `error-dark-*`, `warning-dark-*`,
-`success-dark-*`, `info-dark-*` and their `*-a*` alpha twins, alongside the v3
-readable semantic taxonomy `surface-*` / `action-*` / `status-*` / `icon-*` plus
-`primitiveAlpha`, `background`, `panelBackground`, `padding` and the
-non-breaking `gradients` / `gradientAssignments` maps); the plugin imports
-forward-compatibly and logs a warning when the payload is newer than it supports.
-Newer payloads may also carry `colors.semanticArchitecture` and a
-`colors.architecture` projection (the configurator's Alias/Semantics picker) —
-both additive, so the flat `colors.themes` shape always ships regardless of
-which architecture is active and older plugin builds degrade gracefully.
+Every payload carries a `schemaVersion` (currently `7` — translucent architecture
+colours as 8-digit `#rrggbbaa`, plus additive `foundationsByTheme` / `themeModes` /
+`selector`). The plugin imports forward-compatibly and logs a warning when the
+payload is newer than it supports. Newer payloads may also carry
+`colors.semanticArchitecture` and a `colors.architecture` projection
+(Categorical is the live architecture; older Astryx/shadcn/… payloads still
+import) — both additive, so the flat `colors.themes` shape always ships.
 
 ### One semantic tier
 
 **There is exactly one semantic collection in the file, it is always called
 `Color Semantics`, and what's inside it is the contract the platform says the
 system is on.** If the payload carries a `colors.architecture` projection
-(Astryx — the default for every new system — shadcn/ui, Categorical, IBM
-Carbon, Contextual Vibrancy, Material Tonal), that architecture ships verbatim:
-its own groups, its own token keys, its own modes. Only a system with no
-architecture gets the flat 39-role catalogue.
+(Categorical — the default for every new system — or a legacy Astryx/shadcn/…
+payload), that architecture ships verbatim: its own groups, its own token keys,
+its own modes. Only a system with no architecture gets the flat 39-role
+catalogue.
 
 Earlier builds shipped **both**: the flat catalogue in `Color Semantics` *and*
 the architecture in a collection named after itself. Two competing vocabularies
@@ -489,27 +487,26 @@ To do in the publish flow (Figma → Plugins → Publish):
 
 ## QA pass before each release
 
-1. Empty file → default import → exactly **three** pages: ⬡ Cover,
-   ⬡ Documentation, ⬡ Components Overview. No "❖ Category" / "   ↳ Component" pages, no
-   ⬡ Icons (that tick is off by default)
+1. Empty file → default import → **⬡ Cover**, **⬡ Getting started**,
+   **⬡ Documentation**, plus one **⬡ Components · \<category\>** page per
+   catalogue category that the Overview specimen touches. No "❖ Category" /
+   "   ↳ Component" pages, no ⬡ Icons (that tick is off by default)
 2. Re-import same tokens → no duplicates, values updated in place
 2b. Variables-only file (sync into a fresh file, never imported) → Overview's
-   "In this file" flags Cover / Documentation / Components Overview as missing;
-   **Build them** creates exactly those three and the flag clears — even with
-   the Components Overview and Documentation scope boxes unticked
-3. Tokens with custom themes → one mode per theme; on Starter plan the mode
-   limit is logged and skipped gracefully
+   "In this file" flags Cover / Getting started / Documentation / Components as
+   missing; **Build them** creates them and the flag clears — even with the
+   Components and Documentation scope boxes unticked
+3. Tokens with custom themes → one Color Semantics mode per library theme; on
+   Starter plan the mode limit is logged and skipped gracefully
 4. Token font not installed → falls back to Inter without failing
-4b. System on Astryx (the default) → import → **one** collection named
-   `Color Semantics`, holding Astryx's own groups (Accent · Background · Text ·
-   Icon · Status · Utility · Border), no `Astryx` collection and no
-   `Components` collection anywhere; the log reads "Semantic tokens — Astryx
-   architecture (…)" plus a "Removed …" line for each of those on a file
-   imported by an older build. The Button's solid fill matches the web
-   preview's and is bound to `Accent/solid`. Switch the file's mode to another
-   theme → the sheet re-themes. Re-import a system on Flat → the collection
-   holds the flat `background/*`·`content/*`·`border/*` roles instead, same
-   name.
+4b. System on Categorical (the default) → import → **one** collection named
+   `Color Semantics`, holding Categorical's own groups (Content · Action ·
+   Surface · Status · Border), no `Categorical Semantic` collection and no
+   `Components` collection anywhere. The Button's solid fill matches the web
+   preview's and is bound to `Action/primary/default`. Switch the file's mode
+   to another theme → the sheet re-themes. Re-import a system on Flat → the
+   collection holds the flat `background/*`·`content/*`·`border/*` roles
+   instead, same name.
 5. Live Sync: start → change a colour on the web → the Log shows **only**
    Variables and Styles (no page rebuild) and the Components Overview re-themes;
    stop/reopen plugin → sync resumes; bad URL → error counter, timer keeps

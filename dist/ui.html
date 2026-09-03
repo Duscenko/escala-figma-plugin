@@ -12,10 +12,10 @@
      dark used to flash. Syntax is <color> so the engine interpolates in a
      perceptually even space instead of through raw RGB. */
   @property --bg           { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
-  @property --surface      { syntax: '<color>'; inherits: true; initial-value: #f5f5f6; }
-  @property --surface2     { syntax: '<color>'; inherits: true; initial-value: #ebebed; }
-  @property --border       { syntax: '<color>'; inherits: true; initial-value: #ebebed; }
-  @property --border2      { syntax: '<color>'; inherits: true; initial-value: #d0d0d4; }
+  @property --surface      { syntax: '<color>'; inherits: true; initial-value: #f6f6f7; }
+  @property --surface2     { syntax: '<color>'; inherits: true; initial-value: #e8e8ea; }
+  @property --border       { syntax: '<color>'; inherits: true; initial-value: #e5e5e5; }
+  @property --border2      { syntax: '<color>'; inherits: true; initial-value: #d4d4d4; }
   @property --text         { syntax: '<color>'; inherits: true; initial-value: #18181b; }
   @property --text-sub     { syntax: '<color>'; inherits: true; initial-value: #52525b; }
   @property --text-dim     { syntax: '<color>'; inherits: true; initial-value: #737373; }
@@ -23,8 +23,8 @@
   @property --success      { syntax: '<color>'; inherits: true; initial-value: #68ca9e; }
   @property --error        { syntax: '<color>'; inherits: true; initial-value: #f97969; }
   @property --success-tint { syntax: '<color>'; inherits: true; initial-value: #edfcf4; }
-  @property --accent        { syntax: '<color>'; inherits: true; initial-value: #a172fa; }
-  @property --accent-strong { syntax: '<color>'; inherits: true; initial-value: #8a38f5; }
+  @property --accent        { syntax: '<color>'; inherits: true; initial-value: #7f56d9; }
+  @property --accent-strong { syntax: '<color>'; inherits: true; initial-value: #6941c6; }
   @property --accent-soft   { syntax: '<color>'; inherits: true; initial-value: #f7f1ff; }
   @property --accent-ring   { syntax: '<color>'; inherits: true; initial-value: #b594fe; }
   @property --on-accent     { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
@@ -50,10 +50,10 @@
      wins once set. */
   :root {
     --bg:           #ffffff;   /* background-primary */
-    --surface:      #f5f5f6;   /* background-secondary — neutral/2 */
-    --surface2:     #ebebed;   /* background-tertiary — neutral/3 */
-    --border:       #ebebed;   /* border-tertiary — neutral/3 */
-    --border2:      #d0d0d4;   /* border-primary — neutral/5 */
+    --surface:      #f6f6f7;   /* app --surface */
+    --surface2:     #e8e8ea;   /* app --elevated */
+    --border:       #e5e5e5;   /* app --line */
+    --border2:      #d4d4d4;   /* app --line-strong */
     /* --text/--text-sub/--text-dim used to be a hand-tuned muted-gray
        approximation (neutral/11 · /9 · /8) that this file's own header
        claimed was "wired 1:1" but wasn't — measured, it cleared only
@@ -73,8 +73,8 @@
     --error:        #f97969;   /* content-error — error/8 */
     --success-tint: #edfcf4;   /* background-success-primary — success/2 */
 
-    --accent:        #a172fa;   /* background-brand-solid — accent/8 */
-    --accent-strong: #8a38f5;   /* background-brand-solid-hover — accent/9 */
+    --accent:        #7f56d9;   /* app --accent-solid fallback */
+    --accent-strong: #6941c6;   /* hover step for the fallback accent */
     --accent-soft:   #f7f1ff;   /* background-brand-primary — accent/2 */
     --accent-ring:   #b594fe;   /* border-brand — accent/7 */
     --on-accent:     #ffffff;
@@ -129,25 +129,22 @@
      LIGHT back on when the OS prefers dark but Figma's actual theme isn't. */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg:           #0f0f12;   /* background-primary — neutral-dark/1 */
-      --surface:      #131314;   /* background-secondary — neutral-dark/2 */
-      --surface2:     #181819;   /* background-tertiary — neutral-dark/3 */
-      --border:       #181819;   /* border-tertiary — neutral-dark/3 */
-      --border2:      #262628;   /* border-primary — neutral-dark/5 */
+      --bg:           #0a0a0a;   /* app --app */
+      --surface:      #1c1c1f;   /* app --surface */
+      --surface2:     #2a2a2f;   /* app --elevated */
+      --border:       #232326;   /* app --line */
+      --border2:      #3a3a3f;   /* app --line-strong */
       --text:         #fafafa;   /* content-primary — app --fg (dark) */
       --text-sub:     #a1a1aa;   /* content-secondary — app --fg-muted (dark) */
-      --text-dim:     #6b6b6b;   /* content-tertiary — app --fg-faint (dark);
-                                     3.72:1, the one residual under AA — same
-                                     tier, same gap the app's own dark chrome
-                                     already accepts, never used for prose */
+      --text-dim:     #7b7b83;   /* app --fg-faint */
       --text-on-tint: #c9c9cc;   /* neutral-dark/12 — see comment above */
 
       --success:      #228c64;   /* content-success — success-dark/8 */
       --error:        #b53b30;   /* content-error — error-dark/8 */
       --success-tint: #0d1913;   /* background-success-primary — success-dark/2 */
 
-      --accent:        #6933b8;   /* background-brand-solid — accent-dark/8 */
-      --accent-strong: #8a38f5;   /* background-brand-solid-hover — accent/9, brighten on hover */
+      --accent:        #7f56d9;   /* app --accent-solid fallback */
+      --accent-strong: #9e77ed;   /* brighter hover on dark chrome */
       --accent-soft:   #161122;   /* background-brand-primary — accent-dark/2 */
       --accent-ring:   #532d8e;   /* border-brand — accent-dark/7 */
       color-scheme: dark;
@@ -155,22 +152,22 @@
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg:           #0f0f12;
-    --surface:      #131314;
-    --surface2:     #181819;
-    --border:       #181819;
-    --border2:      #262628;
+    --bg:           #0a0a0a;
+    --surface:      #1c1c1f;
+    --surface2:     #2a2a2f;
+    --border:       #232326;
+    --border2:      #3a3a3f;
     --text:         #fafafa;
     --text-sub:     #a1a1aa;
-    --text-dim:     #6b6b6b;
+    --text-dim:     #7b7b83;
     --text-on-tint: #c9c9cc;
 
     --success:      #228c64;
     --error:        #b53b30;
     --success-tint: #0d1913;
 
-    --accent:        #6933b8;
-    --accent-strong: #8a38f5;
+    --accent:        #7f56d9;
+    --accent-strong: #9e77ed;
     --accent-soft:   #161122;
       --accent-ring:   #532d8e;
   }
@@ -509,6 +506,22 @@
      dark-mode comment near :root[data-theme="dark"] for the contrast math. */
   .scope.on .scope-name,
   .scope.on small { color: var(--text-on-tint); }
+  .component-mode {
+    margin-top: var(--sp-3); padding-top: var(--sp-3);
+    border-top: 1px solid var(--border);
+    display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2);
+  }
+  .component-mode-option {
+    appearance: none; text-align: left; cursor: pointer;
+    padding: 9px 10px; border-radius: 6px;
+    border: 1px solid var(--border2); background: var(--bg); color: var(--text-sub);
+    display: flex; flex-direction: column; gap: 2px;
+    transition: border-color 140ms var(--ease), background 140ms var(--ease), color 140ms var(--ease);
+  }
+  .component-mode-option:hover { border-color: var(--text-dim); color: var(--text); }
+  .component-mode-option.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text-on-tint); }
+  .component-mode-option b { font-size: 11px; font-weight: 600; }
+  .component-mode-option small { font-size: 10px; line-height: 1.4; color: inherit; opacity: 0.82; }
 
   /* ── Option / export rows ── */
   .row {
@@ -1186,12 +1199,27 @@
         <details class="ov-help">
           <summary>How Live Sync works</summary>
           <ol class="help-list">
-            <li>In the configurator, open <strong>Bring to Figma</strong> and publish your tokens</li>
+            <li>In the configurator, open <strong>Bring to Figma</strong> and publish your tokens <em>(required — editing on localhost does not publish)</em></li>
             <li>Paste the URL above, then press <strong>Start sync</strong></li>
             <li>Re-publish on the web → this file updates on its own</li>
             <li>No login needed — the endpoint is public and read-only. Tokens living in a Git repo aren't covered: download <code>tokens.json</code> and use Import instead.</li>
           </ol>
         </details>
+
+        <div class="card" style="margin-top:12px">
+          <div class="card-title">Read from Figma</div>
+          <p class="muted" style="margin:0 0 8px;font-size:12px;line-height:1.45">
+            Compares this file to the last imported system. <strong>Value</strong> edits
+            (e.g. font family) can go back to Escala. <strong>Structural</strong> edits —
+            new variables, renames, new components — are rejected with a warning; those
+            aren't system settings.
+          </p>
+          <div class="card-row">
+            <button class="btn btn-secondary btn-sm" id="checkLocalEditsBtn" type="button">Check local edits</button>
+            <button class="btn btn-secondary btn-sm" id="downloadLocalEditsBtn" type="button" disabled>Download patch</button>
+          </div>
+          <div id="localEditsReport" class="muted" style="margin-top:8px;font-size:11px;line-height:1.4;white-space:pre-wrap"></div>
+        </div>
        </div>
       </div>
 
@@ -1244,8 +1272,8 @@
               <small>Text styles, gradient paints, shadow effects, grid</small>
             </button>
             <button class="scope on" id="scopeComponents" data-opt="optComponents" type="button" aria-pressed="true">
-              <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Components Overview</span></div>
-              <small>One page showing your tokens on real components</small>
+              <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Components</span></div>
+              <small>Your tokens on real components — one page per category</small>
             </button>
             <button class="scope on" id="scopeDocs" data-opt="optDocs" type="button" aria-pressed="true">
               <div class="scope-head"><span class="scope-check">✓</span><span class="scope-name">Documentation</span></div>
@@ -1258,11 +1286,22 @@
               <small>Generates the icon set as components — slow, rarely needed</small>
             </button>
           </div>
+          <div class="component-mode" id="componentMode" role="radiogroup" aria-label="Component rendering mode">
+            <button class="component-mode-option on" type="button" data-component-mode="overview" role="radio" aria-checked="true">
+              <b>Overview · default</b>
+              <small>9 core components · ~80 variants</small>
+            </button>
+            <button class="component-mode-option" type="button" data-component-mode="all" role="radio" aria-checked="false">
+              <b>Full catalogue</b>
+              <small>All 58 types · representative states · slower</small>
+            </button>
+          </div>
           <!-- Real checkboxes keep the sandbox contract unchanged -->
           <div class="hidden">
             <input type="checkbox" id="optVariables"  checked />
             <input type="checkbox" id="optStyles"     checked />
             <input type="checkbox" id="optComponents" checked />
+            <input type="checkbox" id="optAllComponents" />
             <input type="checkbox" id="optDocs"       checked />
             <input type="checkbox" id="optIcons" />
           </div>
@@ -1403,6 +1442,7 @@ let lastHash       = null   // hash of the last imported token payload (persiste
 let pendingHash    = null   // hash of a fetch/import in flight — committed only on 'done'
 let importInFlight = false  // an import is running in the sandbox — don't overlap
 let failCount      = 0
+let lastLocalEdits = null   // escala-figma-edits/v1 report from check-local-edits
 
 // Shell state: `view` is what the rail selects; in guided mode the Import view
 // is driven by `step` instead of showing every panel at once.
@@ -1444,6 +1484,7 @@ function currentOptions() {
     importVariables:  $('optVariables').checked,
     importStyles:     $('optStyles').checked,
     importComponents: $('optComponents').checked,
+    importAllComponents: $('optAllComponents').checked,
     importIcons:      $('optIcons').checked,
     importDocs:       $('optDocs').checked,
   }
@@ -1702,7 +1743,22 @@ function syncScopeCards() {
     card.classList.toggle('on', on)
     card.setAttribute('aria-pressed', String(on))
   })
+  $('componentMode').classList.toggle('hidden', !$('optComponents').checked)
+  document.querySelectorAll('.component-mode-option').forEach((button) => {
+    const on = (button.dataset.componentMode === 'all') === $('optAllComponents').checked
+    button.classList.toggle('on', on)
+    button.setAttribute('aria-checked', String(on))
+  })
 }
+
+document.querySelectorAll('.component-mode-option').forEach((button) => {
+  button.addEventListener('click', () => {
+    $('optAllComponents').checked = button.dataset.componentMode === 'all'
+    syncScopeCards()
+    saveSettings()
+    render()
+  })
+})
 
 // ─── File / drag-drop ────────────────────────────────────────────────────────
 const dropZone  = $('dropZone')
@@ -2055,11 +2111,9 @@ function renderReview() {
   const o = currentOptions()
   const t = parsedTokens || {}
   const scaleLen = Object.keys((t.colors && t.colors.primitive) || {}).length
-  const atomCount = (t.atoms || []).length
-  const moreAvailable = Math.max(0, FULL_CATALOGUE_SIZE - atomCount)
-  const componentsDesc = atomCount === 0
-    ? 'No components selected — none will be created'
-    : `${atomCount} selected${moreAvailable > 0 ? ` · ${moreAvailable} more in the full catalogue on escalatokens.com` : ''}, plus their icons`
+  const componentsDesc = o.importAllComponents
+    ? `${FULL_CATALOGUE_SIZE} component types · one page per category · representative states for each type`
+    : '9 core component types · one page per category · compact overview (~80 variants)'
   const items = [
     [o.importVariables,  'Variables',     `Color primitives + semantics, typography roles, spacing/radius/size/stroke roles (${scaleLen} primitive tones)`],
     [o.importStyles,     'Styles',        'Text styles, gradient paint styles, shadow effect styles, grid'],
@@ -2184,16 +2238,17 @@ function renderHome() {
 // could only ever read "Not in this file" with nothing this panel can do
 // about it.
 const ASSET_ROWS = [
-  { key: 'cover',         name: 'Cover',         note: 'Title page',        required: true },
-  { key: 'documentation', name: 'Documentation', note: 'Handoff boards',    required: true },
-  { key: 'sample',        name: 'Components Overview', note: 'Tokens on components', required: true },
+  { key: 'cover',          name: 'Cover',           note: 'Title page',           required: true },
+  { key: 'gettingStarted', name: 'Getting started', note: 'Handoff intro',        required: true },
+  { key: 'documentation',  name: 'Documentation',   note: 'Handoff boards',       required: true },
+  { key: 'sample',         name: 'Components',      note: 'One page per category', required: true },
 ]
 
 // Per-page "include this when building" preference — independent of whether
 // the page is already IN the file. A tool preference (see saveSettings), not
 // file-scoped, same as the Import panel's scope checkboxes: someone who
 // doesn't want a Cover page generally doesn't want one in any file.
-let buildPrefs = { cover: true, documentation: true, sample: true }
+let buildPrefs = { cover: true, documentation: true, gettingStarted: true, sample: true }
 
 function renderAssets() {
   const list = $('ovAssets')
@@ -2457,7 +2512,9 @@ function buildMissingAssets() {
   // still missing.
   const needsSample = buildPrefs.sample !== false && !fileAssets.sample
   const needsCover = buildPrefs.cover !== false && !fileAssets.cover
-  const needsDocumentation = buildPrefs.documentation !== false && !fileAssets.documentation
+  const needsGettingStarted = buildPrefs.gettingStarted !== false && !fileAssets.gettingStarted
+  const needsDocumentation = (buildPrefs.documentation !== false && !fileAssets.documentation)
+    || needsGettingStarted
   // Variables underpin every generated page (fills, radii, text all bind to
   // them), so a file with none gets them regardless of what's missing.
   const needsVars = fileAssets.variables === 0
@@ -2478,6 +2535,7 @@ function buildMissingAssets() {
         importVariables: needsVars,
         importStyles: needsVars,
         importComponents: needsSample,
+        importAllComponents: $('optAllComponents').checked,
         importIcons: false,
         importCover: needsCover,
         importDocumentation: needsDocumentation,
@@ -2582,7 +2640,18 @@ async function fetchAndSync(url) {
       pluginMessage: {
         type: 'import',
         tokens,
-        options: { importVariables: true, importStyles: true, importComponents: false, importIcons: false, importDocs: false },
+        // Keep the chosen component mode attached even though routine sync is
+        // Variables + Styles only. If the sandbox detects rebuilt semantic
+        // collections and escalates Components for rebinding, it must rebuild
+        // the full catalogue too — otherwise its extra sets keep dead aliases.
+        options: {
+          importVariables: true,
+          importStyles: true,
+          importComponents: false,
+          importAllComponents: $('optAllComponents').checked,
+          importIcons: false,
+          importDocs: false,
+        },
       }
     }, '*')
   } catch (e) {
@@ -2644,6 +2713,29 @@ function stopSync() {
 $('syncToggleBtn').addEventListener('click', () => {
   if (syncRunning) stopSync()
   else startSync()
+})
+
+$('checkLocalEditsBtn').addEventListener('click', () => {
+  const box = $('localEditsReport')
+  if (box) box.textContent = 'Checking…'
+  $('downloadLocalEditsBtn').disabled = true
+  parent.postMessage({
+    pluginMessage: {
+      type: 'check-local-edits',
+      tokens: parsedTokens || storedTokens || undefined,
+    },
+  }, '*')
+})
+
+$('downloadLocalEditsBtn').addEventListener('click', () => {
+  if (!lastLocalEdits || !lastLocalEdits.summary || lastLocalEdits.summary.supported === 0) return
+  const blob = new Blob([JSON.stringify(lastLocalEdits, null, 2)], { type: 'application/json' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = (lastLocalEdits.project || 'escala') + '-figma-edits.json'
+  a.click()
+  URL.revokeObjectURL(a.href)
+  addLog('Downloaded Figma→Escala patch — paste or import it in the configurator (Variables · Type / Import)')
 })
 
 // ─── Update now ──────────────────────────────────────────────────────────────
@@ -2778,6 +2870,40 @@ window.onmessage = (event) => {
     maybeAutoBuild()
   }
 
+  if (msg.type === 'local-edits') {
+    const box = $('localEditsReport')
+    const dl = $('downloadLocalEditsBtn')
+    if (!box || !dl) return
+    if (msg.error) {
+      box.textContent = '✗ ' + msg.error
+      dl.disabled = true
+      lastLocalEdits = null
+      return
+    }
+    const r = msg.report
+    lastLocalEdits = r
+    const lines = []
+    lines.push('Checked ' + r.checkedAt)
+    lines.push('Supported value edits: ' + r.summary.supported)
+    if (r.supported && r.supported.typography && r.supported.typography.fontFamily) {
+      lines.push('  · font family → ' + r.supported.typography.fontFamily)
+    }
+    if (r.supported && r.supported.typography && r.supported.typography.headingFontFamily) {
+      lines.push('  · heading family → ' + r.supported.typography.headingFontFamily)
+    }
+    lines.push('Rejected (not system settings): ' + r.summary.rejected)
+    const rejs = r.rejected || []
+    for (let i = 0; i < Math.min(rejs.length, 8); i++) {
+      lines.push('  · [' + rejs[i].kind + '] ' + rejs[i].detail)
+    }
+    if (rejs.length > 8) lines.push('  · … +' + (rejs.length - 8) + ' more')
+    if (r.summary.supported === 0 && r.summary.rejected === 0) {
+      lines.push('No local drift — file matches the last imported system.')
+    }
+    box.textContent = lines.join('\n')
+    dl.disabled = r.summary.supported === 0
+  }
+
   if (msg.type === 'error') {
     importInFlight = false
     pendingHash = null
@@ -2841,6 +2967,7 @@ window.onmessage = (event) => {
       $('optVariables').checked  = s.options.importVariables  !== false
       $('optStyles').checked     = s.options.importStyles     !== false
       $('optComponents').checked = s.options.importComponents !== false
+      $('optAllComponents').checked = s.options.importAllComponents === true
       $('optDocs').checked       = s.options.importDocs       !== false
       // `=== true`, not `!== false`: icons default OFF, so a stored blob from
       // before this option existed (undefined) must stay off rather than opt
@@ -2850,9 +2977,10 @@ window.onmessage = (event) => {
     }
     if (s.buildPrefs) {
       buildPrefs = {
-        cover:         s.buildPrefs.cover         !== false,
-        documentation: s.buildPrefs.documentation !== false,
-        sample:        s.buildPrefs.sample        !== false,
+        cover:          s.buildPrefs.cover          !== false,
+        documentation:  s.buildPrefs.documentation  !== false,
+        gettingStarted: s.buildPrefs.gettingStarted !== false,
+        sample:         s.buildPrefs.sample         !== false,
       }
     }
     // Where to land. Overview is always the entry point: a connected file

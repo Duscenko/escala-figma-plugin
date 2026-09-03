@@ -18,6 +18,7 @@ interface DesignTokens {
     semanticDark?: Record<string, string>   // dark-mode values, same keys as semantic
     themes?: Record<string, Record<string, string>>  // full multi-theme map (light/dark/custom)
     themeOrder?: string[]                    // column (mode) order for the themes above
+    themeModes?: Record<string, { light: Record<string, string>; dark: Record<string, string> }>
     // Radix-style panel treatment for surface-1 (cards, panels, sections).
     panelBackground?: 'solid' | 'translucent' | 'page'
     // The user's CHOSEN reading of the token system (Alias/Semantics picker) —
@@ -98,6 +99,30 @@ interface DesignTokens {
   breakpointRoles?: Record<string, string>
   sizes?: Record<string, string>             // component heights xs–2xl
   sizeRoles?: Record<string, string>
+  // Checkbox / radio / switch glyph sizes (xs–xl) + role aliases
+  // (control / compact / indicator). Additive; older payloads omit it.
+  selector?: Record<string, string>
+  selectorRoles?: Record<string, string>
+  // Per-library-theme foundation collections. Root fields above stay the
+  // compatibility fallback; when a theme actually overrides radius/type/etc.
+  // the plugin writes extra modes on those collections.
+  foundationsByTheme?: Record<string, {
+    typography?: DesignTokens['typography']
+    spacing?: Record<string, string>
+    spacingRoles?: Record<string, string>
+    padding?: Record<string, string>
+    radius?: Record<string, string>
+    radiusRoles?: Record<string, string>
+    sizes?: Record<string, string>
+    sizeRoles?: Record<string, string>
+    selector?: Record<string, string>
+    selectorRoles?: Record<string, string>
+    stroke?: Record<string, string>
+    strokeRoles?: Record<string, string>
+    grid?: Record<string, string>
+    breakpointRoles?: Record<string, string>
+    gridFrame?: DesignTokens['gridFrame']
+  }>
   icons?: {
     library?: string
     name?: string
@@ -105,6 +130,9 @@ interface DesignTokens {
     prefix?: string                           // Iconify collection prefix (newer payloads)
     custom?: { name: string; svg: string }[]
   }
+  // Collection → Figma variable name → description. Additive; configurator
+  // builds from role catalogues. Applied to Variable.description on sync.
+  descriptions?: Record<string, Record<string, string>>
   copy?: Record<string, string>              // flat map, "/" hierarchy: "card/title" → "Card title"
   style: string | null
   atoms: string[]
@@ -116,6 +144,10 @@ interface ImportOptions {
   importStyles: boolean
   /** The '⬡ Components Overview' specimen sheet (was the 58-component catalogue). */
   importComponents: boolean
+  /** Default keeps the compact 9-component specimen. Opting into the full
+   *  catalogue creates all 58 component types with a representative variant
+   *  set per type, so large combinatorial matrices never freeze Figma. */
+  importAllComponents?: boolean
   /** Icon components. Optional and default-OFF: it used to ride on
    *  `importComponents`, which meant 351 SVG components + an Iconify fetch
    *  every time anyone wanted the sample sheet. */
@@ -454,6 +486,7 @@ const COLLECTIONS = {
   border:     'Border',
   opacity:    'Opacity',
   size:       'Size',
+  selector:   'Selector',
   grid:       'Grid',
   icons:      'Icons',
   copy:       'Copy',
@@ -467,7 +500,16 @@ const PLUGIN_COLLECTION_NAMES = new Set<string>(Object.values(COLLECTIONS))
 // New writes use these roots with no project folder.
 const PLUGIN_STYLE_ROOTS = new Set(['Type', 'Shadow', 'Gradient', 'Grid'])
 const INHERITED_STYLE_FOLDERS = ['Type', 'Shadow', 'Gradient', 'Grid', 'Scale', 'Semantic'] as const
-const DOCS_REV = 6
+// 7 — chapter/board section bars bind to Surface/layer-2 instead of a flat
+//     '#E6E6F7'; existing files carry the old hardcoded bar until they rebuild.
+// 8 — component catalogue split from one '⬡ Components Overview' page to a
+//     page per category ('⬡ Components · <category>'); the rebuild harvests
+//     the old page and re-homes every set onto its category page.
+// 9 — new '⬡ Getting started' page (rides with the Documentation phase); the
+//     category-band header is a token-bound card instead of flat hex text.
+// 10 — Selector collection + per-theme foundation modes; Getting started listed
+//     in Overview's file checklist.
+const DOCS_REV = 10
 const FILE_DOCS_REV_KEY = 'sd-docs-rev'
 // One-time sweep: files created before primitives defaulted to hidden-from-
 // publishing (see upsertVarIn) never get that default applied retroactively —
@@ -492,6 +534,7 @@ function collectionPanelOrder(tokens: DesignTokens): string[] {
     { name: COLLECTIONS.icons, include: !!tokens.icons?.library },
     { name: COLLECTIONS.opacity, include: !!tokens.opacity },
     { name: COLLECTIONS.radius, include: true },
+    { name: COLLECTIONS.selector, include: !!tokens.selector },
     { name: COLLECTIONS.size, include: !!tokens.sizes },
     { name: COLLECTIONS.spacing, include: true },
     { name: COLLECTIONS.typography, include: true },
@@ -529,53 +572,24 @@ function archFigmaName(groupLabel: string, key: string): string {
   return figmaVarName(`${groupLabel}/${key}`)
 }
 
-// Targeted scopes so each semantic group shows up in the picker it belongs to
-// (Content in text color, Border in stroke, Action/Surface in fills) instead
-// of the default ALL_SCOPES dumping every token into every picker.
-function scopesForSemantic(name: string): VariableScope[] {
-  const group = name.split('/')[0].toLowerCase()
-  switch (group) {
-    case 'content':
-    case 'text':
-      return ['TEXT_FILL']
-    case 'border':
-    case 'outlines':
-    case 'separators':
-      return ['STROKE_COLOR']
-    case 'action':
-    case 'accent':
-    case 'surface':
-    case 'background':
-    case 'base':
-    case 'card':
-    case 'popover':
-    case 'primary':
-    case 'secondary':
-    case 'muted':
-    case 'layer':
-    case 'field':
-    case 'core':
-    case 'surfaces':
-    case 'backgrounds':
-    case 'fills':
-    case 'materials':
-      return ['FRAME_FILL', 'SHAPE_FILL']
-    case 'status':
-    case 'icon':
-    case 'support':
-    case 'destructive':
-      return ['FRAME_FILL', 'SHAPE_FILL', 'TEXT_FILL', 'STROKE_COLOR']
-    default:
-      return ['ALL_FILLS', 'STROKE_COLOR']
-  }
+// Color Semantics (mapped roles) — always "Show in all supported properties".
+// Designers pick roles (Action/primary/default, Border/control, …), not ramps.
+// Targeted scopes used to hide e.g. Border from Fill; that fought the mapped
+// layer's job. Primitives carry the opposite rule (scopes: []).
+function scopesForSemantic(_name: string): VariableScope[] {
+  return ['ALL_SCOPES']
 }
 
 function scopesForCollection(collName: string, varName: string): VariableScope[] | undefined {
   switch (collName) {
+    // Ramps exist only to back aliases — empty scopes keeps them out of every
+    // fill/stroke/effect picker. Semantics (above) stay ALL_SCOPES.
+    case COLLECTIONS.primitives: return []
     case COLLECTIONS.spacing: return ['GAP', 'WIDTH_HEIGHT']
     case COLLECTIONS.radius:  return ['CORNER_RADIUS']
     case COLLECTIONS.border:  return ['STROKE_FLOAT']
     case COLLECTIONS.size:    return ['WIDTH_HEIGHT']
+    case COLLECTIONS.selector: return ['WIDTH_HEIGHT']
     case COLLECTIONS.opacity: return ['OPACITY']
     case COLLECTIONS.grid:    return ['WIDTH_HEIGHT']
     case COLLECTIONS.typography: {
@@ -759,9 +773,37 @@ const ARCH_ROLE_MAP: Record<'astryx' | 'shadcn' | 'categorical', Record<string, 
     'background-error-solid':       ['status', 'critical.surface-solid'],
     'background-success-primary':   ['status', 'success.surface'],
     'background-warning-primary':   ['status', 'warning.surface'],
-    'border-primary':               ['border', 'default'],
+    // Solid fills for the other three severities. Critical was the only one
+    // Categorical shipped a solid pair for, so these had nothing to bind to
+    // and fell through to the hex fallback in `pair()`.
+    'background-success-solid':     ['status', 'success.surface-solid'],
+    'background-warning-solid':     ['status', 'warning.surface-solid'],
+    // Info had NO categorical mapping at all, which is why InlineAlert Info
+    // shipped `pair()`'s literal `#1570ef` on `#131c2a` — both verified
+    // byte-for-byte in the Figma file against the fallbacks below.
+    'status-info':                  ['status', 'info.surface-solid'],
+    'status-info-subtle':           ['status', 'info.surface'],
+    'text-info':                    ['status', 'info.content'],
+    // The stroke around a status surface. Was a magic `0.4` in this file and a
+    // magic `33` (20%) in the configurator's own specimen — 40% in Figma vs
+    // 20% in the preview, same component. Now one alpha token per severity.
+    'status-error-border':          ['status', 'critical.border'],
+    'status-warning-border':        ['status', 'warning.border'],
+    'status-success-border':        ['status', 'success.border'],
+    'status-info-border':           ['status', 'info.border'],
+    // `border-primary` is the flat catalogue's CONTROL stroke, so it follows
+    // the control boundary through the phase-1 split — that role is
+    // `border.control` now, not `border.default` (which became the decorative
+    // ladder's middle rung). Same resolved value; the name moved.
+    'border-primary':               ['border', 'control'],
     'border-secondary':             ['border', 'subtle'],
-    'border-strong':                ['border', 'strong'],
+    'border-strong':                ['border', 'control-hover'],
+    // Dividers and rules. Deliberately mapped, deliberately NOT moved onto the
+    // decorative ladder's heavier rungs in this phase: every component here
+    // keeps the exact colour it had, so the split is provably a rename. Which
+    // of the ~20 stroke call sites should drop from the boundary to a
+    // decorative tone is a look decision, not a rename.
+    'border-tertiary':              ['border', 'subtle'],
     'border-focus':                 ['border', 'focus'],
     'border-brand':                 ['border', 'accent'],
     'border-error':                 ['border', 'critical'],
@@ -772,6 +814,9 @@ const ARCH_ROLE_MAP: Record<'astryx' | 'shadcn' | 'categorical', Record<string, 
     // Not an ALL_ROLES key — button label ink is content.on-action, not inverse.
     'content-on-brand':             ['content', 'on-action'],
     'status-on-solid':              ['status', 'critical.on-solid'],
+    'status-warning-on':            ['status', 'warning.on-solid'],
+    'status-success-on':            ['status', 'success.on-solid'],
+    'status-info-on':               ['status', 'info.on-solid'],
     'content-brand':                ['content', 'accent'],
     'content-brand-hover':          ['content', 'link.hover'],
     'content-disabled':             ['content', 'disabled'],
@@ -947,6 +992,7 @@ interface DocChromeVars {
   card?: Variable          // inner cards / swatch chips — background-tertiary (Surface/layer-2)
   accentText?: Variable    // FEATURES chip label ink — content-brand (Content/accent)
   accentBorder?: Variable  // FEATURES chip outline — border-brand (Border/accent)
+  inverse?: Variable       // dark accents on a light board (category rule) — background-inverse (Surface/inverse)
 }
 function docChromeVarsFrom(sem: SemLookup): DocChromeVars {
   return {
@@ -957,6 +1003,7 @@ function docChromeVarsFrom(sem: SemLookup): DocChromeVars {
     borderStrong: sem.varFor('border-strong',      'Border/strong', 'border/strong'),
     board:        sem.varFor('background-primary', 'Surface/page', 'surface/page', 'background/primary', 'surface/0'),
     card:         sem.varFor('background-tertiary','Surface/layer-2', 'surface/layer-2', 'background/tertiary', 'surface/2'),
+    inverse:      sem.varFor('background-inverse', 'Surface/inverse', 'surface/inverse', 'background/inverse', 'background/overlay', 'bg/inverse'),
     accentText:   sem.varFor('content-brand',      'Content/accent', 'content/accent', 'Content/brand', 'content/brand', 'text/brand-secondary'),
     accentBorder: sem.varFor('border-brand',       'Border/accent', 'border/accent', 'border/brand'),
   }
@@ -980,6 +1027,32 @@ function docModePin(tokens: DesignTokens, allCols: VariableCollection[]): { coll
 function pinToLightMode(node: SceneNode | PageNode, pin: { collection: VariableCollection; modeId: string } | undefined) {
   if (!pin) return
   try { node.setExplicitVariableModeForCollection(pin.collection, pin.modeId) } catch {}
+}
+
+/**
+ * Fixed width, HUG height — the shape every prose column, spec panel and
+ * section card on the generated pages wants: a fixed column for text to wrap
+ * against, growing downward with however much copy it ends up holding.
+ *
+ * It exists because `resize()` on an auto-layout frame pins BOTH axes to
+ * FIXED, which is easy to miss when you only meant to set the width. Every
+ * call site here passed a placeholder height (100, 60, 10 …) expecting the
+ * stack to grow past it — instead that placeholder became the frame's real
+ * height. The content didn't disappear, it rendered OUTSIDE the card: prose in
+ * dark ink on the dark page below a short white slab, and doc panels cut off
+ * mid-sentence. Restoring AUTO on the primary axis is the exact inverse of
+ * what resize() did.
+ *
+ * VERTICAL frames only — on a HORIZONTAL frame the primary axis is the width,
+ * so this would make it hug horizontally instead. A genuinely fixed-height row
+ * (a 56px section bar, an 18px breadcrumb) should keep its own resize() and
+ * not come through here.
+ */
+function vStack(f: FrameNode, width: number): FrameNode {
+  f.counterAxisSizingMode = 'FIXED'
+  f.resize(width, Math.max(1, f.height))
+  f.primaryAxisSizingMode = 'AUTO'
+  return f
 }
 
 // ── Architecture labels ──────────────────────────────────────────────────────
@@ -1316,7 +1389,9 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       }
     }
     if (found) {
-      if (scopes) { try { found.scopes = scopes } catch { /* plan may reject a scope */ } }
+      // `[]` is intentional (primitives: no scopes) — don't use truthiness.
+      if (scopes !== undefined) { try { found.scopes = scopes } catch { /* plan may reject a scope */ } }
+      applyVarDescription(found, collection.name, safe)
       return found
     }
     let created: Variable
@@ -1328,7 +1403,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       throw e
     }
     count++
-    if (scopes) { try { created.scopes = scopes } catch { /* plan may reject a scope */ } }
+    if (scopes !== undefined) { try { created.scopes = scopes } catch { /* plan may reject a scope */ } }
     // Primitives exist to be consumed THROUGH Color Semantics, not picked
     // directly — a designer applying "Accent 7" instead of "Content/accent"
     // is exactly the drift the semantic layer exists to prevent. New primitive
@@ -1342,9 +1417,18 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     if (collection.name === COLLECTIONS.primitives) {
       try { created.hiddenFromPublishing = true } catch { /* plan may reject this */ }
     }
+    applyVarDescription(created, collection.name, safe)
     cache.set(safe, created)
     allVars.push(created)
     return created
+  }
+
+  function applyVarDescription(variable: Variable, collectionName: string, varName: string) {
+    const desc = tokens.descriptions?.[collectionName]?.[varName]
+    if (typeof desc !== 'string') return
+    try {
+      if (variable.description !== desc) variable.description = desc
+    } catch { /* plan may reject */ }
   }
 
   // Single-mode collections resolve the same everywhere — write every mode in
@@ -1407,19 +1491,96 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
 
   // Emit a single-mode collection from a flat token map. Returns undefined (and
   // creates nothing) when there are no entries.
+  const foundationThemes: string[] = (() => {
+    const fb = tokens.foundationsByTheme
+    if (!fb) return []
+    const order = tokens.colors.themeOrder ?? []
+    return [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))]
+  })()
+  const capFoundationTheme = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+  // Modes are needed when ANY theme's resolved foundation map differs from the
+  // ROOT export — not only when themes differ from each other. Theme Preview
+  // writes font/spacing/… into `themeFoundations[theme]`; root `typography`
+  // stays put. If every theme shares the same override (or the kit has a
+  // single theme), the old "themes differ from each other" test returned false
+  // and Live Sync kept writing the stale root family to every mode — reported
+  // as "I changed the font and the plugin didn't pick it up".
+  function themeMapsDiffer(pick: (theme: string) => unknown, root?: unknown): boolean {
+    if (foundationThemes.length === 0) return false
+    if (root !== undefined) {
+      const rootSig = JSON.stringify(root ?? null)
+      if (foundationThemes.some((t) => JSON.stringify(pick(t) ?? null) !== rootSig)) return true
+    }
+    if (foundationThemes.length < 2) return false
+    const first = JSON.stringify(pick(foundationThemes[0]) ?? null)
+    return foundationThemes.slice(1).some((t) => JSON.stringify(pick(t) ?? null) !== first)
+  }
+  function ensureNamedModes(col: VariableCollection, keys: string[]): Record<string, string> {
+    const labels: [string, string][] = keys.map((k) => [k, capFoundationTheme(k)])
+    try { col.renameMode(col.defaultModeId, labels[0][1]) } catch { /* not allowed */ }
+    pruneModes(col, new Set(labels.map(([, l]) => l)), col.name)
+    const modeIdOf: Record<string, string> = { [labels[0][0]]: col.defaultModeId }
+    const skipped: string[] = []
+    for (const [key, label] of labels.slice(1)) {
+      const found = col.modes.find((m) => m.name === label)
+      if (found) { modeIdOf[key] = found.modeId; continue }
+      try { modeIdOf[key] = col.addMode(label) } catch { skipped.push(label) }
+    }
+    if (skipped.length > 0) {
+      log(`⚠ ${skipped.length} ${col.name} theme column${skipped.length > 1 ? 's' : ''} skipped (${skipped.join(', ')}) — your Figma plan's mode-per-collection limit was reached.`)
+    }
+    return modeIdOf
+  }
+  function writeByTheme(
+    v: Variable,
+    byTheme: Record<string, VariableValue | undefined>,
+    modeIdOf: Record<string, string>,
+  ) {
+    let fallback: VariableValue | undefined
+    for (const theme of foundationThemes) {
+      const val = byTheme[theme]
+      if (val !== undefined && fallback === undefined) fallback = val
+    }
+    for (const theme of foundationThemes) {
+      const mid = modeIdOf[theme]
+      const val = byTheme[theme] ?? fallback
+      if (mid && val !== undefined) v.setValueForMode(mid, val)
+    }
+  }
+
   function emitCollection(
     collName: string,
     entries: [string, string][] | undefined,
     type: VariableResolvedDataType,
     transform: (val: string) => VariableValue,
     nameOf: (key: string) => string = (k) => k,
+    themeMapOf?: (theme: string) => Record<string, string> | undefined,
   ) {
     if (!entries || entries.length === 0) return
     const col = findOrCreateCollection(collName)
     const cache = cacheFor(col)
-    for (const [key, val] of entries) {
+    const root = Object.fromEntries(entries)
+    const useModes = !!(themeMapOf && themeMapsDiffer((t) => themeMapOf(t), root))
+    const modeIdOf = useModes ? ensureNamedModes(col, foundationThemes) : undefined
+    const keys = new Set(Object.keys(root))
+    if (useModes && themeMapOf) {
+      for (const t of foundationThemes) Object.keys(themeMapOf(t) ?? {}).forEach((k) => keys.add(k))
+    }
+    for (const key of keys) {
+      const rawRoot = root[key]
+      if (rawRoot === undefined && !(useModes && themeMapOf && foundationThemes.some((t) => themeMapOf(t)?.[key]))) continue
       const varName = nameOf(key)
-      setDefault(col, upsertVarIn(col, cache, varName, type, scopesForCollection(collName, figmaVarName(varName))), transform(val))
+      const v = upsertVarIn(col, cache, varName, type, scopesForCollection(collName, figmaVarName(varName)))
+      if (modeIdOf && themeMapOf) {
+        const byTheme: Record<string, VariableValue | undefined> = {}
+        for (const t of foundationThemes) {
+          const raw = themeMapOf(t)?.[key] ?? rawRoot
+          if (raw !== undefined) byTheme[t] = transform(raw)
+        }
+        writeByTheme(v, byTheme, modeIdOf)
+      } else if (rawRoot !== undefined) {
+        setDefault(col, v, transform(rawRoot))
+      }
     }
   }
 
@@ -1429,18 +1590,40 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     collName: string,
     roles: Record<string, string> | undefined,
     primitiveNameOf: (step: string) => string,
+    themeRolesOf?: (theme: string) => Record<string, string> | undefined,
   ): number {
-    if (!roles) return 0
+    const rootRoles = roles ?? {}
+    const allRoles = new Set(Object.keys(rootRoles))
+    if (themeRolesOf) {
+      for (const t of foundationThemes) Object.keys(themeRolesOf(t) ?? {}).forEach((k) => allRoles.add(k))
+    }
+    if (allRoles.size === 0) return 0
     const col = findOrCreateCollection(collName)
     const cache = cacheFor(col)
+    const useModes = !!(themeRolesOf && themeMapsDiffer((t) => themeRolesOf(t), rootRoles))
+    const modeIdOf = useModes ? ensureNamedModes(col, foundationThemes) : undefined
     let n = 0
-    for (const [role, step] of Object.entries(roles)) {
-      if (typeof step !== 'string' || !step) continue
-      const prim = cache.get(figmaVarName(primitiveNameOf(step)))
-      if (!prim) continue
+    for (const role of allRoles) {
       const v = upsertVarIn(col, cache, `role/${role}`, 'FLOAT', scopesForCollection(collName, `role/${role}`))
-      setDefault(col, v, figma.variables.createVariableAlias(prim))
-      n++
+      if (modeIdOf && themeRolesOf) {
+        const byTheme: Record<string, VariableValue | undefined> = {}
+        for (const t of foundationThemes) {
+          const step = themeRolesOf(t)?.[role] ?? rootRoles[role]
+          if (typeof step !== 'string' || !step) continue
+          const prim = cache.get(figmaVarName(primitiveNameOf(step)))
+          if (!prim) continue
+          byTheme[t] = figma.variables.createVariableAlias(prim)
+        }
+        writeByTheme(v, byTheme, modeIdOf)
+        n++
+      } else {
+        const step = rootRoles[role]
+        if (typeof step !== 'string' || !step) continue
+        const prim = cache.get(figmaVarName(primitiveNameOf(step)))
+        if (!prim) continue
+        setDefault(col, v, figma.variables.createVariableAlias(prim))
+        n++
+      }
     }
     return n
   }
@@ -1504,39 +1687,100 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body)
       return v ? varStringAt(v, typoCol.defaultModeId) : undefined
     })()
-    await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily)
-    await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily)
-    // If a previous plugin build already created the legacy names alongside
-    // the canonical ones, retain their ids but write the actual family names
-    // directly. An alias is not an acceptable final value for a FONT_FAMILY
-    // token: designers need to see and select the concrete family in Figma.
-    if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
-      setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)!, bodyFamily)
-    }
-    if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
-      setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)!, headingFamily)
-    }
-    const familyNow = (() => {
-      const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body)
-      return v ? varStringAt(v, typoCol.defaultModeId) : undefined
-    })()
-    if (familyNow === bodyFamily) {
-      if (prevFamily && prevFamily !== bodyFamily) {
-        log(`↻ Typography family "${prevFamily}" → "${bodyFamily}"`)
-      } else {
-        log(`✓ Typography family → "${bodyFamily}"`)
+
+    // Prefer foundationsByTheme (Theme Preview / per-theme typeface) whenever
+    // it diverges from root — see themeMapsDiffer. Otherwise write the root
+    // family into every mode (single-mode files stay single-mode).
+    const typoByTheme = themeMapsDiffer(
+      (t) => tokens.foundationsByTheme?.[t]?.typography,
+      tokens.typography,
+    )
+    if (typoByTheme) {
+      const modeIdOf = ensureNamedModes(typoCol, foundationThemes)
+      const bodyVar = upsertVarIn(typoCol, typoCache, TYPOGRAPHY_FAMILY_VARS.body, 'STRING', scopesForCollection(COLLECTIONS.typography, TYPOGRAPHY_FAMILY_VARS.body))
+      const displayVar = upsertVarIn(typoCol, typoCache, TYPOGRAPHY_FAMILY_VARS.display, 'STRING', scopesForCollection(COLLECTIONS.typography, TYPOGRAPHY_FAMILY_VARS.display))
+      for (const theme of foundationThemes) {
+        const f = tokens.foundationsByTheme?.[theme]?.typography
+        const body = normalizeFontFamilyName(f?.fontFamily ?? tokens.typography.fontFamily)
+        const heading = normalizeFontFamilyName(
+          f?.headingFontFamily ?? f?.fontFamily ?? tokens.typography.headingFontFamily ?? tokens.typography.fontFamily,
+        )
+        const mid = modeIdOf[theme]
+        if (!mid) continue
+        bodyVar.setValueForMode(mid, body)
+        displayVar.setValueForMode(mid, heading)
+        for (const [key, val] of Object.entries(f?.sizes ?? tokens.typography.sizes)) {
+          const v = typoCache.get(figmaVarName(`size/${key}`))
+            ?? upsertVarIn(typoCol, typoCache, `size/${key}`, 'FLOAT', scopesForCollection(COLLECTIONS.typography, `size/${key}`))
+          v.setValueForMode(mid, pxToFloat(val))
+        }
+        for (const [key, val] of Object.entries(f?.weights ?? tokens.typography.weights)) {
+          const v = typoCache.get(figmaVarName(`weight/${key}`))
+            ?? upsertVarIn(typoCol, typoCache, `weight/${key}`, 'FLOAT', scopesForCollection(COLLECTIONS.typography, `weight/${key}`))
+          v.setValueForMode(mid, val)
+        }
+      }
+      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
+        const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)!
+        for (const theme of foundationThemes) {
+          const mid = modeIdOf[theme]
+          const f = tokens.foundationsByTheme?.[theme]?.typography
+          if (mid) leg.setValueForMode(mid, normalizeFontFamilyName(f?.fontFamily ?? bodyFamily))
+        }
+      }
+      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
+        const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)!
+        for (const theme of foundationThemes) {
+          const mid = modeIdOf[theme]
+          const f = tokens.foundationsByTheme?.[theme]?.typography
+          if (mid) {
+            leg.setValueForMode(mid, normalizeFontFamilyName(
+              f?.headingFontFamily ?? f?.fontFamily ?? headingFamily,
+            ))
+          }
+        }
+      }
+      const shown = foundationThemes.map((theme) => {
+        const f = tokens.foundationsByTheme?.[theme]?.typography
+        return `${capFoundationTheme(theme)}="${normalizeFontFamilyName(f?.fontFamily ?? bodyFamily)}"`
+      }).join(', ')
+      log(`✓ Typography per theme (${foundationThemes.length} columns) — ${shown}`)
+      if (prevFamily && prevFamily !== normalizeFontFamilyName(
+        tokens.foundationsByTheme?.[foundationThemes[0]]?.typography?.fontFamily ?? bodyFamily,
+      )) {
+        log(`↻ Typography family "${prevFamily}" → theme columns updated from foundationsByTheme`)
       }
     } else {
-      log(`✗ Typography "${TYPOGRAPHY_FAMILY_VARS.body}" is still "${familyNow ?? '?'}" — wanted "${bodyFamily}" from the payload`)
-    }
-    const displayNow = (() => {
-      const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.display)
-      return v ? varStringAt(v, typoCol.defaultModeId) : undefined
-    })()
-    if (displayNow === headingFamily) {
-      log(`✓ Typography families — body: "${bodyFamily}", display: "${headingFamily}"`)
-    } else {
-      log(`✗ Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow ?? '?'}" — wanted "${headingFamily}" from the payload`)
+      await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily)
+      await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily)
+      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
+        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)!, bodyFamily)
+      }
+      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
+        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)!, headingFamily)
+      }
+      const familyNow = (() => {
+        const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body)
+        return v ? varStringAt(v, typoCol.defaultModeId) : undefined
+      })()
+      if (familyNow === bodyFamily) {
+        if (prevFamily && prevFamily !== bodyFamily) {
+          log(`↻ Typography family "${prevFamily}" → "${bodyFamily}"`)
+        } else {
+          log(`✓ Typography family → "${bodyFamily}"`)
+        }
+      } else {
+        log(`✗ Typography "${TYPOGRAPHY_FAMILY_VARS.body}" is still "${familyNow ?? '?'}" — wanted "${bodyFamily}" from the payload`)
+      }
+      const displayNow = (() => {
+        const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.display)
+        return v ? varStringAt(v, typoCol.defaultModeId) : undefined
+      })()
+      if (displayNow === headingFamily) {
+        log(`✓ Typography families — body: "${bodyFamily}", display: "${headingFamily}"`)
+      } else {
+        log(`✗ Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow ?? '?'}" — wanted "${headingFamily}" from the payload`)
+      }
     }
     if (tokens.typography.lineHeights) {
       Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar(`line-height/${key}`, 'FLOAT', pxToFloat(val)))
@@ -1615,7 +1859,8 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     })
     .forEach(([key, hex]) => {
       if (!hex) return
-      setDefault(primCol, upsertVarIn(primCol, primCache, primitiveVarName(key), 'COLOR'), { ...hexToRgb(hex), a: 1 })
+      const name = primitiveVarName(key)
+      setDefault(primCol, upsertVarIn(primCol, primCache, name, 'COLOR', scopesForCollection(COLLECTIONS.primitives, name)), { ...hexToRgb(hex), a: 1 })
     })
   log(`✓ Primitive scale (${Object.keys(tokens.colors.primitive).length} tones)`)
 
@@ -1638,14 +1883,15 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       })
       .forEach(([key, hex]) => {
         if (!hex) return
-        setDefault(primCol, upsertVarIn(primCol, primCache, primitiveAlphaVarName(key), 'COLOR'), hexToRgba(hex))
+        const name = primitiveAlphaVarName(key)
+        setDefault(primCol, upsertVarIn(primCol, primCache, name, 'COLOR', scopesForCollection(COLLECTIONS.primitives, name)), hexToRgba(hex))
       })
     log(`✓ Alpha twins (${Object.keys(tokens.colors.primitiveAlpha).length} tones)`)
   }
 
   // ── Page background — the canvas color every ramp was generated against ────
   if (tokens.colors.background) {
-    setDefault(primCol, upsertVarIn(primCol, primCache, 'Background', 'COLOR'), { ...hexToRgb(tokens.colors.background), a: 1 })
+    setDefault(primCol, upsertVarIn(primCol, primCache, 'Background', 'COLOR', scopesForCollection(COLLECTIONS.primitives, 'Background')), { ...hexToRgb(tokens.colors.background), a: 1 })
   }
 
   // One-time forced sweep for files imported before primitives defaulted to
@@ -1717,6 +1963,11 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   // exactly as before.
   const semCol = findOrCreateCollection(COLLECTIONS.semantics)
   const semCache = cacheFor(semCol)
+  // Color Semantics columns follow library themes (`colors.themes` +
+  // `themeOrder`), not the light/dark appearances of a single theme.
+  // `themeModes` is the canonical per-theme appearance map for other
+  // consumers; using it here as `{ light, dark }` of themeOrder[0] dropped
+  // every extra library theme from Figma (and pruned their columns).
   const themes: Record<string, Record<string, string>> =
     tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0
       ? tokens.colors.themes
@@ -1724,8 +1975,6 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
           light: tokens.colors.semantic || {},
           ...(tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {}),
         }
-  // Column order: honor the configurator's themeOrder, then append any theme not
-  // listed there. Each theme becomes one variable-collection mode (a column).
   const ordered = (tokens.colors.themeOrder ?? []).filter((t) => themes[t])
   const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))]
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
@@ -1929,26 +2178,47 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   }
 
   // ── Remaining single-mode categories ───────────────────────────────────────
-  emitCollection(COLLECTIONS.spacing, Object.entries(tokens.spacing), 'FLOAT', pxToFloat)
-  const spacingRoleCount = emitRoleAliases(COLLECTIONS.spacing, tokens.spacingRoles, (s) => s)
+  emitCollection(
+    COLLECTIONS.spacing, Object.entries(tokens.spacing), 'FLOAT', pxToFloat, (k) => k,
+    (t) => tokens.foundationsByTheme?.[t]?.spacing,
+  )
+  const spacingRoleCount = emitRoleAliases(
+    COLLECTIONS.spacing, tokens.spacingRoles, (s) => s,
+    (t) => tokens.foundationsByTheme?.[t]?.spacingRoles,
+  )
   log(`✓ Spacing tokens (${Object.keys(tokens.spacing).length} steps${spacingRoleCount ? ` · ${spacingRoleCount} roles` : ''})`)
 
   // Per-side surface padding nests inside Spacing as "padding/top…left".
   if (tokens.padding && Object.keys(tokens.padding).length > 0) {
-    emitCollection(COLLECTIONS.spacing, Object.entries(tokens.padding), 'FLOAT', pxToFloat, (k) => `padding/${k}`)
+    emitCollection(
+      COLLECTIONS.spacing, Object.entries(tokens.padding), 'FLOAT', pxToFloat, (k) => `padding/${k}`,
+      (t) => tokens.foundationsByTheme?.[t]?.padding,
+    )
     log(`✓ Surface padding tokens (${Object.keys(tokens.padding).length} sides)`)
   }
 
-  emitCollection(COLLECTIONS.radius, Object.entries(tokens.radius), 'FLOAT', pxToFloat)
-  const radiusRoleCount = emitRoleAliases(COLLECTIONS.radius, tokens.radiusRoles, (s) => s)
+  emitCollection(
+    COLLECTIONS.radius, Object.entries(tokens.radius), 'FLOAT', pxToFloat, (k) => k,
+    (t) => tokens.foundationsByTheme?.[t]?.radius,
+  )
+  const radiusRoleCount = emitRoleAliases(
+    COLLECTIONS.radius, tokens.radiusRoles, (s) => s,
+    (t) => tokens.foundationsByTheme?.[t]?.radiusRoles,
+  )
   log(`✓ Radius tokens${radiusRoleCount ? ` · ${radiusRoleCount} roles` : ''}`)
 
   const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0
   const strokeMap = strokeFromV6 ? tokens.stroke : tokens.borders?.width
   if (strokeMap) {
     const nameOf = strokeFromV6 ? (k: string) => k : (k: string) => `width/${k}`
-    emitCollection(COLLECTIONS.border, Object.entries(strokeMap), 'FLOAT', pxToFloat, nameOf)
-    const strokeRoleCount = emitRoleAliases(COLLECTIONS.border, tokens.strokeRoles, (s) => s)
+    emitCollection(
+      COLLECTIONS.border, Object.entries(strokeMap), 'FLOAT', pxToFloat, nameOf,
+      (t) => tokens.foundationsByTheme?.[t]?.stroke,
+    )
+    const strokeRoleCount = emitRoleAliases(
+      COLLECTIONS.border, tokens.strokeRoles, (s) => s,
+      (t) => tokens.foundationsByTheme?.[t]?.strokeRoles,
+    )
     log(`✓ Border width tokens (${Object.keys(strokeMap).length}${strokeRoleCount ? ` · ${strokeRoleCount} roles` : ''})`)
   }
 
@@ -1958,14 +2228,38 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   }
 
   if (tokens.sizes) {
-    emitCollection(COLLECTIONS.size, Object.entries(tokens.sizes), 'FLOAT', pxToFloat)
-    const sizeRoleCount = emitRoleAliases(COLLECTIONS.size, tokens.sizeRoles, (s) => s)
+    emitCollection(
+      COLLECTIONS.size, Object.entries(tokens.sizes), 'FLOAT', pxToFloat, (k) => k,
+      (t) => tokens.foundationsByTheme?.[t]?.sizes,
+    )
+    const sizeRoleCount = emitRoleAliases(
+      COLLECTIONS.size, tokens.sizeRoles, (s) => s,
+      (t) => tokens.foundationsByTheme?.[t]?.sizeRoles,
+    )
     log(`✓ Size tokens (${Object.keys(tokens.sizes).length}${sizeRoleCount ? ` · ${sizeRoleCount} roles` : ''})`)
   }
 
+  if (tokens.selector) {
+    emitCollection(
+      COLLECTIONS.selector, Object.entries(tokens.selector), 'FLOAT', pxToFloat, (k) => k,
+      (t) => tokens.foundationsByTheme?.[t]?.selector,
+    )
+    const selectorRoleCount = emitRoleAliases(
+      COLLECTIONS.selector, tokens.selectorRoles, (s) => s,
+      (t) => tokens.foundationsByTheme?.[t]?.selectorRoles,
+    )
+    log(`✓ Selector tokens (${Object.keys(tokens.selector).length}${selectorRoleCount ? ` · ${selectorRoleCount} roles` : ''})`)
+  }
+
   if (tokens.grid) {
-    emitCollection(COLLECTIONS.grid, Object.entries(tokens.grid), 'FLOAT', pxToFloat)
-    const bpRoleCount = emitRoleAliases(COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`)
+    emitCollection(
+      COLLECTIONS.grid, Object.entries(tokens.grid), 'FLOAT', pxToFloat, (k) => k,
+      (t) => tokens.foundationsByTheme?.[t]?.grid,
+    )
+    const bpRoleCount = emitRoleAliases(
+      COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`,
+      (t) => tokens.foundationsByTheme?.[t]?.breakpointRoles,
+    )
     log(`✓ Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` · ${bpRoleCount} breakpoint roles` : ''})`)
   }
 
@@ -2226,7 +2520,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
   // display-xl…) don't exist in the weight map — display sizes read as
   // headings, so they default to semibold.
   const weightMap = tokens.typography.weights ?? {}
-  function resolvedStyle(weightKey: string): string {
+  function resolvedStyle(weightKey: string): LogicalStyle {
     const val = weightMap[weightKey]
       ?? (weightKey.startsWith('display') ? (weightMap.semibold ?? 600) : 400)
     if (val >= 700) return 'Bold'
@@ -2513,7 +2807,8 @@ function docChrome(
     // as a light editorial board, no matter which mode the file is sitting in.
     pinToLightMode(b, modePin)
     const bar = docFrame(`§ ${barLabel}`, 'HORIZONTAL', 8)
-    bar.fills = [docSolid(DOC.bar)]
+    // Surface/layer-2 over the board's Surface/page — see sectionBar().
+    bar.fills = [docSolid(DOC.bar, 1, chrome?.card)]
     bar.cornerRadius = 12
     bar.primaryAxisSizingMode = 'FIXED'
     bar.counterAxisSizingMode = 'FIXED'
@@ -2529,14 +2824,12 @@ function docChrome(
   return { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard }
 }
 
-// Builds the '⬡ Components Overview' sheet — a fixed specimen of the token system (see the
-// SAMPLE list below for what ships and why). Named `importSample` since it no
-// longer generates the component catalogue.
-async function importSample(tokens: DesignTokens): Promise<number> {
-  // `atoms` no longer decides WHAT gets built — the sheet is a fixed specimen,
-  // so an empty selection still gets a sheet rather than nothing. It's still
-  // read here because `atomSet` gates which component PAGES are generated.
-  const atoms: string[] = tokens.atoms ?? tokens.components ?? []
+// Builds the '⬡ Components Overview' sheet. Default mode is the fixed SAMPLE
+// specimen; the explicit full mode uses the same builders for every CATALOG
+// entry with a representative, axis-covering variant set.
+async function importSample(tokens: DesignTokens, includeFullCatalogue = false): Promise<number> {
+  // `atoms` does not decide what gets built here. Overview is the fixed core
+  // specimen; Full catalogue is the user's explicit request for all 58 types.
 
   // ── Variable lookup (cached once) ──────────────────────────────────────────
   const allVars = await figma.variables.getLocalVariablesAsync()
@@ -2632,10 +2925,13 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     textOnBrand:    pair(['Content/on-action', 'content/on-action', 'content/inverse', 'text/on-brand', 'text/primary_on-brand', 'text/white'], ['content-on-brand', 'content-inverse', 'text-on-brand', 'text-white'], '#ffffff'),
     textOnInverse:  pair(['content/inverse', 'text/on-inverse', 'text/white'], ['content-inverse', 'text-on-inverse', 'text-white'], '#0f0f0f'),
     textBrand:      pair(['content/brand', 'text/brand-secondary', 'text/brand', 'text/accent-primary'], ['content-brand', 'text-brand-secondary', 'text-brand'], '#8ab4ff'),
-    borderDefault:  pair(['border/primary', 'border/default', 'border'], ['border-primary', 'border-default', 'border'], '#333333'),
-    // Control stroke — categorical `Border/strong` (WCAG 1.4.11). Flat catalogue
-    // still has `border-strong`; content/primary is a last-resort darker ink.
-    borderStrong:   pair(['Border/strong', 'border/strong', 'content/primary', 'border/secondary'], ['border-strong', 'content-primary', 'border-secondary'], '#454545'),
+    borderDefault:  pair(['Border/control', 'border/control', 'border/primary', 'border/default', 'border'], ['border-primary', 'border-default', 'border'], '#333333'),
+    // Control stroke, HOVER step — categorical `Border/control-hover` (WCAG
+    // 1.4.11). `Border/strong` stays in the list because that is what this role
+    // was called before the phase-1 split, so an older payload still resolves
+    // to the same value. Flat catalogue still has `border-strong`;
+    // content/primary is a last-resort darker ink.
+    borderStrong:   pair(['Border/control-hover', 'border/control-hover', 'Border/strong', 'border/strong', 'content/primary', 'border/secondary'], ['border-strong', 'content-primary', 'border-secondary'], '#454545'),
     borderFocus:    pair(['Border/focus', 'border/focus', 'border/brand', 'border/accent'], ['border-focus', 'border-brand'], '#3B82F6'),
     borderSubtle:   pair(['border/tertiary', 'border/subtle', 'border/default', 'border'], ['border-tertiary', 'border-subtle', 'border-default'], '#2a2a2a'),
     borderBrand:    pair(['border/brand', 'border/accent'], ['border-brand'], '#3B82F6'),
@@ -2660,21 +2956,32 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     statusErrorSubtle:  pair(['Status/critical/surface', 'Status/critical.surface', 'status/critical/surface', 'status/critical.surface', 'background/error-primary', 'status/error-subtle'], ['background-error-primary', 'status-error-subtle'], '#2a1513'),
     // No third "muted" tier — reuses Subtle's key, same as *Subtle above.
     statusErrorMuted:   pair(['background/error-primary', 'status/error-muted', 'status/error-subtle'], ['background-error-primary', 'status-error-muted', 'status-error-subtle'], '#3a1d1a'),
-    statusWarning:      pair(['background/warning-solid', 'status/warning'], ['background-warning-solid', 'status-warning'], '#dc6803'),
+    statusWarning:      pair(['Status/warning/surface-solid', 'Status/warning.surface-solid', 'status/warning/surface-solid', 'status/warning.surface-solid', 'background/warning-solid', 'status/warning'], ['background-warning-solid', 'status-warning'], '#dc6803'),
+    statusWarningOn:    pair(['Status/warning/on-solid', 'Status/warning.on-solid', 'status/warning/on-solid', 'status/warning.on-solid'], ['status-warning-on'], '#ffffff'),
     statusWarningSubtle:pair(['Status/warning.surface', 'status/warning.surface', 'background/warning-primary', 'status/warning-subtle'], ['background-warning-primary', 'status-warning-subtle'], '#2a2013'),
     statusWarningMuted: pair(['background/warning-primary', 'status/warning-muted', 'status/warning-subtle'], ['background-warning-primary', 'status-warning-muted', 'status-warning-subtle'], '#3a2d1a'),
-    statusSuccess:      pair(['background/success-solid', 'status/success'], ['background-success-solid', 'status-success'], '#079455'),
+    statusSuccess:      pair(['Status/success/surface-solid', 'Status/success.surface-solid', 'status/success/surface-solid', 'status/success.surface-solid', 'background/success-solid', 'status/success'], ['background-success-solid', 'status-success'], '#079455'),
+    statusSuccessOn:    pair(['Status/success/on-solid', 'Status/success.on-solid', 'status/success/on-solid', 'status/success.on-solid'], ['status-success-on'], '#ffffff'),
     statusSuccessSubtle:pair(['Status/success.surface', 'status/success.surface', 'background/success-primary', 'status/success-subtle'], ['background-success-primary', 'status-success-subtle'], '#132a1e'),
     statusSuccessMuted: pair(['background/success-primary', 'status/success-muted', 'status/success-subtle'], ['background-success-primary', 'status-success-muted', 'status-success-subtle'], '#1a3a2a'),
-    // No background-info-* role exists — left on its old-only keys (see file banner).
-    statusInfo:         pair(['status/info'], ['status-info'], '#1570ef'),
-    statusInfoSubtle:   pair(['status/info-subtle'], ['status-info-subtle'], '#131c2a'),
-    statusInfoMuted:    pair(['status/info-muted', 'status/info-subtle'], ['status-info-muted', 'status-info-subtle'], '#1a2a3a'),
+    // Info now has real Categorical roles (`Status/info/*`). Until it did, both
+    // of these bound to nothing and painted the literals below — which is
+    // exactly what shipped: an Info alert with a `#1570ef` stroke on `#131c2a`.
+    statusInfo:         pair(['Status/info/surface-solid', 'Status/info.surface-solid', 'status/info/surface-solid', 'status/info.surface-solid', 'status/info'], ['status-info'], '#1570ef'),
+    statusInfoOn:       pair(['Status/info/on-solid', 'Status/info.on-solid', 'status/info/on-solid', 'status/info.on-solid'], ['status-info-on'], '#ffffff'),
+    statusInfoSubtle:   pair(['Status/info/surface', 'Status/info.surface', 'status/info/surface', 'status/info.surface', 'status/info-subtle'], ['status-info-subtle'], '#131c2a'),
+    statusInfoMuted:    pair(['Status/info/surface', 'Status/info.surface', 'status/info-muted', 'status/info-subtle'], ['status-info-muted', 'status-info-subtle'], '#1a2a3a'),
+    // The stroke of a status surface — one alpha token per severity, replacing
+    // a hardcoded 0.4 opacity applied to the SOLID fill. See ARCH_ROLE_MAP.
+    statusErrorBorder:  pair(['Status/critical/border', 'Status/critical.border', 'status/critical/border', 'status/critical.border'], ['status-error-border'], '#f0443866'),
+    statusWarningBorder:pair(['Status/warning/border', 'Status/warning.border', 'status/warning/border', 'status/warning.border'], ['status-warning-border'], '#f7900966'),
+    statusSuccessBorder:pair(['Status/success/border', 'Status/success.border', 'status/success/border', 'status/success.border'], ['status-success-border'], '#17b26a66'),
+    statusInfoBorder:   pair(['Status/info/border', 'Status/info.border', 'status/info/border', 'status/info.border'], ['status-info-border'], '#2e90fa66'),
     textError:      pair(['Status/critical/content', 'Status/critical.content', 'status/critical/content', 'status/critical.content', 'content/error', 'text/error'], ['content-error', 'text-error'], '#f97066'),
     textWarning:    pair(['Status/warning.content', 'status/warning.content', 'content/warning', 'text/warning'], ['content-warning', 'text-warning'], '#fdb022'),
     textSuccess:    pair(['Status/success.content', 'status/success.content', 'content/success', 'text/success'], ['content-success', 'text-success'], '#47cd89'),
     // No content-info role exists — left on its old-only keys (see file banner).
-    textInfo:       pair(['text/info'], ['text-info'], '#53b1fd'),
+    textInfo:       pair(['Status/info/content', 'Status/info.content', 'status/info/content', 'status/info.content', 'text/info'], ['text-info'], '#53b1fd'),
   }
 
   // Roles with nothing to bind to. On a flat system this should be empty; on an
@@ -2697,6 +3004,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   const wMedium  = bestVar(T, 'weight/medium')
   const wSemibold= bestVar(T, 'weight/semibold', 'weight/semi-bold')
   const familyVar= bestVar(T, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody)
+  const radXs    = bestVar(COLLECTIONS.radius, 'xs')
   const radSm    = bestVar(COLLECTIONS.radius, 'sm')
   const radMd    = bestVar(COLLECTIONS.radius, 'md')
   const radLg    = bestVar(COLLECTIONS.radius, 'lg')
@@ -2712,18 +3020,28 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   // once. `emitRoleAliases` writes these only when the payload carries
   // `radiusRoles`, so each falls back to the primitive it used to hardcode for
   // an older export that has no semantic layer yet.
-  const radControl   = findVar(COLLECTIONS.radius, 'role/control')   ?? radSm
-  const radAction    = findVar(COLLECTIONS.radius, 'role/action')    ?? radMd
+  const radControl   = findVar(COLLECTIONS.radius, 'role/control')   ?? radXs
+  const radAction    = findVar(COLLECTIONS.radius, 'role/action')    ?? radSm
   const radContainer = findVar(COLLECTIONS.radius, 'role/container') ?? radLg
   const radOverlay   = findVar(COLLECTIONS.radius, 'role/overlay')   ?? radLg
   const radPill      = findVar(COLLECTIONS.radius, 'role/pill')
   const radiusControl   = radiusXs
+  const radiusAction    = radiusSm
   const radiusContainer = radiusLg
-  const radiusOverlay   = radiusXl
+  const radiusOverlay   = radiusLg
 
   // ── Generic helpers ────────────────────────────────────────────────────────
+  // An 8-digit fallback hex carries its own alpha, and it has to reach the
+  // paint: schemaVersion 7 made semantic colours translucent, so a role like
+  // `status.*.border` or `surface.overlay` resolves to `#rrggbbaa`. Reading it
+  // with `hexToRgb` alone dropped that channel silently and painted the scrim
+  // or the alert stroke fully opaque whenever the variable was missing — the
+  // exact "keeps working while quietly wrong" failure the v7 note warns about.
+  // A bound COLOR variable supplies its own alpha, so the two paths agree.
+  // `opacity` still multiplies on top for callers that dim a solid role.
   function fillOf(v: Variable | undefined, hex: string, opacity = 1): SolidPaint {
-    let paint: SolidPaint = { type: 'SOLID', color: hexToRgb(hex), opacity }
+    const { r, g, b, a } = hexToRgba(hex)
+    let paint: SolidPaint = { type: 'SOLID', color: { r, g, b }, opacity: opacity * a }
     if (v?.resolvedType === 'COLOR') paint = figma.variables.setBoundVariableForPaint(paint, 'color', v)
     return paint
   }
@@ -2883,6 +3201,107 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     return f
   }
 
+  // ── Icon slot placeholders ────────────────────────────────────────────────
+  // Generic icon holes (Button leading/trailing, Alert status, nav rows, …)
+  // ship as INSTANCES of two shared Components — Phosphor circle-dashed and
+  // square-dashed (rectangle-dashed path) — so designers Swap instance for a
+  // real glyph. Masters live on `⬡ Icon Placeholders` (created after harvest).
+  //
+  // Refs are kept in memory for this run. We NEVER scan unloaded pages with
+  // findOne (documentAccess: "dynamic-page" throws). Harvest already loadAsyncs
+  // pages we touch; existingSingles may already hold a prior master.
+  //
+  // NOT applied to control-state marks that aren't icon holes — checkbox ticks,
+  // radio dots, chevrons that open a menu, the loading spinner.
+  type PlaceholderKind = 'circle' | 'square'
+  let circleMaster: ComponentNode | null = null
+  let squareMaster: ComponentNode | null = null
+
+  function paintSolidTree(root: SceneNode, paint: SolidPaint) {
+    const nodes: SceneNode[] = 'findAll' in root
+      ? [root, ...(root as ChildrenMixin).findAll()]
+      : [root]
+    for (const n of nodes) {
+      const g = n as SceneNode & GeometryMixin
+      if (!('fills' in g) || !Array.isArray(g.fills)) continue
+      if (!(g.fills as Paint[]).some((f) => f.type === 'SOLID')) continue
+      try { g.fills = [paint] } catch { /* locked fill */ }
+    }
+  }
+
+  function svgGlyphFromPath(path: string, size: number): FrameNode {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><path fill="#000000" d="${path}"/></svg>`
+    const glyph = figma.createNodeFromSvg(svg)
+    if (glyph.width !== size && glyph.width > 0) glyph.rescale(size / glyph.width)
+    return glyph
+  }
+
+  function createPlaceholderMaster(name: string, path: string): ComponentNode {
+    const frame = svgGlyphFromPath(path, PLACEHOLDER_MASTER_SIZE)
+    frame.name = 'glyph'
+    const comp = figma.createComponentFromNode(frame)
+    comp.name = name
+    try {
+      comp.description = name === PLACEHOLDER_CIRCLE_NAME
+        ? 'Empty circular icon slot (Phosphor circle-dashed). Swap this instance for any icon/<library>/… set.'
+        : 'Empty square icon slot (Phosphor rectangle-dashed). Swap this instance for any icon/<library>/… set.'
+    } catch { /* plan may reject */ }
+    return comp
+  }
+
+  // Called once after harvest, before any buildEntry — see ensurePlaceholderMasters.
+  function iconSlot(
+    size: number,
+    colorPr: Pair,
+    name = 'icon',
+    kind: PlaceholderKind = 'circle',
+  ): FrameNode {
+    const f = figma.createFrame()
+    f.name = name
+    f.fills = []
+    f.resize(size, size)
+    f.clipsContent = false
+
+    const master = kind === 'square' ? squareMaster : circleMaster
+    if (master && !master.removed) {
+      try {
+        const inst = master.createInstance()
+        inst.name = kind === 'square' ? 'square-dashed' : 'circle-dashed'
+        if (Math.abs(inst.width - size) > 0.05 && inst.width > 0) inst.rescale(size / inst.width)
+        paintSolidTree(inst, fillP(colorPr))
+        f.appendChild(inst)
+        inst.x = 0
+        inst.y = 0
+        return f
+      } catch (e) {
+        log(`⚠ placeholder instance failed (${e instanceof Error ? e.message : String(e)}) — inline SVG`)
+      }
+    }
+
+    // Fallback when masters aren't ready (shouldn't happen after ensure…).
+    try {
+      const path = kind === 'square' ? SQUARE_DASHED_PATH : CIRCLE_DASHED_PATH
+      const glyph = svgGlyphFromPath(path, size)
+      glyph.name = kind === 'square' ? 'square-dashed' : 'circle-dashed'
+      paintSolidTree(glyph, fillP(colorPr))
+      f.appendChild(glyph)
+      glyph.x = 0
+      glyph.y = 0
+    } catch {
+      const ring = kind === 'square' ? figma.createRectangle() : figma.createEllipse()
+      ring.name = kind === 'square' ? 'square-dashed' : 'circle-dashed'
+      ring.resize(size, size)
+      if (kind === 'square' && 'cornerRadius' in ring) (ring as RectangleNode).cornerRadius = Math.max(2, size * 0.12)
+      ring.fills = []
+      ring.strokes = [fillP(colorPr, 0.75)]
+      ring.strokeWeight = Math.max(1, Math.round((size / 12) * 10) / 10)
+      ring.dashPattern = [2.5, 2]
+      f.appendChild(ring)
+      ring.x = 0; ring.y = 0
+    }
+    return f
+  }
+
   // ── No component-token tier ───────────────────────────────────────────────
   // There used to be a third tier here: a "Components" collection holding one
   // variable per component slot (button/bg, input/border, card/radius…), each
@@ -2897,9 +3316,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   // in the role vocabulary the platform publishes. Components now bind
   // straight to the semantic variables in "Color Semantics", by role.
   //
-  // `atomSet` below still gates which component PAGES get built; it just no
-  // longer gates a token tier.
-  const atomSet = new Set(atoms)
+  // Component generation is selected by the plugin mode below, not by adding
+  // another variable tier.
 
   // ── Variant matrix definitions ─────────────────────────────────────────────
   // Every editable text collects here; resolved to a SET-level TEXT property
@@ -2915,6 +3333,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     cols: number                       // grid columns inside the set
     variants: VariantDef[]
     description: string
+    /** Sparse axis-cover used by the opt-in full catalogue. */
+    representative?: boolean
   }
 
   const STATES = ['Default', 'Hover', 'Pressed', 'Focused', 'Loading', 'Disabled'] as const
@@ -2934,7 +3354,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       text: p.textError, ringHex: p.statusError.hex,
     },
     Success: {
-      solid: p.statusSuccess, hover: p.statusSuccess, on: p.textOnBrand,
+      solid: p.statusSuccess, hover: p.statusSuccess, on: p.statusSuccessOn,
       soft: p.statusSuccessSubtle, softText: p.textSuccess, line: p.statusSuccess,
       text: p.textSuccess, ringHex: p.statusSuccess.hex,
     },
@@ -2950,9 +3370,10 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     XL: { padV: 14, padH: 24, f: 16, fv: sizeMd, gap: 10 },
   }
 
-  const BTN_ICON_POS = ['None', 'Leading', 'Trailing'] as const
-
-  function buildButton(c: ComponentNode, out: PendingProp[], color: string, style: string, state: BtnState, size = 'MD', iconPos: string = 'Leading') {
+  // Icons are set-level BOOLEAN toggles (Show leading / Show trailing), not an
+  // Icon variant axis — one matrix of Size × Color × Style × State, both slots
+  // always present as instances of icon/circle-dashed · icon/square-dashed.
+  function buildButton(c: ComponentNode, out: PendingProp[], color: string, style: string, state: BtnState, size = 'MD') {
     const k = BTN_COLORS[color]
     const sz = BTN_SIZES[size] ?? BTN_SIZES.MD
     c.layoutMode = 'HORIZONTAL'
@@ -2960,7 +3381,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     c.counterAxisAlignItems = 'CENTER'
     pad(c, sz.padV, sz.padH, sz.padV, sz.padH); gap(c, sz.gap)
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
 
     const disabled = state === 'Disabled'
     const hoverish = state === 'Hover' || state === 'Pressed'
@@ -2994,16 +3415,12 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     }
     if (state === 'Focused') focusRing(c, k.ringHex)
 
-    const makeIcon = () => {
-      const icon = txt('+', { style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP })
-      icon.name = 'icon'
-      return icon
-    }
-
     if (state === 'Loading') {
       c.appendChild(miniSpinner(sz.f, textP))
-    } else if (iconPos === 'Leading') {
-      c.appendChild(makeIcon())
+    } else {
+      const lead = iconSlot(sz.f, textP, 'icon-leading', 'circle')
+      c.appendChild(lead)
+      out.push({ node: lead, prop: 'Show leading icon', def: true })
     }
     const label = txt('Button', {
       roleKey: 'button',
@@ -3012,10 +3429,10 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Button' })
-    if (iconPos === 'Trailing' && state !== 'Loading') {
-      const icon = makeIcon()
-      icon.name = 'icon-trailing'
-      c.appendChild(icon)
+    if (state !== 'Loading') {
+      const trail = iconSlot(sz.f, textP, 'icon-trailing', 'square')
+      c.appendChild(trail)
+      out.push({ node: trail, prop: 'Show trailing icon', def: true })
     }
   }
 
@@ -3084,7 +3501,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     labelRow.appendChild(label)
     labelRow.appendChild(txt('*', { style: 'Medium', size: s.label, weightVar: wMedium, colorP: p.textError }))
     labelRow.appendChild(txt('(Optional)', { size: s.meta, colorP: metaP }))
-    labelRow.appendChild(txt('ⓘ', { size: s.meta, colorP: metaP }))
+    labelRow.appendChild(iconSlot(s.meta, metaP, 'icon-hint', 'circle'))
     c.appendChild(labelRow)
     out.push({ node: labelRow, prop: 'Show Label', def: true })
 
@@ -3107,7 +3524,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     box.counterAxisAlignItems = 'CENTER'
     box.paddingLeft = s.padX; box.paddingRight = s.padX
     tryBind(box, 'paddingLeft', closestSpacing(s.padX)); tryBind(box, 'paddingRight', closestSpacing(s.padX))
-    bindRadius(box, radAction, radiusMd)
+    bindRadius(box, radAction, radiusAction)
     box.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)]
     const border =
       disabled ? p.borderDisabled :
@@ -3130,7 +3547,12 @@ async function importSample(tokens: DesignTokens): Promise<number> {
 
     // Leading — icon / flag + dial / protocol prefix
     if (meta.lead) {
-      const lead = txt(meta.lead, { size: s.f, colorP: iconP })
+      // Generic + library-shaped leads become the circle-dashed slot. Phone's
+      // flag and Website's globe stay literal — they aren't icons from the set.
+      const leadIsSlot = type === 'Icon Leading' || type === 'E-Mail' || type === 'Password' || type === 'Search'
+      const lead = leadIsSlot
+        ? iconSlot(s.f, iconP, 'icon-leading', 'circle')
+        : txt(meta.lead, { size: s.f, colorP: iconP })
       lead.name = 'icon-leading'
       box.appendChild(lead)
     }
@@ -3170,21 +3592,22 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       if (type === 'E-Mail' && (state === 'Hover' || focused)) {
         box.appendChild(circleGlyph(14, '✕', p.surface3, p.textSecondary))
       } else if (type === 'Password') {
-        const eye = txt('👁', { size: s.f, colorP: iconP })
-        eye.name = 'icon-eye'
+        const eye = iconSlot(s.f, iconP, 'icon-eye', 'square')
         box.appendChild(eye)
       } else if (type === 'Phone Number') {
-        box.appendChild(txt('ⓘ', { size: s.meta, colorP: iconP }))
+        box.appendChild(iconSlot(s.meta, iconP, 'icon-info', 'circle'))
       }
     }
     if (meta.trail) {
-      const trail = txt(meta.trail, { size: s.f, colorP: iconP })
+      const trail = type === 'Icon Trailing'
+        ? iconSlot(s.f, iconP, 'icon-trailing', 'square')
+        : txt(meta.trail, { size: s.f, colorP: iconP })
       trail.name = 'icon-trailing'
       box.appendChild(trail)
     }
     if (type === 'Website') {
       const d = boxDivider(); box.appendChild(d); fixDivider(d)
-      box.appendChild(txt('⧉', { size: s.f, colorP: iconP }))
+      box.appendChild(iconSlot(s.f, iconP, 'icon-copy', 'square'))
     }
     if (type === 'Search') {
       if (!error) {
@@ -3241,7 +3664,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.primaryAxisAlignItems = 'SPACE_BETWEEN'
     c.resize(240, sz.h)
     pad(c, sz.padV, 12, sz.padV, 12); gap(c, 8)
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
 
     const disabled = state === 'Disabled'
     c.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)]
@@ -3268,10 +3691,24 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.appendChild(ch)
   }
 
+  const selControl   = findVar(COLLECTIONS.selector, 'role/control')   ?? findVar(COLLECTIONS.selector, 'md')
+  const selCompact   = findVar(COLLECTIONS.selector, 'role/compact')   ?? findVar(COLLECTIONS.selector, 'sm')
+  const selIndicator = findVar(COLLECTIONS.selector, 'role/indicator') ?? findVar(COLLECTIONS.selector, 'xs')
+  const selectorMd = pxToFloat(tokens.selector?.md ?? '18px')
+  const selectorSm = pxToFloat(tokens.selector?.sm ?? '15px')
+  const selectorXs = pxToFloat(tokens.selector?.xs ?? '12px')
+  function bindBoxSize(node: Box, v: Variable | undefined, fallback: number) {
+    node.resize(fallback, fallback)
+    tryBind(node, 'width', v)
+    tryBind(node, 'height', v)
+  }
+
   // Checkbox / Radio / Toggle size axes — mirror the configurator (MD, SM).
-  const CHECK_SIZES: Record<string, { d: number; check: number; f: number; fv?: Variable }> = {
-    MD: { d: 18, check: 11, f: 14, fv: sizeSm },
-    SM: { d: 15, check: 9,  f: 13, fv: sizeSm },
+  // Glyph size comes from Selector roles (control / compact); the default
+  // SELECTOR_STANDARD md=18 / sm=15 matches the previous hardcoded values.
+  const CHECK_SIZES: Record<string, { d: number; dv?: Variable; check: number; f: number; fv?: Variable }> = {
+    MD: { d: selectorMd, dv: selControl ?? undefined, check: Math.max(9, Math.round(selectorMd * 0.6)), f: 14, fv: sizeSm },
+    SM: { d: selectorSm, dv: selCompact ?? undefined, check: Math.max(8, Math.round(selectorSm * 0.6)), f: 13, fv: sizeSm },
   }
   function buildCheckbox(c: ComponentNode, out: PendingProp[], checked: boolean, state: string, size = 'MD') {
     const sz = CHECK_SIZES[size] ?? CHECK_SIZES.MD
@@ -3303,15 +3740,15 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     }
     if (state === 'Focused') focusRing(box, p.action.hex)
     c.appendChild(box)
-    box.resize(sz.d, sz.d)
+    bindBoxSize(box, sz.dv, sz.d)
     const label = txt('Label', { roleKey: 'label', size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Label' })
   }
 
-  const TOGGLE_SIZES: Record<string, { w: number; h: number; knob: number; f: number; fv?: Variable }> = {
-    MD: { w: 40, h: 22, knob: 18, f: 14, fv: sizeSm },
-    SM: { w: 34, h: 18, knob: 14, f: 13, fv: sizeSm },
+  const TOGGLE_SIZES: Record<string, { w: number; h: number; hv?: Variable; knob: number; f: number; fv?: Variable }> = {
+    MD: { w: selectorMd * 2 + 4, h: selectorMd, hv: selControl ?? undefined, knob: Math.max(12, selectorMd - 4), f: 14, fv: sizeSm },
+    SM: { w: selectorSm * 2 + 4, h: selectorSm, hv: selCompact ?? undefined, knob: Math.max(10, selectorSm - 4), f: 13, fv: sizeSm },
   }
   function buildToggle(c: ComponentNode, out: PendingProp[], on: boolean, state: string, size = 'MD') {
     const sz = TOGGLE_SIZES[size] ?? TOGGLE_SIZES.MD
@@ -3330,6 +3767,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     track.primaryAxisAlignItems = on ? 'MAX' : 'MIN'
     track.counterAxisAlignItems = 'CENTER'
     track.resize(sz.w, sz.h)
+    tryBind(track, 'height', sz.hv)
     track.paddingLeft = 2; track.paddingRight = 2
     track.fills = [fillP(
       disabled ? p.actionDisabled
@@ -3357,10 +3795,10 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   const BADGE_COLORS: Record<string, BadgeColor> = {
     Neutral: { solid: p.surfaceInv, on: p.textOnInverse, soft: p.surface2, text: p.textSecondary, line: p.borderStrong },
     Brand:   { solid: p.action, on: p.textOnBrand, soft: p.brandSubtle, text: p.textBrand, line: p.borderBrand },
-    Success: { solid: p.statusSuccess, on: p.textOnBrand, soft: p.statusSuccessSubtle, text: p.textSuccess, line: p.statusSuccess },
-    Warning: { solid: p.statusWarning, on: p.textOnBrand, soft: p.statusWarningSubtle, text: p.textWarning, line: p.statusWarning },
-    Error:   { solid: p.statusError, on: p.textOnBrand, soft: p.statusErrorSubtle, text: p.textError, line: p.borderError },
-    Info:    { solid: p.statusInfo, on: p.textOnBrand, soft: p.statusInfoSubtle, text: p.textInfo, line: p.statusInfo },
+    Success: { solid: p.statusSuccess, on: p.statusSuccessOn, soft: p.statusSuccessSubtle, text: p.textSuccess, line: p.statusSuccess },
+    Warning: { solid: p.statusWarning, on: p.statusWarningOn, soft: p.statusWarningSubtle, text: p.textWarning, line: p.statusWarning },
+    Error:   { solid: p.statusError, on: p.statusErrorOn, soft: p.statusErrorSubtle, text: p.textError, line: p.borderError },
+    Info:    { solid: p.statusInfo, on: p.statusInfoOn, soft: p.statusInfoSubtle, text: p.textInfo, line: p.statusInfo },
   }
   // Badge size axis — mirrors the configurator (MD, SM, LG).
   const BADGE_SIZES: Record<string, { padV: number; padH: number; f: number; fv?: Variable }> = {
@@ -3390,16 +3828,13 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       tryBind(c, 'strokeWeight', borderWidthVar())
       textP = k.text
     }
-    const makeIcon = (name: string) => {
-      const icon = txt('●', { size: Math.round(sz.f * 0.7), colorP: textP })
-      icon.name = name
-      return icon
-    }
-    if (iconPos === 'Leading') c.appendChild(makeIcon('icon-leading'))
+    const makeIcon = (name: string, kind: PlaceholderKind = 'circle') =>
+      iconSlot(Math.round(sz.f * 0.9), textP, name, kind)
+    if (iconPos === 'Leading') c.appendChild(makeIcon('icon-leading', 'circle'))
     const label = txt('Badge', { roleKey: 'label', style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Badge' })
-    if (iconPos === 'Trailing') c.appendChild(makeIcon('icon-trailing'))
+    if (iconPos === 'Trailing') c.appendChild(makeIcon('icon-trailing', 'square'))
   }
 
   const AVATAR_SIZES: Record<string, { d: number; f: number; sv?: Variable }> = {
@@ -3459,12 +3894,16 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
 
   // ── Alerts (Feedback) — status-tinted banner + inline alert ────────────────
-  const ALERT_STATUS: Record<string, { solid: Pair; subtle: Pair; text: Pair; glyph: string }> = {
-    Neutral: { solid: p.surfaceInv,    subtle: p.surface2,            text: p.textSecondary, glyph: 'ⓘ' },
-    Info:    { solid: p.statusInfo,    subtle: p.statusInfoSubtle,    text: p.textInfo,      glyph: 'ⓘ' },
-    Success: { solid: p.statusSuccess, subtle: p.statusSuccessSubtle, text: p.textSuccess,   glyph: '✓' },
-    Warning: { solid: p.statusWarning, subtle: p.statusWarningSubtle, text: p.textWarning,   glyph: '⚠' },
-    Error:   { solid: p.statusError,   subtle: p.statusErrorSubtle,   text: p.textError,     glyph: '✕' },
+  // `border` is the stroke of the tinted surface — its own alpha token per
+  // severity, NOT the solid fill dimmed by a magic opacity. Neutral has no
+  // status family to draw one from, so it borrows the structural border, which
+  // is what a neutral alert's edge has always meant.
+  const ALERT_STATUS: Record<string, { solid: Pair; subtle: Pair; text: Pair; on: Pair; border: Pair }> = {
+    Neutral: { solid: p.surfaceInv,    subtle: p.surface2,            text: p.textSecondary, on: p.textOnInverse,  border: p.borderSubtle },
+    Info:    { solid: p.statusInfo,    subtle: p.statusInfoSubtle,    text: p.textInfo,      on: p.statusInfoOn,    border: p.statusInfoBorder },
+    Success: { solid: p.statusSuccess, subtle: p.statusSuccessSubtle, text: p.textSuccess,   on: p.statusSuccessOn, border: p.statusSuccessBorder },
+    Warning: { solid: p.statusWarning, subtle: p.statusWarningSubtle, text: p.textWarning,   on: p.statusWarningOn, border: p.statusWarningBorder },
+    Error:   { solid: p.statusError,   subtle: p.statusErrorSubtle,   text: p.textError,     on: p.statusErrorOn,   border: p.statusErrorBorder },
   }
 
   function buildAlertBanner(c: ComponentNode, out: PendingProp[], status: string, style: string) {
@@ -3481,14 +3920,16 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       c.fills = [fillP(k.solid)]
     } else {
       c.fills = [fillP(k.subtle)]
-      c.strokes = [fillP(k.solid, 0.45)]
+      // Same role as InlineAlert's stroke — AlertBanner used 0.45 where the
+      // inline one used 0.40, so the two alerts in one system disagreed about
+      // their own edge by a number nobody chose. One token, both components.
+      c.strokes = [fillP(k.border)]
       c.strokeWeight = 1
       tryBind(c, 'strokeWeight', borderWidthVar())
     }
-    const onP = solid ? (status === 'Neutral' ? p.textOnInverse : p.textOnBrand) : k.text
+    const onP = solid ? k.on : k.text
 
-    const icon = txt(k.glyph, { style: 'Medium', size: 14, weightVar: wMedium, colorP: onP })
-    icon.name = 'icon-status'
+    const icon = iconSlot(14, onP, 'icon-status', 'circle')
     c.appendChild(icon)
 
     const body = col('content', 2)
@@ -3515,8 +3956,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.appendChild(action)
     out.push({ node: action, prop: 'Action', def: 'Learn more' })
 
-    const close = txt('✕', { size: 12, colorP: onP, opacity: solid ? 0.8 : 0.7 })
-    close.name = 'icon-close'
+    const close = iconSlot(12, onP, 'icon-close', 'square')
     c.appendChild(close)
     out.push({ node: close, prop: 'Show Close', def: true })
     // The early resize (dummy height) pins the counter axis — re-assert hug
@@ -3534,19 +3974,21 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     pad(c, 10, 12, 10, 12); gap(c, 10)
     bindRadius(c, radContainer, radiusContainer)
     c.fills = [fillP(k.subtle)]
-    c.strokes = [fillP(k.solid, 0.4)]
+    // Was `fillP(k.solid, 0.4)` — the solid fill dimmed by a number that lived
+    // nowhere. The configurator's own StatusSpecimen dimmed the same colour to
+    // 20% (`${c}33`), so Figma and the preview disagreed about this component
+    // by a factor of two. Both read `status.*.border` now.
+    c.strokes = [fillP(k.border)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
 
-    const icon = txt(k.glyph, { style: 'Medium', size: 13, weightVar: wMedium, colorP: k.text })
-    icon.name = 'icon-status'
+    const icon = iconSlot(13, k.text, 'icon-status', 'circle')
     c.appendChild(icon)
     const message = txt('A short inline alert message.', { roleKey: 'body-sm', size: 13, sizeVar: sizeSm, colorP: p.textSecondary })
     c.appendChild(message)
     message.layoutSizingHorizontal = 'FILL'
     out.push({ node: message, prop: 'Message', def: 'A short inline alert message.' })
-    const close = txt('✕', { size: 11, colorP: k.text, opacity: 0.7 })
-    close.name = 'icon-close'
+    const close = iconSlot(11, k.text, 'icon-close', 'square')
     c.appendChild(close)
     out.push({ node: close, prop: 'Show Close', def: true })
     // The early resize (dummy height) pins the counter axis — re-assert hug
@@ -3630,13 +4072,13 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     pad(secondary, 8, 14, 8, 14)
     secondary.strokes = [fillP(p.borderDefault)]
     secondary.strokeWeight = 1
-    bindRadius(secondary, radAction, radiusMd)
+    bindRadius(secondary, radAction, radiusAction)
     secondary.appendChild(txt('Cancel', { roleKey: 'button', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary }))
     footer.appendChild(secondary)
     const primary = row('button-primary', 8)
     pad(primary, 8, 14, 8, 14)
     primary.fills = [fillP(p.action)]
-    bindRadius(primary, radAction, radiusMd)
+    bindRadius(primary, radAction, radiusAction)
     primary.appendChild(txt('Confirm', { roleKey: 'button', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }))
     footer.appendChild(primary)
     c.appendChild(footer)
@@ -3728,8 +4170,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     const hoverish = state === 'Hover' || state === 'Pressed'
     c.fills = hoverish ? [fillP(p.surface2, state === 'Pressed' ? 1 : 0.8)] : []
     if (state === 'Focused') focusRing(c, p.action.hex)
-    const icon = txt('✕', { style: 'Medium', size: sz.f, weightVar: wMedium, colorP: disabled ? p.textDisabled : p.textSecondary })
-    icon.name = 'icon'
+    const icon = iconSlot(sz.f, disabled ? p.textDisabled : p.textSecondary, 'icon', 'circle')
     c.appendChild(icon)
   }
 
@@ -3751,8 +4192,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       type: 'DROP_SHADOW', color: { ...hexToRgb(p.action.hex), a: 0.35 },
       offset: { x: 0, y: 4 }, radius: 12, spread: 0, visible: true, blendMode: 'NORMAL',
     }]
-    const icon = txt('+', { style: 'Medium', size: s.f, weightVar: wMedium, colorP: p.textOnBrand })
-    icon.name = 'icon'
+    const icon = iconSlot(s.f, p.textOnBrand, 'icon', 'circle')
     c.appendChild(icon)
   }
 
@@ -3771,7 +4211,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     c.clipsContent = true
     ;['Day', 'Week', 'Month'].forEach((label, i) => {
       const seg = row(`segment-${label.toLowerCase()}`, 8)
@@ -3803,7 +4243,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisSizingMode = 'AUTO'
     c.counterAxisAlignItems = 'CENTER'
     pad(c, sz.padV, sz.padH, sz.padV, sz.padH); gap(c, 10)
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     c.fills = state === 'Hover' ? [fillP(p.surface1)] : [fillP(p.surface0)]
     c.strokes = [fillP(state === 'Hover' ? p.borderStrong : p.borderDefault)]
     c.strokeWeight = 1
@@ -3843,7 +4283,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surfaceInv)]
     c.strokes = [fillP(p.borderStrong)]
     c.strokeWeight = 1
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     const icon = txt(apple ? '' : '▶', { size: 18, colorP: p.textOnInverse })
     icon.name = 'store-icon'
     c.appendChild(icon)
@@ -3873,6 +4313,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       tryBind(box, 'strokeWeight', borderWidthVar())
     }
     box.resize(18, 18)
+    tryBind(box, 'width', selControl)
+    tryBind(box, 'height', selControl)
     return box
   }
 
@@ -3919,6 +4361,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       dot.layoutSizingVertical = 'FIXED'
     }
     o.resize(d, d)
+    tryBind(o, 'width', d === selectorSm ? selCompact : selControl)
+    tryBind(o, 'height', d === selectorSm ? selCompact : selControl)
     return o
   }
 
@@ -3977,7 +4421,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     if (state !== 'Focused') tryBind(c, 'strokeWeight', borderWidthVar())
     if (state === 'Focused') focusRing(c, p.borderFocus.hex)
     if (state === 'Error') focusRing(c, p.statusError.hex)
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     const content = txt('Placeholder…', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPlaceholder })
     content.name = 'placeholder'
     c.appendChild(content)
@@ -4014,7 +4458,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       cell.strokeWeight = active ? 1.5 : 1
       if (!active) tryBind(cell, 'strokeWeight', borderWidthVar())
       if (active) focusRing(cell, p.borderBrand.hex)
-      bindRadius(cell, radAction, radiusMd)
+      bindRadius(cell, radAction, radiusAction)
       if (state === 'Filled') {
         cell.appendChild(txt(d, { style: 'Medium', size: sz.f, weightVar: wMedium, colorP: p.textPrimary }))
       }
@@ -4032,7 +4476,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(state === 'Disabled' ? p.borderDisabled : p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     c.clipsContent = true
     const disabled = state === 'Disabled'
     const stepBtn = (label: string, name: string) => {
@@ -4071,7 +4515,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     for (const t of ['Design', 'Tokens']) {
       const tag = row(`tag-${t.toLowerCase()}`, 4)
       tag.counterAxisAlignItems = 'CENTER'
@@ -4079,7 +4523,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       tag.fills = [fillP(p.surface2)]
       bindRadius(tag, radControl, radiusControl)
       tag.appendChild(txt(t, { roleKey: 'label', size: 12, sizeVar: sizeXs, colorP: p.textSecondary }))
-      tag.appendChild(txt('✕', { size: 10, colorP: p.textTertiary }))
+      tag.appendChild(iconSlot(10, p.textTertiary, 'remove', 'square'))
       c.appendChild(tag)
     }
     const placeholder = txt('Add tag…', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder })
@@ -4138,7 +4582,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.paddingLeft = 2; c.paddingRight = 2
     c.itemSpacing = 2
     c.fills = [fillP(p.surface2)]
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     ;['List', 'Board', 'Timeline'].forEach((label, i) => {
       const active = i === 0
       const seg = row(`segment-${label.toLowerCase()}`, 8)
@@ -4258,8 +4702,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     const label = txt('Chip', { roleKey: 'label', style: 'Medium', size: sz.f, sizeVar: sizeXs, weightVar: wMedium, colorP })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Chip' })
-    const remove = txt('✕', { size: sz.rm, colorP, opacity: 0.8 })
-    remove.name = 'remove'
+    const remove = iconSlot(sz.rm, colorP, 'remove', 'square')
     c.appendChild(remove)
   }
 
@@ -4274,7 +4717,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(k.soft)]
     const dot = figma.createFrame()
     dot.name = 'dot'
-    dot.resize(6, 6)
+    bindBoxSize(dot, selIndicator, selectorXs)
     dot.cornerRadius = 9999
     dot.fills = [fillP(k.solid)]
     c.appendChild(dot)
@@ -4358,11 +4801,11 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     trigger.strokes = [fillP(open ? p.borderBrand : p.borderDefault)]
     trigger.strokeWeight = open ? 1.5 : 1
     if (!open) tryBind(trigger, 'strokeWeight', borderWidthVar())
-    bindRadius(trigger, radAction, radiusMd)
+    bindRadius(trigger, radAction, radiusAction)
     pad(trigger, 10, 12, 10, 12)
     if (open) focusRing(trigger, p.borderBrand.hex)
     const lead = row('lead', 8)
-    lead.appendChild(txt('🔍', { size: 12, colorP: p.iconQuaternary }))
+    lead.appendChild(iconSlot(12, p.iconQuaternary, 'icon', 'circle'))
     const query = txt(open ? 'ber' : 'Search options…', {
       size: 14, sizeVar: sizeSm,
       colorP: open ? p.textPrimary : p.textPlaceholder,
@@ -4410,7 +4853,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     c.clipsContent = true
 
     // Segments share the group's outer border; each hugs to the same 40px
@@ -4503,7 +4946,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     box.strokes = [fillP(error ? p.borderError : p.borderDefault)]
     box.strokeWeight = 1
     if (!error) tryBind(box, 'strokeWeight', borderWidthVar())
-    bindRadius(box, radAction, radiusMd)
+    bindRadius(box, radAction, radiusAction)
     pad(box, 10, 12, 10, 12)
     box.appendChild(txt('Placeholder Text..', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder }))
     c.appendChild(box)
@@ -4716,7 +5159,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     out.push({ node: body, prop: 'Body', def: body.characters })
     const action = row('action', 6)
     action.fills = [fillP(p.action)]
-    bindRadius(action, radAction, radiusMd)
+    bindRadius(action, radAction, radiusAction)
     pad(action, 8, 14, 8, 14)
     action.appendChild(txt('Copy link', { roleKey: 'button', style: 'Medium', size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }))
     c.appendChild(action)
@@ -4731,7 +5174,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.counterAxisAlignItems = 'CENTER'
     gap(c, 8)
     c.fills = []
-    c.appendChild(txt('ⓘ', { size: 14, colorP: p.iconQuaternary }))
+    c.appendChild(iconSlot(14, p.iconQuaternary, 'icon', 'circle'))
     const bubble = row('bubble', 0)
     bubble.fills = [fillP(p.surfaceInv)]
     bindRadius(bubble, radControl, radiusControl)
@@ -4854,7 +5297,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.fills = [fillP(p.surface1)]
     c.strokes = [fillP(p.borderDefault)]
     c.strokeWeight = 1
-    bindRadius(c, radAction, radiusMd)
+    bindRadius(c, radAction, radiusAction)
     c.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.14 }, offset: { x: 0, y: 6 }, radius: 24, spread: -4, visible: true, blendMode: 'NORMAL' }]
     for (const item of items) {
       if (item.kind === 'separator') {
@@ -4918,7 +5361,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     const search = row('search', 10)
     search.primaryAxisSizingMode = 'FIXED'
     pad(search, 14, 16, 14, 16)
-    search.appendChild(txt('🔍', { size: 13, colorP: p.iconQuaternary }))
+    search.appendChild(iconSlot(13, p.iconQuaternary, 'icon', 'circle'))
     const query = txt('Type a command or search…', { roleKey: 'placeholder', size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder })
     search.appendChild(query)
     query.layoutSizingHorizontal = 'FILL'
@@ -4950,18 +5393,18 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     pad(groupPad, 4, 10, 4, 10)
     groupPad.appendChild(group)
     list.appendChild(groupPad)
-    const cmds: [string, string, boolean][] = [
-      ['📄', 'New document', true],
-      ['👤', 'Invite teammate', false],
-      ['⚙', 'Open settings', false],
+    const cmds: [string, boolean][] = [
+      ['New document', true],
+      ['Invite teammate', false],
+      ['Open settings', false],
     ]
-    for (const [glyph, label, active] of cmds) {
+    for (const [label, active] of cmds) {
       const rowF = row(`cmd-${label.toLowerCase().replace(/\s+/g, '-')}`, 10)
       rowF.primaryAxisSizingMode = 'FIXED'
       pad(rowF, 9, 10, 9, 10)
       bindRadius(rowF, radControl, radiusControl)
       if (active) rowF.fills = [fillP(p.surface1Hover)]
-      rowF.appendChild(txt(glyph, { size: 13, colorP: p.iconTertiary }))
+      rowF.appendChild(iconSlot(13, p.iconTertiary, 'icon', 'circle'))
       rowF.appendChild(txt(label, { roleKey: 'body-sm', size: 13, sizeVar: sizeSm, colorP: p.textPrimary }))
       list.appendChild(rowF)
       rowF.layoutSizingHorizontal = 'FILL'
@@ -5015,7 +5458,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     c.appendChild(nav)
 
     const cluster = row('actions', 10)
-    cluster.appendChild(txt('🔍', { size: 14, colorP: p.iconTertiary }))
+    cluster.appendChild(iconSlot(14, p.iconTertiary, 'icon-search', 'circle'))
     const avatar = figma.createFrame()
     avatar.name = 'avatar'
     avatar.layoutMode = 'HORIZONTAL'
@@ -5048,13 +5491,13 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       g.appendChild(txt(label, { style: 'Medium', size: 10, weightVar: wMedium, colorP: p.textPlaceholder }))
       c.appendChild(g)
     }
-    function navItem(glyph: string, label: string, active = false) {
+    function navItem(label: string, active = false) {
       const rowF = row(`item-${label.toLowerCase()}`, 10)
       rowF.primaryAxisSizingMode = 'FIXED'
       pad(rowF, 8, 10, 8, 10)
       bindRadius(rowF, radControl, radiusControl)
       if (active) rowF.fills = [fillP(p.brandSubtle)]
-      rowF.appendChild(txt(glyph, { size: 13, colorP: active ? p.iconBrand : p.iconTertiary }))
+      rowF.appendChild(iconSlot(13, active ? p.iconBrand : p.iconTertiary, 'icon', 'circle'))
       rowF.appendChild(txt(label, {
         style: active ? 'Medium' : 'Regular', size: 13, sizeVar: sizeSm,
         weightVar: active ? wMedium : wRegular,
@@ -5064,12 +5507,12 @@ async function importSample(tokens: DesignTokens): Promise<number> {
       rowF.layoutSizingHorizontal = 'FILL'
     }
     groupLabel('WORKSPACE')
-    navItem('🏠', 'Dashboard', true)
-    navItem('📁', 'Projects')
-    navItem('👥', 'Team')
+    navItem('Dashboard', true)
+    navItem('Projects')
+    navItem('Team')
     groupLabel('SYSTEM', true)
-    navItem('⚙', 'Settings')
-    navItem('❓', 'Support')
+    navItem('Settings')
+    navItem('Support')
     c.resize(220, c.height)
   }
 
@@ -5077,16 +5520,14 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   const SPECS: Record<string, AtomSpec> = {
     Button: {
       cols: BTN_COLORS ? Object.keys(BTN_COLORS).length * BTN_STYLES.length : 12,
-      description: 'Universal action button. Size × Color × Style × State × Icon (None/Leading/Trailing) matrix; fills → component tokens → semantics.',
+      description: 'Universal action button. Size × Color × Style × State; Show leading/trailing icon are set-level toggles bound to icon/circle-dashed · icon/square-dashed instances.',
       variants: BTN_SIZE_KEYS.flatMap((size) =>
         STATES.flatMap((state) =>
           Object.keys(BTN_COLORS).flatMap((color) =>
-            BTN_STYLES.flatMap((style) =>
-              BTN_ICON_POS.map((iconPos) => ({
-                props: { Size: size, Color: color, Style: style, State: state, Icon: iconPos },
-                build: (c: ComponentNode, out: PendingProp[]) => buildButton(c, out, color, style, state, size, iconPos),
-              })),
-            ),
+            BTN_STYLES.map((style) => ({
+              props: { Size: size, Color: color, Style: style, State: state },
+              build: (c: ComponentNode, out: PendingProp[]) => buildButton(c, out, color, style, state, size),
+            })),
           ),
         ),
       ),
@@ -5435,10 +5876,10 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     Sidebar:     { cols: 1, description: 'Vertical navigation panel with grouped items and an active state.', variants: [{ props: {}, build: buildSidebar }] },
   }
 
-  // ── Catalog: category divider pages + one page per component ───────────────
-  // Mirrors the library structure: a "❖ Category" divider page, then one
-  // "   ↳ Component" page per element. Entries are gated on the imported atoms
-  // so the catalog only generates what the design system enables.
+  // ── Catalogue metadata ────────────────────────────────────────────────────
+  // Mirrors the web library structure and powers the opt-in Full catalogue
+  // mode. Every entry lands on the shared Components Overview page; category
+  // names remain visible in each component's documentation board.
   // `legacyPage` — previous page name for this entry; its content is harvested
   // so renames move the existing set instead of duplicating it.
   // `gate` — the componentCatalogue key (configurator) that enables this entry.
@@ -5537,10 +5978,20 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     },
   ]
 
-  // ── The sample sheet — what this plugin actually builds ────────────────────
-  // Escala is a TOKEN generator. The components exist to SHOW what the tokens
-  // look like, not to be a component library — so the CATALOG above is no
-  // longer generated. It expanded to 58 sets / ~1403 variants across 63 pages
+  // The canonical category order + a set→category index, both DERIVED from
+  // CATALOG so nothing can name a category the catalogue doesn't have. The
+  // sample sheet used to label all nine of its entries 'Components Overview' —
+  // one flat bucket — which is why the page laid them out as a single endless
+  // row instead of the role groups the configurator's own rail shows.
+  const CATEGORY_ORDER = CATALOG.map((c) => c.category)
+  const CATEGORY_OF_SET = new Map<string, string>()
+  for (const { category, entries } of CATALOG) {
+    for (const e of entries) if (!CATEGORY_OF_SET.has(e.set)) CATEGORY_OF_SET.set(e.set, category)
+  }
+
+  // ── The default sample sheet ──────────────────────────────────────────────
+  // Escala is a TOKEN generator. The default therefore stays compact. The old
+  // full cartesian catalogue expanded to 58 sets / ~1403 variants across 63 pages
   // (Button alone: 4 size × 6 state × 3 color × 4 style × 3 icon = 864, built
   // in ONE synchronous buildEntry call), which locked Figma up on every
   // import — and Live Sync used to re-run that entire build on every token
@@ -5551,9 +6002,8 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   // only FILTERS the variant matrix, so there is no second rendering path that
   // could drift — a fix to buildButton still lands here.
   //
-  // The CATALOG and the 49 specs it references are kept in this file, unwired,
-  // the same way the web repo keeps WorkbenchLayout/PickerColor for reference.
-  // Don't wire them back up without re-measuring the freeze.
+  // Full catalogue is now explicit and uses representativeSpec below: every
+  // component type, without recreating that lock-up-prone cartesian product.
   interface SampleEntry {
     set: string
     /** Key into SPECS — the real matrix this is a subset of. */
@@ -5568,20 +6018,32 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   const SAMPLE_PAGE = '⬡ Components Overview'
   // Axis values referenced below, for the record: Button size MD|SM|LG|XL,
   // state Default|Hover|Pressed|Focused|Loading|Disabled, colour Brand|Danger|
-  // Success, style Solid|Outline|Soft|Ghost, icon None|Leading|Trailing.
+  // Success, style Solid|Outline|Soft|Ghost. Icons are BOOLEAN toggles on the
+  // set (Show leading / Show trailing), not a variant axis.
   // Input's Type axis has NO 'Text' value — its plain variant is 'Default'.
   const SAMPLE: SampleEntry[] = [
     {
       set: 'Button', spec: 'Button', page: 'Button', cols: 4,
-      // 3 colours × 4 styles × 3 states = 36. Size and Icon collapse to one
-      // value and get stripped from the variant panel by sampleSpec().
-      keep: (p) => p.Size === 'MD' && p.Icon === 'None' &&
-        (p.State === 'Default' || p.State === 'Hover' || p.State === 'Disabled'),
+      // Size=MD keeps Overview readable; full State ladder for Brand Solid so
+      // Loading / Focused show up. Other Color×Style combos stay at Default.
+      keep: (p) => p.Size === 'MD' && (
+        (p.Color === 'Brand' && p.Style === 'Solid' &&
+          (p.State === 'Default' || p.State === 'Hover' || p.State === 'Pressed' ||
+           p.State === 'Focused' || p.State === 'Loading' || p.State === 'Disabled')) ||
+        (p.State === 'Default' && !(p.Color === 'Brand' && p.Style === 'Solid'))
+      ),
     },
     {
       set: 'Input', spec: 'Input', page: 'Input', cols: 4,
-      keep: (p) => p.Size === 'MD' && p.Type === 'Default' &&
-        (p.State === 'Default' || p.State === 'Focused' || p.State === 'Error' || p.State === 'Disabled'),
+      // Playbook: Size × State × Type. Include icon types + the full state
+      // ladder so the variant panel matches Docs, not a 4-cell stub.
+      keep: (p) => p.Size === 'MD' && (
+        (p.Type === 'Default' &&
+          (p.State === 'Default' || p.State === 'Hover' || p.State === 'Focused' ||
+           p.State === 'Filled' || p.State === 'Error' || p.State === 'Loading' || p.State === 'Disabled')) ||
+        ((p.Type === 'Icon Leading' || p.Type === 'Icon Trailing' || p.Type === 'Search' ||
+          p.Type === 'Password' || p.Type === 'E-Mail') && p.State === 'Default')
+      ),
     },
     {
       set: 'Select', spec: 'Select', page: 'Select', cols: 2,
@@ -5636,6 +6098,42 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     return { cols: e.cols ?? base.cols, variants, description: base.description }
   }
 
+  /** Keep the full catalogue practical inside Figma. Some source specs are a
+   *  cartesian product (Button alone is 864 variants), but "all components"
+   *  means every component TYPE, not thousands of redundant combinations.
+   *  This greedy cover keeps real source variants until every axis value has
+   *  appeared at least once. The resulting set still exposes every declared
+   *  Size/Style/State/etc. value while remaining fast enough to build. */
+  function representativeSpec(specKey: string): AtomSpec | undefined {
+    const base = SPECS[specKey]
+    if (!base || base.variants.length === 0) return undefined
+    if (base.variants.length <= 24) return { ...base, representative: true }
+
+    const uncovered = new Set<string>()
+    for (const variant of base.variants) {
+      for (const [key, value] of Object.entries(variant.props)) uncovered.add(`${key}\u0000${value}`)
+    }
+
+    const chosen: typeof base.variants = []
+    const remaining = [...base.variants]
+    while (uncovered.size > 0 && remaining.length > 0) {
+      let bestIndex = 0
+      let bestGain = -1
+      for (let i = 0; i < remaining.length; i++) {
+        let gain = 0
+        for (const [key, value] of Object.entries(remaining[i].props)) {
+          if (uncovered.has(`${key}\u0000${value}`)) gain++
+        }
+        if (gain > bestGain) { bestGain = gain; bestIndex = i }
+      }
+      const [picked] = remaining.splice(bestIndex, 1)
+      chosen.push(picked)
+      for (const [key, value] of Object.entries(picked.props)) uncovered.delete(`${key}\u0000${value}`)
+    }
+
+    return { ...base, variants: chosen, representative: true }
+  }
+
   // Fine-grained payload detection: gates the legacyGate widen-by-family
   // fallback (below) to genuinely OLD tokens.json files — the ones from before
   // the configurator's componentCatalogue spoke per-variant keys at all, where
@@ -5657,11 +6155,9 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   // so any payload carrying it already speaks today's vocabulary and its
   // selection should be honored exactly. Only a truly old, schema-less
   // tokens.json falls back to the family-wide legacy behavior.
-  // NOTE: the per-entry `gateOpen` check that used to live here is gone with
-  // the catalogue loop — the sample sheet is a fixed specimen of the token
-  // system, not a selection of the user's components, so it doesn't read
-  // `tokens.atoms`. The payload still carries that field (contract unchanged)
-  // and `atomSet` above still gates which component pages are generated.
+  // NOTE: neither mode is gated by `tokens.atoms`: Overview is fixed, and Full
+  // catalogue is an explicit plugin-side request for all available types. The
+  // payload field remains part of the public contract for other consumers.
 
   // ── Pages ─────────────────────────────────────────────────────────────────
   // Sets are harvested from the previous generation's pages and MOVED onto the
@@ -5739,6 +6235,30 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   let builtAtoms = 0
   let boardX = 0
   let boardIndex = 0
+  // ── One PAGE per catalogue category ───────────────────────────────────────
+  // Boards used to run in ONE endless horizontal row on ONE page ('⬡
+  // Components Overview'), 58 unrelated elements side by side — the "todo de
+  // taco" the sheet was reported as. It's now a page per catalogue category,
+  // the same division the configurator's component rail makes (Button &
+  // Actions · Form Controls · Indicators · Content & Surfaces · Feedback ·
+  // Navigation). Within a page, one category band heads a row of boards laid
+  // out left→right at y = band bottom.
+  //
+  // Per-component pages (the 63-page generation this replaced) were retired
+  // for locking Figma up on import and for blowing past the Starter page cap;
+  // six pages does neither — the cap guard (`makePage`/`pageLimitHit`) still
+  // falls back to stacking categories on one page, and the yield-per-set keeps
+  // the editor responsive.
+  //
+  // `boardX`/`boardY`/`rowH`/`rowCategory` are the current page's layout
+  // cursor; they reset when a genuinely new page is resolved and only carry
+  // over when the page cap forced two categories onto one page (see the loop).
+  let boardY = 0
+  let rowH = 0
+  let rowCategory: string | undefined
+  const CATEGORY_GAP = 240   // vertical air between two stacked category rows (cap-hit fallback only)
+  const HEAD_GAP = 48        // band → first board of its row
+  const BAND_W = 560         // category-band card width
   const cursorByPage = new Map<string, number>()
   let firstBuiltPage: PageNode | undefined
 
@@ -5800,8 +6320,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     panel.cornerRadius = 16
     panel.paddingTop = PANEL_PAD; panel.paddingBottom = PANEL_PAD
     panel.paddingLeft = PANEL_PAD; panel.paddingRight = PANEL_PAD
-    panel.counterAxisSizingMode = 'FIXED'
-    panel.resize(PANEL_W, 100)
+    vStack(panel, PANEL_W)
 
     const crumb = docFrame('breadcrumb', 'HORIZONTAL', 8)
     crumb.primaryAxisSizingMode = 'FIXED'
@@ -5875,8 +6394,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     hint.cornerRadius = 10
     hint.paddingTop = 14; hint.paddingBottom = 14
     hint.paddingLeft = 16; hint.paddingRight = 16
-    hint.counterAxisSizingMode = 'FIXED'
-    hint.resize(PANEL_INNER, 60)
+    vStack(hint, PANEL_INNER)
     hint.appendChild(wrapText(docText('Insert components easily to your canvas', 12, 'Medium', DOC.text, 1, sampleChrome.text), PANEL_INNER - 32))
     hint.appendChild(wrapText(docText(`hold ⇧ Shift + I, search “${entry.set}” and press insert — or drag it from Assets to the canvas`, 10.5, 'Regular', DOC.muted, 1, sampleChrome.muted), PANEL_INNER - 32))
     panel.appendChild(hint)
@@ -5909,6 +6427,89 @@ async function importSample(tokens: DesignTokens): Promise<number> {
   }
 
   function buildVariantMatrix(entry: CatalogEntry, spec: AtomSpec, nodes: ComponentNode[], set: ComponentSetNode): FrameNode {
+    // Full catalogue specs are intentionally sparse: they cover every value on
+    // every axis without creating the cartesian product. Rendering them through
+    // the semantic grid below would recreate that product as hundreds of empty
+    // cells, defeating the performance fix. Show the chosen real variants in a
+    // compact labeled grid instead.
+    if (spec.representative) {
+      const cols = Math.max(1, Math.min(4, spec.cols, nodes.length))
+      const rows = Math.ceil(nodes.length / cols)
+
+      // ── Caption sizing ──────────────────────────────────────────────────
+      // `variant.name` is the FULL Figma variant name — "Color=Brand,
+      // Icon=None, Size=MD, State=Default, Style=Solid", ~57 chars ≈ 300px at
+      // 10px. It used to be an AUTO-WIDTH text node pinned at x+16, in a cell
+      // only `widestNode + 48` across (≈138px for a Button). Two bugs fell out
+      // of that, and they looked like separate problems:
+      //   1. Captions ran straight over their neighbours — every board's
+      //      labels piled into an unreadable smear.
+      //   2. Boards appeared to COLLIDE on the page. The wrapper is
+      //      `layoutMode NONE` sized to `cols * cellW`, so a caption
+      //      overflowing it never counted toward the wrapper's (or the
+      //      board's) measured width — `boardX += board.width + BOARD_GAP`
+      //      advanced past a box narrower than what was actually painted, and
+      //      the spill landed on the next board.
+      // Wrapping the caption inside its own cell fixes both at once.
+      const LABEL_PAD = 16
+      // Floor wide enough that a full prop list breaks into 2–3 lines rather
+      // than one word per line. Only raises the cell; a genuinely wider
+      // component (Navbar, Modal) still sets the width.
+      const MIN_CELL_W = 216
+      const cellW = Math.max(MIN_CELL_W, Math.max(...nodes.map((n) => n.width)) + 48)
+      const labelW = cellW - LABEL_PAD * 2
+
+      // Build every caption up front so the caption band can be sized from the
+      // TALLEST one — a per-cell offset would push some instances under their
+      // own caption and leave others floating.
+      const labels = nodes.map((variant) => {
+        const t = docText(variant.name, 10, 'Medium', MATRIX_INK)
+        t.lineHeight = { value: 140, unit: 'PERCENT' }
+        // Resize from a KNOWN state: reading `.height` while the node is still
+        // auto-width returns its pre-wrap single-line height and locks the box
+        // too short (the same trap importDocumentation's `section()` documents).
+        // 'HEIGHT' below settles the real height once the width is in place.
+        t.textAutoResize = 'NONE'
+        t.resize(labelW, 200)
+        t.textAutoResize = 'HEIGHT'
+        return t
+      })
+      const CAP_H = Math.max(...labels.map((t) => Math.ceil(t.height))) + 20
+
+      const cellH = Math.max(...nodes.map((n) => n.height)) + CAP_H + 28
+      const wrapper = figma.createFrame()
+      wrapper.name = `❖ ${entry.page}`
+      wrapper.layoutMode = 'NONE'
+      wrapper.fills = []
+      wrapper.resize(cols * cellW, rows * cellH)
+      wrapper.appendChild(set)
+      set.x = 0; set.y = 0; set.visible = false
+
+      nodes.forEach((variant, i) => {
+        const x = (i % cols) * cellW
+        const y = Math.floor(i / cols) * cellH
+        const cell = figma.createFrame()
+        cell.name = `cell-${i + 1}`
+        cell.layoutMode = 'NONE'
+        cell.fills = []
+        cell.strokes = [docSolid(MATRIX_INK, 0.4)]
+        cell.strokeWeight = 1
+        try { (cell as unknown as { dashPattern: number[] }).dashPattern = [3, 3] } catch {}
+        cell.resize(cellW, cellH)
+        wrapper.appendChild(cell)
+        cell.x = x; cell.y = y
+
+        const label = labels[i]
+        wrapper.appendChild(label)
+        label.x = x + LABEL_PAD; label.y = y + 10
+        const instance = variant.createInstance()
+        wrapper.appendChild(instance)
+        instance.x = x + (cellW - instance.width) / 2
+        instance.y = y + CAP_H + (cellH - CAP_H - instance.height) / 2
+      })
+      return wrapper
+    }
+
     const axes = computeDisplayAxes(spec.variants)
     // Last axis reads as COLUMNS — in every SPECS definition, State (when
     // present) is the last key written in the variant's `props` literal, and
@@ -6097,7 +6698,30 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     let variantNodes: ComponentNode[] | undefined
 
     if (isVariantSet) {
-      const existingSet = existingSets.get(entry.set)
+      let existingSet = existingSets.get(entry.set)
+      // Axis change (e.g. Button dropped Icon=None|Leading|Trailing for boolean
+      // Show leading/trailing toggles): Figma refuses to append a child whose
+      // variant props don't match the set. Deleting the old axis AFTER append
+      // never runs — combine/append throws and the whole Components phase
+      // stops, so the file "no longer extracts components". Detect mismatch
+      // and rebuild the set from scratch instead.
+      if (existingSet) {
+        const wantedAxes = new Set(Object.keys(spec.variants[0]?.props ?? {}))
+        const existingAxes = new Set<string>()
+        try {
+          for (const [key, def] of Object.entries(existingSet.componentPropertyDefinitions)) {
+            if (def.type === 'VARIANT') existingAxes.add(key.split('#')[0])
+          }
+        } catch { /* plan may reject */ }
+        const axesMatch = wantedAxes.size === existingAxes.size
+          && [...wantedAxes].every((a) => existingAxes.has(a))
+        if (!axesMatch) {
+          log(`↻ ${entry.set}: variant axes changed (${[...existingAxes].sort().join(', ') || '∅'} → ${[...wantedAxes].sort().join(', ')}) — rebuilding set`)
+          try { existingSet.remove() } catch { /* still bound */ }
+          existingSets.delete(entry.set)
+          existingSet = undefined
+        }
+      }
       const childByName = new Map<string, ComponentNode>()
       if (existingSet) {
         for (const ch of existingSet.children) {
@@ -6145,10 +6769,27 @@ async function importSample(tokens: DesignTokens): Promise<number> {
         })
         set = figma.combineAsVariants(nodes, pg)
         set.name = entry.set
+        existingSets.set(entry.set, set)
       } else {
         if (set.parent !== pg) pg.appendChild(set)
-        for (const n of nodes) {
-          if (n.parent !== set) set.appendChild(n)
+        try {
+          for (const n of nodes) {
+            if (n.parent !== set) set.appendChild(n)
+          }
+        } catch (e) {
+          // Last-resort: axis/property conflict Figma didn't surface earlier.
+          const m = e instanceof Error ? e.message : String(e)
+          log(`↻ ${entry.set}: could not reuse set (${m}) — rebuilding`)
+          try { set.remove() } catch { /* */ }
+          existingSets.delete(entry.set)
+          nodes.forEach((n, i) => {
+            if (n.parent) try { pg.appendChild(n) } catch { /* */ }
+            n.x = MARGIN + (i % spec.cols) * cellW
+            n.y = cursorY + Math.floor(i / spec.cols) * cellH
+          })
+          set = figma.combineAsVariants(nodes, pg)
+          set.name = entry.set
+          existingSets.set(entry.set, set)
         }
         // Retire variants that fell out of the matrix (e.g. after an axis change)
         // so the set doesn't mix conflicting variant properties.
@@ -6217,7 +6858,9 @@ async function importSample(tokens: DesignTokens): Promise<number> {
 
     const barW = Math.ceil(panel.width)
     const bar = docFrame(`§ ${category}  /  ${entry.page}`, 'HORIZONTAL', 8)
-    bar.fills = [docSolid(DOC.bar)]
+    // Same rule as the Documentation chapter bars — bound to Surface/layer-2,
+    // one step above the board's Surface/page, rather than a flat DOC.bar tint.
+    bar.fills = [docSolid(DOC.bar, 1, sampleChrome.card)]
     bar.cornerRadius = 12
     bar.primaryAxisSizingMode = 'FIXED'
     bar.counterAxisSizingMode = 'FIXED'
@@ -6249,75 +6892,246 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     pinToLightMode(board, sampleModePin)
     pg.appendChild(board)
     board.appendChild(leftCol)
+    // (placement happens after the content is in — see below)
     // Re-parenting into the board is what stops it floating. Must happen
     // AFTER combineAsVariants (above), which needs a page-level parent to lay
     // the variants out on a grid first.
     board.appendChild(rightContent)
     board.x = boardX
-    board.y = 0
+    board.y = boardY
     boardX += Math.ceil(board.width) + BOARD_GAP
+    rowH = Math.max(rowH, Math.ceil(board.height))
 
     builtAtoms++
   }
 
-  // Everything lands on ONE page. Resolve the specs up front so the progress
-  // bar counts what will actually be built (a spec whose filter matched
-  // nothing is skipped rather than reported).
-  const planned = SAMPLE
-    .map((e) => ({ entry: e, spec: sampleSpec(e) }))
-    .filter((x): x is { entry: SampleEntry; spec: AtomSpec } => x.spec !== undefined)
+  // Drops a category band at the top of the current row and rewinds x to the
+  // left margin. Normally called once per page; called again on the SAME page
+  // only when the page cap forced a second category to share it, in which case
+  // `rowCategory` is still set and the band stacks CATEGORY_GAP below the
+  // previous row.
+  //
+  // It's a real CARD now (Surface/page slab, its own rounded corners) rather
+  // than loose text on the charcoal page — which is what lets every string
+  // bind to a semantic role (Content/primary title, Content/subtle meta) the
+  // same way docBoard's own chrome does, instead of the fixed light hex a
+  // bare-on-page label needed to stay readable. The board is pinned to the
+  // first theme (pinToLightMode), so the bound fills always resolve light.
+  // Name starts with 'docs/' so harvest() clears it on the next import.
+  function startCategoryRow(category: string, pg: PageNode, count: number, index: number, total: number) {
+    if (rowCategory !== undefined) boardY += rowH + CATEGORY_GAP
+    rowCategory = category
+    rowH = 0
+    boardX = 0
+
+    const band = docFrame(`docs/category · ${category}`, 'VERTICAL', 12)
+    band.fills = [docSolid(DOC.board, 1, sampleChrome.board)]
+    band.cornerRadius = 24
+    band.paddingTop = 36; band.paddingBottom = 36
+    band.paddingLeft = 44; band.paddingRight = 44
+    vStack(band, BAND_W)
+    pinToLightMode(band, sampleModePin)
+
+    const eyebrow = docText(
+      `${String(index + 1).padStart(2, '0')} / ${String(total).padStart(2, '0')}  ·  CATEGORY`,
+      10, 'Medium', DOC.muted, 1, sampleChrome.muted)
+    eyebrow.letterSpacing = { value: 1.4, unit: 'PIXELS' }
+    band.appendChild(eyebrow)
+    band.appendChild(docText(category, 34, 'Semi Bold', DOC.text, 1, sampleChrome.text))
+    band.appendChild(docText(
+      `${count} element${count === 1 ? '' : 's'} · ${tokens.project || 'Design System'}`,
+      12, 'Regular', DOC.muted, 1, sampleChrome.muted))
+    const rule = figma.createFrame()
+    rule.name = 'rule'
+    rule.resize(360, 3)
+    rule.cornerRadius = 999
+    rule.fills = [docSolid(DOC.ink, 1, sampleChrome.inverse)]
+    band.appendChild(rule)
+
+    pg.appendChild(band)
+    band.x = 0
+    band.y = boardY
+    boardY += Math.ceil(band.height) + HEAD_GAP
+  }
+
+  // Resolve the specs up front so the progress bar counts what will actually
+  // be built (a spec whose filter matched nothing is skipped, not reported).
+  type PlannedEntry = { entry: CatalogEntry; spec: AtomSpec; category: string }
+  const planned: PlannedEntry[] = includeFullCatalogue
+    ? CATALOG.flatMap(({ category, entries }) => entries.map((entry) => ({
+        entry,
+        spec: representativeSpec(entry.spec),
+        category,
+      }))).filter((x): x is PlannedEntry => x.spec !== undefined)
+    : SAMPLE.map((e) => ({
+        entry: { page: e.page, set: e.set, gate: e.set, spec: e.spec },
+        spec: sampleSpec(e),
+        // The real catalogue category, so the sample sheet groups by the same
+        // roles the full catalogue (and the configurator's rail) does.
+        category: CATEGORY_OF_SET.get(e.set) ?? 'Components Overview',
+      })).filter((x): x is PlannedEntry => x.spec !== undefined)
+  // Stable sort into catalogue order so every category is ONE contiguous run —
+  // the row layout below starts a new row on each category change, so a
+  // category appearing twice would open two rows with the same title.
+  const catRank = (c: string) => {
+    const i = CATEGORY_ORDER.indexOf(c)
+    return i === -1 ? CATEGORY_ORDER.length : i
+  }
+  planned.sort((a, b) => catRank(a.category) - catRank(b.category))
   const plannedTotal = planned.length
   let plannedDone = 0
 
-  // Migration: the sheet shipped briefly as '⬡ Sample'. Rename in place rather
-  // than creating a second page beside it — makePage matches on name, so a
-  // rename is what keeps the existing sets (and every instance placed from
-  // them) attached to the sheet.
-  const legacySamplePage = pageByName('⬡ Sample')
-  if (legacySamplePage) legacySamplePage.name = SAMPLE_PAGE
+  // Group into catalogue order (planned is already sorted). Each key becomes
+  // its own page.
+  const byCategory = new Map<string, PlannedEntry[]>()
+  for (const p of planned) {
+    let bucket = byCategory.get(p.category)
+    if (!bucket) { bucket = []; byCategory.set(p.category, bucket) }
+    bucket.push(p)
+  }
+  const categoryList = [...byCategory.keys()]
 
-  const samplePage = makePage(SAMPLE_PAGE) ?? (oldPage ?? figma.currentPage)
-  await harvest(samplePage)
-  // Migration: adopt sets built by the previous, per-component-page generation
-  // so a re-import MOVES them here instead of leaving a duplicate behind on
-  // '   ↳ Button' etc. Only the 9 pages we care about are loaded — not the
-  // whole 60-page sweep the catalogue build used to do.
+  // ── Harvest every legacy home so re-imports MOVE sets, never duplicate ─────
+  //  · '⬡ Sample'              — the very first name this sheet shipped under
+  //  · '⬡ Components Overview' — the single-page generation this replaces
+  //  · '⬡ Components'          — `oldPage`, the pre-Overview shared page
+  //  · '   ↳ <name>'           — the per-component pages before that
+  // harvest() dumps their sets/singles into existingSets/existingSingles;
+  // buildEntry() then reparents each onto its category page by name.
+  for (const legacyName of ['⬡ Sample', SAMPLE_PAGE]) {
+    const p = pageByName(legacyName)
+    if (p) await harvest(p)
+  }
   for (const { entry } of planned) {
     const legacy = pageByName(ITEM_PREFIX + entry.page)
-    if (legacy && legacy !== samplePage) await harvest(legacy)
+    if (legacy) await harvest(legacy)
   }
-  figma.root.appendChild(samplePage)
-  try { samplePage.backgrounds = [docSolid(DOC.page)] } catch {}
-  // Pin the WHOLE page to the first theme's mode, not just each board — any
-  // node dropped directly on the page (outside a docBoard) still needs the
-  // bound chrome fills to resolve as light, and pinning higher up is strictly
-  // safer than relying on every call site to nest inside a pinned board.
-  pinToLightMode(samplePage, sampleModePin)
-  firstBuiltPage = samplePage
 
-  for (const { entry, spec } of planned) {
-    progress('Components', plannedDone, plannedTotal, entry.page)
-    // buildEntry stacks onto the page via cursorByPage and renders the doc
-    // panel only for the first set, so passing one page gives a single
-    // documented sheet with a showcase header per element.
-    buildEntry({ page: entry.page, set: entry.set, gate: entry.set, spec: entry.spec }, spec, samplePage, 'Components Overview')
-    plannedDone++
-    // One set is the natural unit of work — small enough now that Figma never
-    // locks up, but the yield stays so the UI can paint progress.
-    await yieldToUI()
+  // Two shared placeholder Components — every iconSlot is an instance of one.
+  // Page is dedicated so Masters aren't buried inside a category board, and we
+  // never findOne across unloaded pages (dynamic-page would throw).
+  {
+    const PLACEHOLDERS_PAGE = '⬡ Icon Placeholders'
+    let host = pageByName(PLACEHOLDERS_PAGE)
+    if (!host) host = makePage(PLACEHOLDERS_PAGE)
+    if (!host) host = figma.currentPage
+    await harvest(host)
+
+    const take = (name: string): ComponentNode | null => {
+      const hit = existingSingles.get(name)
+      return hit && !hit.removed ? hit : null
+    }
+    circleMaster = take(PLACEHOLDER_CIRCLE_NAME)
+    squareMaster = take(PLACEHOLDER_SQUARE_NAME)
+
+    if (!circleMaster) {
+      circleMaster = createPlaceholderMaster(PLACEHOLDER_CIRCLE_NAME, CIRCLE_DASHED_PATH)
+      existingSingles.set(PLACEHOLDER_CIRCLE_NAME, circleMaster)
+    }
+    if (!squareMaster) {
+      squareMaster = createPlaceholderMaster(PLACEHOLDER_SQUARE_NAME, SQUARE_DASHED_PATH)
+      existingSingles.set(PLACEHOLDER_SQUARE_NAME, squareMaster)
+    }
+
+    // Drop prior chrome frames; keep the two masters.
+    for (const ch of [...host.children]) {
+      if (ch.type === 'FRAME' && ch.name === 'placeholder-library') ch.remove()
+      else if (ch.type === 'TEXT' && ch.name.startsWith('label/placeholder')) ch.remove()
+    }
+
+    host.appendChild(circleMaster)
+    host.appendChild(squareMaster)
+    circleMaster.x = 80
+    circleMaster.y = 140
+    squareMaster.x = 200
+    squareMaster.y = 140
+
+    try {
+      const title = figma.createText()
+      title.name = 'label/placeholder-title'
+      title.fontName = { family: 'Inter', style: 'Semi Bold' }
+      title.fontSize = 18
+      title.characters = 'Icon placeholders'
+      title.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]
+      host.appendChild(title)
+      title.x = 80
+      title.y = 80
+      const sub = figma.createText()
+      sub.name = 'label/placeholder-sub'
+      sub.fontName = { family: 'Inter', style: 'Regular' }
+      sub.fontSize = 12
+      sub.characters = 'Swap these instances inside Buttons, Inputs, Alerts… for a real glyph from Assets (icon/…).'
+      sub.fills = [{ type: 'SOLID', color: { r: 0.4, g: 0.4, b: 0.45 } }]
+      host.appendChild(sub)
+      sub.x = 80
+      sub.y = 108
+    } catch { /* fonts may still be loading — masters alone are enough */ }
+
+    try { host.backgrounds = [{ type: 'SOLID', color: { r: 0.96, g: 0.96, b: 0.97 } }] } catch {}
+    log('✓ Icon placeholders: circle-dashed · square-dashed')
+  }
+
+  const catPageName = (c: string) => `⬡ Components · ${c}`
+  const builtCatPages: PageNode[] = []
+  let firstCatPage: PageNode | undefined
+  let capFallbackPage: PageNode | undefined   // when makePage() hits the file's page cap
+  let lastPage: PageNode | undefined
+
+  for (const category of categoryList) {
+    const entries = byCategory.get(category)!
+
+    const made = makePage(catPageName(category))
+    // Cap hit — stack onto the last real page we got (or, first time, the
+    // pre-existing shared page / current page).
+    const pg = made ?? capFallbackPage ?? oldPage ?? figma.currentPage
+    if (made) capFallbackPage = made
+    firstCatPage = firstCatPage ?? pg
+    if (!builtCatPages.includes(pg)) builtCatPages.push(pg)
+
+    // Reset the layout cursor only for a genuinely NEW page. When the cap
+    // forced this category onto a page we already used, keep the cursor so
+    // startCategoryRow() stacks it CATEGORY_GAP below the previous row.
+    if (pg !== lastPage) {
+      await harvest(pg)
+      figma.root.appendChild(pg)
+      try { pg.backgrounds = [docSolid(DOC.page)] } catch {}
+      // Pin the WHOLE page — any node dropped straight on it (outside a board)
+      // still needs the bound chrome fills to resolve as the light theme.
+      pinToLightMode(pg, sampleModePin)
+      boardX = 0; boardY = 0; rowH = 0; rowCategory = undefined
+      boardIndex = 0   // per-page board numbering: 01 · … restarts on each page
+    }
+    lastPage = pg
+
+    startCategoryRow(category, pg, entries.length, categoryList.indexOf(category), categoryList.length)
+
+    for (const { entry, spec } of entries) {
+      progress('Components', plannedDone, plannedTotal, entry.page)
+      try {
+        buildEntry(entry, spec, pg, category)
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e)
+        log(`✗ ${entry.set} failed: ${m}`)
+      }
+      plannedDone++
+      // One set per macrotask so Figma paints progress and never locks up.
+      await yieldToUI()
+    }
   }
   progress('Components', plannedTotal, plannedTotal)
+  firstBuiltPage = firstCatPage
 
-  // The old shared page is retired once its sets have moved onto the sheet.
-  // The per-component '❖'/'↳' pages from the previous generation are LEFT
-  // ALONE on purpose: deleting a user's pages is destructive and irreversible,
-  // and any set still on them was just moved here, so they're empty shells the
-  // user can remove at their own pace.
-  if (oldPage && oldPage !== samplePage && oldPage !== figma.currentPage && oldPage.children.length === 0) {
-    oldPage.remove()
+  // Retire the emptied legacy homes. Only if truly empty and not the page the
+  // user is looking at — deleting a page is irreversible, and any set that was
+  // on them was just moved onto a category page.
+  for (const legacyName of ['⬡ Sample', SAMPLE_PAGE, '⬡ Components']) {
+    const p = pageByName(legacyName)
+    if (p && p !== figma.currentPage && !builtCatPages.includes(p) && p.children.length === 0) {
+      try { p.remove() } catch { /* best-effort */ }
+    }
   }
   if (pageLimitHit) {
-    log(`⚠ This file's page limit was reached — the sample sheet shares an existing page.`)
+    log(`⚠ This file's page limit was reached — some categories share a page instead of getting their own.`)
   }
 
   if (firstBuiltPage) {
@@ -6326,7 +7140,7 @@ async function importSample(tokens: DesignTokens): Promise<number> {
     if (placed.length > 0) figma.viewport.scrollAndZoomIntoView(placed)
   }
 
-  log(`✓ Components Overview — ${builtAtoms} elements (${builtVariants} variants), every fill, radius, spacing and text bound to your tokens`)
+  log(`✓ Components — ${builtAtoms} elements (${builtVariants} variants) across ${builtCatPages.length} categor${builtCatPages.length === 1 ? 'y' : 'ies'}, every fill, radius, spacing and text bound to your tokens`)
 
   return builtVariants
 }
@@ -6531,8 +7345,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     card.cornerRadius = 16
     card.paddingTop = 36; card.paddingBottom = 44
     card.paddingLeft = 40; card.paddingRight = 40
-    card.counterAxisSizingMode = 'FIXED'
-    card.resize(CARD_W, 100)
+    vStack(card, CARD_W)
 
     const head = autoFrame(`${title}__head`, 'VERTICAL', 8)
     head.appendChild(mkText(title, { size: 24, style: 'Semi Bold', colorVar: textVar, colorHex: textHex }))
@@ -6561,10 +7374,16 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     return { card, body }
   }
 
-  // Full-width tinted bar that opens a documentation chapter
+  // Full-width tinted bar that opens a documentation chapter.
+  // The fill is BOUND to Surface/layer-2 (docChromeVars.card), not a hardcoded
+  // tint: the board itself is Surface/page, so the bar has to be the next
+  // surface step up or it reads as a flat unnamed rectangle in the layer panel
+  // and stops following the theme the board is pinned to. '#E6E6F7' survives
+  // only as the fallback for a file whose semantics collection has no
+  // layer-2 role to resolve.
   function sectionBar(label: string): FrameNode {
     const bar = autoFrame(`§ ${label}`, 'HORIZONTAL', 8)
-    bar.fills = [solid('#E6E6F7')]
+    bar.fills = [boundFill(cardVar, '#E6E6F7')]
     bar.cornerRadius = 12
     bar.primaryAxisSizingMode = 'FIXED'
     bar.counterAxisSizingMode = 'FIXED'
@@ -6636,8 +7455,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     cover.strokeWeight = 1
     cover.cornerRadius = 16
     cover.clipsContent = true
-    cover.counterAxisSizingMode = 'FIXED'
-    cover.resize(CARD_W, 100)
+    vStack(cover, CARD_W)
     root.appendChild(cover)
 
     // Top black brand bar
@@ -7437,10 +8255,14 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       .map(([k, v]) => [k, pxToFloat(v)] as const)
       .filter(([, px]) => px > 0)
       .sort((a, b) => a[1] - b[1])
-    if (Object.keys(grid).length > 0 || sizes.length > 0) {
+    const selectors = Object.entries(tokens.selector ?? {})
+      .map(([k, v]) => [k, pxToFloat(v)] as const)
+      .filter(([, px]) => px > 0)
+      .sort((a, b) => a[1] - b[1])
+    if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
       await newBoard('Grid & Sizes')
       root.appendChild(sectionBar('Grid & Sizes'))
-      const { card, body } = section('Grid & Sizes', 'Layout grid settings and component height scale.')
+      const { card, body } = section('Grid & Sizes', 'Layout grid settings, component heights, and selector glyph sizes.')
       if (Object.keys(grid).length > 0) {
         const spec = Object.entries(grid).map(([k, v]) => `${k} ${v}`).join('   ·   ')
         body.appendChild(mkText(spec, { size: 12, colorVar: textVar, opacity: 0.9 }))
@@ -7478,6 +8300,44 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
           bindField(bar, 'height', findVar(COLLECTIONS.size, figmaVarName(`role/${role}`)))
           row.appendChild(bar)
           body.appendChild(row)
+        }
+      }
+      if (selectors.length > 0) {
+        body.appendChild(mkText('Selector glyphs — checkbox / radio / switch track height', { size: 11, colorVar: mutedVar, colorHex: mutedHex }))
+        for (const [key, px] of selectors) {
+          const row = autoFrame(`selector-${key}`, 'HORIZONTAL', 16)
+          row.counterAxisAlignItems = 'CENTER'
+          const label = mkText(`${key} · ${px}px`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
+          row.appendChild(label)
+          label.resize(90, label.height)
+          const sq = figma.createFrame()
+          sq.name = `selector-${key}`
+          sq.resize(px, px)
+          sq.cornerRadius = Math.min(4, px / 4)
+          sq.fills = [boundFill(accentVar, accentHex, 0.55)]
+          bindField(sq, 'width', findVar(COLLECTIONS.selector, key))
+          bindField(sq, 'height', findVar(COLLECTIONS.selector, key))
+          row.appendChild(sq)
+          body.appendChild(row)
+        }
+        if (tokens.selectorRoles) {
+          for (const [role, step] of Object.entries(tokens.selectorRoles)) {
+            const px = pxToFloat(tokens.selector?.[step] ?? '')
+            const row = autoFrame(`role-selector-${role}`, 'HORIZONTAL', 16)
+            row.counterAxisAlignItems = 'CENTER'
+            const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
+            row.appendChild(label)
+            label.resize(200, label.height)
+            const sq = figma.createFrame()
+            sq.name = `role-selector-${role}`
+            sq.resize(Math.max(px, 8), Math.max(px, 8))
+            sq.cornerRadius = 4
+            sq.fills = [boundFill(accentVar, accentHex, 0.35)]
+            bindField(sq, 'width', findVar(COLLECTIONS.selector, figmaVarName(`role/${role}`)))
+            bindField(sq, 'height', findVar(COLLECTIONS.selector, figmaVarName(`role/${role}`)))
+            row.appendChild(sq)
+            body.appendChild(row)
+          }
         }
       }
       root.appendChild(card)
@@ -7544,6 +8404,40 @@ const ICONIFY_PREFIXES: Record<string, string> = {
   material: 'material-symbols',
 }
 
+// Figma Community source for each supported library, so the ⬡ Icons page can
+// send the user to the actual file they copy glyphs from.
+//
+// ONLY entries whose URL is known first-hand are listed. A wrong community
+// URL is worse than none — it sends someone to another team's file and they
+// paste the wrong icon set into their system — so every other library falls
+// back to a Community SEARCH for its name (a real, constructible Figma URL)
+// rather than a guessed file id. Add a library here only with its verified
+// link in hand.
+
+// Phosphor placeholder paths (viewBox 0 0 256 256). Shared by component icon
+// slots and the Icons docs specimen — one copy so the mark can't drift.
+// `square-dashed` is Phosphor's `rectangle-dashed` (no separate square glyph);
+// the component is named square-dashed to match Lucide / Figma Assets search.
+const CIRCLE_DASHED_PATH =
+  'M96.26 37.05a8 8 0 0 1 5.74-9.76a104.1 104.1 0 0 1 52 0a8 8 0 0 1-2 15.75a8.2 8.2 0 0 1-2-.26a88.1 88.1 0 0 0-44 0a8 8 0 0 1-9.74-5.73M53.79 55.14a104.05 104.05 0 0 0-26 45a8 8 0 0 0 15.42 4.27a88 88 0 0 1 22-38.09a8 8 0 0 0-11.42-11.18m-10.58 96.41a8 8 0 1 0-15.42 4.28a104.1 104.1 0 0 0 26 45a8 8 0 0 0 11.41-11.22a88.14 88.14 0 0 1-21.99-38.06M150 213.22a88 88 0 0 1-44 0a8 8 0 1 0-4 15.49a104.1 104.1 0 0 0 52 0a8 8 0 0 0-4-15.49M222.65 146a8 8 0 0 0-9.85 5.58a87.9 87.9 0 0 1-22 38.08a8 8 0 1 0 11.42 11.21a104 104 0 0 0 26-45a8 8 0 0 0-5.57-9.87m-9.86-41.54a8 8 0 0 0 15.42-4.28a104 104 0 0 0-26-45A8 8 0 1 0 190.8 66.4a88 88 0 0 1 21.99 38.05Z'
+const SQUARE_DASHED_PATH =
+  'M80,48a8,8,0,0,1-8,8H40V72a8,8,0,0,1-16,0V56A16,16,0,0,1,40,40H72A8,8,0,0,1,80,48ZM32,152a8,8,0,0,0,8-8V112a8,8,0,0,0-16,0v32A8,8,0,0,0,32,152Zm40,48H40V184a8,8,0,0,0-16,0v16a16,16,0,0,0,16,16H72a8,8,0,0,0,0-16Zm72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm80-24a8,8,0,0,0-8,8v16H184a8,8,0,0,0,0,16h32a16,16,0,0,0,16-16V184A8,8,0,0,0,224,176Zm0-72a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V112A8,8,0,0,0,224,104Zm-8-64H184a8,8,0,0,0,0,16h32V72a8,8,0,0,0,16,0V56A16,16,0,0,0,216,40Zm-72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Z'
+const PLACEHOLDER_MASTER_SIZE = 24
+const PLACEHOLDER_CIRCLE_NAME = 'icon/circle-dashed'
+const PLACEHOLDER_SQUARE_NAME = 'icon/square-dashed'
+const ICON_FIGMA_FILES: Record<string, { label: string; url: string }> = {
+  phosphor: {
+    label: 'Phosphor Icons — Figma Community',
+    url: 'https://www.figma.com/community/file/903830135544202908/phosphor-icons',
+  },
+}
+function iconLibrarySource(libKey: string, libName: string): { label: string; url: string } {
+  return ICON_FIGMA_FILES[libKey] ?? {
+    label: `${libName || 'Icon libraries'} — Figma Community`,
+    url: `https://www.figma.com/community/search?resource_type=files&q=${encodeURIComponent(libName || 'icons')}`,
+  }
+}
+
 // Core UI glyphs — canonical name + per-collection overrides where a set names
 // the concept differently. Names Iconify can't resolve are skipped silently
 // (reported in `not_found`), so partial coverage degrades gracefully.
@@ -7574,6 +8468,8 @@ const ICON_CORE: { name: string; alias?: Record<string, string> }[] = [
   { name: 'minus',           alias: { 'material-symbols': 'remove' } },
   { name: 'x',               alias: { heroicons: 'x-mark', 'radix-icons': 'cross-2', 'material-symbols': 'close' } },
   { name: 'check' },
+  { name: 'circle-dashed' },
+  { name: 'square-dashed',   alias: { ph: 'rectangle-dashed', lucide: 'square-dashed' } },
   { name: 'check-circle',    alias: { lucide: 'circle-check', 'radix-icons': 'check-circled' } },
   { name: 'x-circle',        alias: { lucide: 'circle-x', 'radix-icons': 'cross-circled', 'material-symbols': 'cancel' } },
   { name: 'plus-circle',     alias: { lucide: 'circle-plus', 'radix-icons': 'plus-circled', 'material-symbols': 'add-circle' } },
@@ -7768,9 +8664,7 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
       card = figma.createFrame()
       card.name = name
       card.layoutMode = 'VERTICAL'
-      card.primaryAxisSizingMode = 'AUTO'
-      card.counterAxisSizingMode = 'FIXED'
-      card.resize(GRID_W, 100)
+      vStack(card, GRID_W)
       card.itemSpacing = 16
       card.paddingTop = 24; card.paddingBottom = 24
       card.paddingLeft = 24; card.paddingRight = 24
@@ -7831,10 +8725,12 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   // One card per family — switching libraries starts a new card and leaves the
   // previous one (and its placed instances) untouched.
   let libCard: FrameNode | undefined
+  let libGrid: FrameNode | undefined
   let libCount = 0
   if (prefix) {
     const { card, grid } = sectionCard(`icons/lib-${libKey}`, `${libName} — Core UI Set`)
     libCard = card
+    libGrid = grid
     // Migrate loose components from older imports into the framed grid.
     for (const [name, comp] of existingComponents) {
       if (name.startsWith(`icon/${libKey}/`) && comp.parent !== grid) grid.appendChild(comp)
@@ -8006,8 +8902,7 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   panel.cornerRadius = 16
   panel.paddingTop = PANEL_PAD; panel.paddingBottom = PANEL_PAD
   panel.paddingLeft = PANEL_PAD; panel.paddingRight = PANEL_PAD
-  panel.counterAxisSizingMode = 'FIXED'
-  panel.resize(PANEL_W, 100)
+  vStack(panel, PANEL_W)
 
   const crumb = docFrame('breadcrumb', 'HORIZONTAL', 8)
   crumb.primaryAxisSizingMode = 'FIXED'
@@ -8044,6 +8939,8 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   }
   docBullet(specs, 'Token-tinted',
     'Library glyphs bind fills and strokes to the primary ink semantic variable — switch the page\'s variable mode and every icon follows the theme.')
+  docBullet(specs, 'Empty slots, not stand-in glyphs',
+    'Components render instances of icon/circle-dashed and icon/square-dashed wherever an icon belongs. Swap those for a real glyph from Assets. See "Bring your own icons" below.')
   panel.appendChild(specs)
 
   panel.appendChild(docDivider('FEATURES'))
@@ -8073,8 +8970,7 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   hint.cornerRadius = 10
   hint.paddingTop = 14; hint.paddingBottom = 14
   hint.paddingLeft = 16; hint.paddingRight = 16
-  hint.counterAxisSizingMode = 'FIXED'
-  hint.resize(PANEL_INNER, 60)
+  vStack(hint, PANEL_INNER)
   hint.appendChild(wrapText(docText('Insert icons easily to your canvas', 12, 'Medium', DOC.text, 1, iconsChrome.text), PANEL_INNER - 32))
   hint.appendChild(wrapText(docText('hold ⇧ Shift + I, search “icon/” and press insert — or drag any glyph from Assets to the canvas', 10.5, 'Regular', DOC.muted, 1, iconsChrome.muted), PANEL_INNER - 32))
   panel.appendChild(hint)
@@ -8086,12 +8982,296 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   board.x = MARGIN
   board.y = TOP
 
+  // ── "Bring your own icons" board ──────────────────────────────────────────
+  // Component icon holes are instances of icon/circle-dashed and
+  // icon/square-dashed (built on ⬡ Icon Placeholders during Components).
+  // This board shows both marks and how to Swap instance for a real glyph.
+  {
+    const source = iconLibrarySource(libKey, libName)
+    const swap = docFrame('docs/icons-swap-panel', 'VERTICAL', 20)
+    swap.fills = [docSolid(DOC.card, 1, iconsChrome.board)]
+    swap.strokes = [docSolid(DOC.border, 1, iconsChrome.border)]
+    swap.strokeWeight = 1
+    swap.cornerRadius = 16
+    swap.paddingTop = PANEL_PAD; swap.paddingBottom = PANEL_PAD
+    swap.paddingLeft = PANEL_PAD; swap.paddingRight = PANEL_PAD
+    vStack(swap, PANEL_W)
+
+    swap.appendChild(docText('Foundations  /  Icons  /  Library', 9, 'Regular', DOC.muted, 1, iconsChrome.secondary))
+    swap.appendChild(wrapText(docText('Bring your own icons', 22, 'Semi Bold', DOC.text, 1, iconsChrome.text), PANEL_INNER))
+    const swapIntro = wrapText(docText(
+      'Buttons, inputs, alerts and nav rows ship with an empty slot — circle-dashed or square-dashed — never a real glyph. Swap the instance for any icon/<library>/… set from this page or Community.',
+      12, 'Regular', DOC.muted, 1, iconsChrome.muted), PANEL_INNER)
+    swapIntro.lineHeight = { value: 150, unit: 'PERCENT' }
+    swap.appendChild(swapIntro)
+
+    const demo = docFrame('slot-specimen', 'HORIZONTAL', 16)
+    demo.counterAxisAlignItems = 'CENTER'
+    demo.paddingTop = 14; demo.paddingBottom = 14
+    demo.paddingLeft = 16; demo.paddingRight = 16
+    demo.cornerRadius = 10
+    demo.fills = [docSolid(DOC.faint, 1, iconsChrome.card)]
+    demo.strokes = [docSolid(DOC.border, 1, iconsChrome.border)]
+    demo.strokeWeight = 1
+    const paint = docSolid(DOC.text, 1, iconsChrome.text)
+    const showPath = (path: string, label: string) => {
+      const wrap = figma.createFrame()
+      wrap.name = label
+      wrap.fills = []
+      wrap.resize(24, 24)
+      try {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><path fill="#000000" d="${path}"/></svg>`
+        const glyph = figma.createNodeFromSvg(svg)
+        if (glyph.width !== 24) glyph.rescale(24 / glyph.width)
+        glyph.name = label
+        for (const n of [glyph, ...glyph.findAll()]) {
+          const g = n as SceneNode & GeometryMixin
+          if ('fills' in g && Array.isArray(g.fills) && (g.fills as Paint[]).some((f) => f.type === 'SOLID')) {
+            try { g.fills = [paint] } catch { /* locked */ }
+          }
+        }
+        wrap.appendChild(glyph)
+        glyph.x = 0; glyph.y = 0
+      } catch { /* skip */ }
+      demo.appendChild(wrap)
+    }
+    showPath(CIRCLE_DASHED_PATH, 'circle-dashed')
+    showPath(SQUARE_DASHED_PATH, 'square-dashed')
+    demo.appendChild(wrapText(docText(
+      'Select the nested circle-dashed / square-dashed instance → Swap instance → pick icon/<library>/…',
+      10.5, 'Regular', DOC.muted, 1, iconsChrome.muted), PANEL_INNER - 32 - 72))
+    swap.appendChild(demo)
+
+    swap.appendChild(docDivider('HOW TO'))
+    const steps = docFrame('steps', 'VERTICAL', 14)
+    docBullet(steps, `1 · Open ${libName || 'your icon library'} in the Community`,
+      'Follow the link below, then “Open in Figma” — it lands as a separate file you can copy from.')
+    docBullet(steps, '2 · Or use the sets on this page',
+      libCount > 0
+        ? `The ${libCount} glyphs above are already components — right-click the placeholder instance → “Swap instance” and pick one of icon/${libKey}/…`
+        : 'Once a library is selected in the configurator, its core set is imported here as swappable components.')
+    docBullet(steps, '3 · Swap the placeholder',
+      'Inside a component, select the nested circle-dashed or square-dashed instance and swap it for the glyph you need. Masters live on ⬡ Icon Placeholders.')
+    docBullet(steps, '4 · Paste from Community if you prefer',
+      'Select a glyph in the Community file, ⌘C / Ctrl+C, paste over the placeholder, then delete the old instance.')
+    swap.appendChild(steps)
+
+    swap.appendChild(docDivider('SOURCE'))
+    const linkBox = docFrame('community-link', 'VERTICAL', 6)
+    linkBox.fills = [docSolid(DOC.faint, 1, iconsChrome.card)]
+    linkBox.strokes = [docSolid(DOC.border, 1, iconsChrome.border)]
+    linkBox.strokeWeight = 1
+    linkBox.cornerRadius = 10
+    linkBox.paddingTop = 14; linkBox.paddingBottom = 14
+    linkBox.paddingLeft = 16; linkBox.paddingRight = 16
+    vStack(linkBox, PANEL_INNER)
+    linkBox.appendChild(wrapText(docText(source.label, 12, 'Medium', DOC.text, 1, iconsChrome.text), PANEL_INNER - 32))
+    // Real hyperlink AND the literal URL as text: the link is one click in
+    // Figma, the text is what survives a screenshot or a copy-paste into a
+    // handoff doc.
+    const url = wrapText(docText(source.url, 10.5, 'Regular', accent, 1, iconsChrome.accentText), PANEL_INNER - 32)
+    try { url.hyperlink = { type: 'URL', value: source.url } } catch {}
+    linkBox.appendChild(url)
+    swap.appendChild(linkBox)
+
+    const swapBoard = docBoard('docs/board · Icons — Library', 'Foundations  /  Icons  /  Library',
+      tokens.project || 'Design System', PANEL_W)
+    swapBoard.appendChild(swap)
+    pg.appendChild(swapBoard)
+    swapBoard.x = MARGIN
+    swapBoard.y = TOP + Math.ceil(board.height) + 64
+  }
+
   // Back to wherever the user was before the import.
   if (prevPage !== pg) {
     try { await figma.setCurrentPageAsync(prevPage) } catch {}
   }
 
   return created
+}
+
+// ─── Getting started page ───────────────────────────────────────────────────
+// A "⬡ Getting started" page between ⬡ Cover and ⬡ Documentation: what Escala
+// is, where the file comes from, how the plugin consumes the JSON, why the
+// GitHub copy matters, the naming conventions, and how the page list is
+// organized. Eight prose boards in the same editorial grammar as ⬡
+// Documentation (rounded slab + tinted section bar), every fill/ink bound to a
+// real semantic role via docChromeVarsFrom + pinned to the first theme.
+//
+// The copy mirrors the configurator's own About sections (AboutMenu.tsx →
+// SECTIONS). It is a hand-kept parallel — the plugin can't import from the web
+// app — so it is deliberately short and only states things that change rarely.
+// Do not grow it into full marketing copy; that lives at escalatokens.com.
+async function importGettingStarted(tokens: DesignTokens): Promise<boolean> {
+  const PAGE = '⬡ Getting started'
+  const project = tokens.project || 'Design System'
+  const SITE = 'www.escalatokens.com'
+  const REPO = 'https://github.com/Duscenko/escala-tokens'
+  // Same slug rule as the web app's syncProjectId() — the URL shown here must
+  // match the one it actually publishes to.
+  const slug = (project.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')) || 'design-system'
+
+  const allVars = await figma.variables.getLocalVariablesAsync()
+  const allCols = await figma.variables.getLocalVariableCollectionsAsync()
+  const chrome = docChromeVarsFrom(semLookupFor(tokens, allVars, allCols))
+  const modePin = docModePin(tokens, allCols)
+  const typo = await typoVarMap()
+
+  const fontFamily = tokens.typography?.fontFamily || 'Inter'
+  const loaded = new Set<string>()
+  for (const style of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) {
+    try { await figma.loadFontAsync({ family: fontFamily, style }); loaded.add(style) } catch {
+      try { await figma.loadFontAsync({ family: 'Inter', style }) } catch {}
+    }
+  }
+  const fontFor = (s: DocFontStyle): FontName =>
+    loaded.has(s) ? { family: fontFamily, style: s } : { family: 'Inter', style: s }
+
+  const { docSolid, docText, docFrame, wrapText, docBoard } =
+    docChrome(fontFor, typo, tokens.typography.sizes, chrome, modePin)
+
+  let page = figma.root.children.find((p) => p.name === PAGE) as PageNode | undefined
+  if (!page) {
+    page = figma.createPage()
+    page.name = PAGE
+  } else {
+    await page.loadAsync()
+    for (const child of [...page.children]) child.remove()
+  }
+  const pg = page
+  try { pg.backgrounds = [docSolid(DOC.page)] } catch {}
+  pinToLightMode(pg, modePin)
+
+  // Prose board width — wider than PANEL_W (that's a spec sidebar; this is
+  // reading copy). docBoard adds 48px padding per side.
+  const W = 640
+  const GAP = 96
+  let x = 120
+
+  // ── Local prose helpers — wrap at the board's inner width, not PANEL_INNER
+  //    (docBullet's built-in wrap is sized for the 380px spec panel). ─────────
+  function h2(parent: FrameNode, s: string) {
+    parent.appendChild(wrapText(docText(s, 26, 'Semi Bold', DOC.text, 1, chrome.text), W))
+  }
+  function para(parent: FrameNode, s: string) {
+    const t = wrapText(docText(s, 13, 'Regular', DOC.muted, 1, chrome.muted), W)
+    t.lineHeight = { value: 155, unit: 'PERCENT' }
+    parent.appendChild(t)
+  }
+  function bullet(parent: FrameNode, title: string, desc: string, link?: string) {
+    const b = docFrame(`b-${title.toLowerCase().replace(/\W+/g, '-')}`, 'VERTICAL', 4)
+    b.appendChild(wrapText(docText(title, 13, 'Medium', DOC.text, 1, chrome.text), W))
+    const d = wrapText(docText(desc, 12, 'Regular', DOC.muted, 1, chrome.muted), W)
+    d.lineHeight = { value: 150, unit: 'PERCENT' }
+    if (link) { try { d.hyperlink = { type: 'URL', value: link } } catch { /* plan */ } }
+    b.appendChild(d)
+    parent.appendChild(b)
+  }
+  function divider(parent: FrameNode) {
+    const r = figma.createFrame()
+    r.name = 'rule'
+    r.resize(W, 1)
+    r.fills = [docSolid(DOC.border, 1, chrome.border)]
+    parent.appendChild(r)
+    r.layoutSizingHorizontal = 'FILL'
+  }
+
+  // One board. `docBoard` gives the slab + section bar; we append a padded
+  // body column.
+  function board(barLabel: string, build: (body: FrameNode) => void): FrameNode {
+    const b = docBoard(`docs/gs · ${barLabel}`, `Getting started  /  ${barLabel}`, project, W)
+    const body = docFrame('body', 'VERTICAL', 16)
+    vStack(body, W)
+    b.appendChild(body)
+    build(body)
+    pg.appendChild(b)
+    b.x = x
+    b.y = 120
+    x += Math.ceil(b.width) + GAP
+    return b
+  }
+
+  // 1 · Introduction ──────────────────────────────────────────────────────────
+  board('Introduction', (body) => {
+    h2(body, 'This file is generated')
+    para(body, `Every page here is built by the Escala plugin from a single payload published by Escala Tokens (${SITE}) — a configurator for design-token systems. You define a palette, type scale, spacing, radius and the rest once; Escala derives the full scales, keeps light and dark in step, and ships tokens.json, variables.css, a README and this Figma file, all from that one payload.`)
+    para(body, 'Nothing here is drawn by hand. Every fill, radius, gap and text style binds to a Figma Variable, so a re-sync updates the file in place and switching a variable mode previews a theme.')
+    divider(body)
+    bullet(body, 'Source', `${REPO.replace('https://', '')} — MIT licence`, REPO)
+  })
+
+  // 2 · Where this file comes from ────────────────────────────────────────────
+  board('Where this comes from', (body) => {
+    h2(body, 'Where this comes from')
+    para(body, 'Escala Tokens is the source of truth. It publishes your system as tokens.json to a per-project URL; the plugin fetches that JSON and writes it into this file as Variables, styles, components and docs.')
+    divider(body)
+    bullet(body, '1 · Configure', `${SITE} — edit the system on the web. Every export derives from one payload.`)
+    bullet(body, '2 · Publish', `${SITE}/api/tokens?project=${slug} — the web app POSTs tokens.json to this scoped URL. This is the sync channel.`)
+    bullet(body, '3 · Import', 'This plugin. Paste the URL once; it reads the JSON and builds the file.')
+    bullet(body, '4 · Live sync (optional)', 'With auto-sync on, a web edit re-publishes and the plugin re-imports variables + styles ~1.5s after you stop.')
+  })
+
+  // 3 · Two ways to work ─────────────────────────────────────────────────────
+  board('Two ways to work', (body) => {
+    h2(body, 'Two ways to work')
+    para(body, 'How you consume this file depends on how you plan to use the system.')
+    divider(body)
+    bullet(body, 'Option 1 · Design inside this file', 'Use it directly for exploration and early concepts. Simple, but it mixes system maintenance with product work — less suited to long-term product design.')
+    bullet(body, 'Option 2 · Publish as a library (recommended)', 'Publish this file as a Figma library and build product screens in separate files. The system stays isolated and stable; product files stay light. Library updates are reviewed and applied selectively, so a product stays aligned without surprise breakage.')
+  })
+
+  // 4 · The plugin and the JSON ──────────────────────────────────────────────
+  board('The plugin & the JSON', (body) => {
+    h2(body, 'The plugin & the JSON')
+    para(body, 'An Import runs up to six phases — Variables, Styles, Components, Icons, Cover, Documentation. Each is independent: one failing never blocks the others.')
+    para(body, 'A Live Sync is not a full import. It refreshes Variables and Styles only, never pages. Everything the plugin draws is variable-bound, so updating the variables re-themes every placed instance automatically. New components, the cover and these boards come from a manual Import.')
+    divider(body)
+    bullet(body, 'Sync URL', `${SITE}/api/tokens?project=${slug} — GET is public (that's what the plugin reads); POST is the web app only.`)
+  })
+
+  // 5 · Saving to GitHub ────────────────────────────────────────────────────
+  board('Save to GitHub', (body) => {
+    h2(body, 'Save to GitHub')
+    para(body, 'The sync URL is a delivery channel, not a backup. Treat it as disposable and keep the durable copy in a repo.')
+    divider(body)
+    bullet(body, 'The slug is the project name', `Renaming the system changes its slug (${slug}) and its sync URL. Old links stop resolving.`)
+    bullet(body, 'The write key is local', "The first publish returns a claim, stored in that browser's localStorage. Clear the browser or move machines and you can no longer overwrite that slug.")
+    bullet(body, 'GitHub is the durable copy', 'Pushing to a repo writes .escala/system.json — the full system plus the claim. It is the only way to recover the system, and its write access, from another machine or after a browser reset, and what future previews and updates should build from.')
+  })
+
+  // 6 · Naming conventions ──────────────────────────────────────────────────
+  board('Naming conventions', (body) => {
+    h2(body, 'Naming conventions')
+    para(body, 'Names describe intent, not appearance, so the system can change visually without a rename.')
+    divider(body)
+    bullet(body, 'Primitives — 1 to 12', 'Every colour family is a 12-step Radix ramp: accent-1 … accent-12. Step 9 is the anchor (your input hex); 11–12 are the accessible text tones. Never referenced by a component directly.')
+    bullet(body, 'Semantics — by role', 'Surface/page, Content/primary, Action/primary/default, Border/control — a role names what a value is for. Components bind here.')
+    bullet(body, 'One collection per category', 'Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid — each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme.')
+  })
+
+  // 7 · How this file is organized ──────────────────────────────────────────
+  board('How this file is organized', (body) => {
+    h2(body, 'How this file is organized')
+    para(body, 'Pages run from foundational to applied — the same order the system is built in.')
+    divider(body)
+    bullet(body, 'Getting started', 'This page.')
+    bullet(body, 'Documentation', 'Every foundation — colour, type, spacing, radius, shadow, grid, sizes — as live specimens bound to the variables.')
+    bullet(body, 'Components · <category>', 'One page per catalogue category: Button & Actions, Form Controls, Indicators, Content & Surfaces, Feedback, Navigation. Splitting by role keeps each page scannable; every element is a documented, token-bound component set.')
+    bullet(body, 'Icons', 'The chosen icon library as swappable components, plus how to bring your own.')
+  })
+
+  // 8 · Repository & licence ────────────────────────────────────────────────
+  board('Repository & licence', (body) => {
+    h2(body, 'Repository & licence')
+    para(body, 'Escala Tokens and its source are the work of Cesar Durango.')
+    divider(body)
+    bullet(body, 'GitHub', REPO.replace('https://', ''), REPO)
+    bullet(body, 'Licence', 'MIT · © 2026 Duscenko')
+    bullet(body, 'Contact', 'duscenko.com')
+  })
+
+  log(`✓ Getting started page rebuilt on "${PAGE}" (8 boards)`)
+  return true
 }
 
 // ─── Cover page ──────────────────────────────────────────────────────────────
@@ -8424,15 +9604,34 @@ async function exportVariablesJson() {
 figma.showUI(__html__, { width: 880, height: 620, themeColors: true })
 
 // Foundation pages always lead the page list — ⬡ Cover opens the file, then
-// ⬡ Documentation and ⬡ Icons, followed by the "❖ Category / ↳ Component"
-// catalog. Runs when the plugin opens and after every import, even a failed
-// one, so the order holds no matter how the file got rearranged.
+// ⬡ Getting started, ⬡ Documentation, the six '⬡ Components · <category>'
+// pages (in catalogue order), then ⬡ Icons. Runs when the plugin opens and
+// after every import,
+// even a failed one, so the order holds no matter how the file got
+// rearranged. The category order mirrors CATALOG in importSample — kept in
+// sync by eye, since CATALOG is scoped to that function.
+const COMPONENT_CATEGORY_ORDER = [
+  'Button & Actions', 'Form Controls', 'Indicators',
+  'Content & Surfaces', 'Feedback', 'Navigation',
+]
 function ensureFoundationPageOrder() {
   let idx = 0
-  for (const name of ['⬡ Cover', '⬡ Documentation', '⬡ Components Overview', '⬡ Icons']) {
-    const foundation = figma.root.children.find((p) => p.name === name)
-    if (foundation) figma.root.insertChild(idx++, foundation)
-  }
+  const place = (p: PageNode | undefined) => { if (p) figma.root.insertChild(idx++, p) }
+  const byName = (name: string) => figma.root.children.find((p) => p.name === name)
+
+  place(byName('⬡ Cover'))
+  place(byName('⬡ Getting started'))
+  place(byName('⬡ Documentation'))
+  // Legacy single page — only present until its next import splits it.
+  place(byName('⬡ Components Overview'))
+  for (const cat of COMPONENT_CATEGORY_ORDER) place(byName(`⬡ Components · ${cat}`))
+  // Any category page whose name isn't in the list above (a future CATALOG
+  // category) still gets ordered here rather than stranded after Icons.
+  for (const p of figma.root.children.filter(
+    (p) => p.name.startsWith('⬡ Components · ') &&
+      !COMPONENT_CATEGORY_ORDER.some((c) => p.name === `⬡ Components · ${c}`),
+  )) place(p)
+  place(byName('⬡ Icons'))
 }
 ensureFoundationPageOrder()
 
@@ -8655,6 +9854,113 @@ function resetFile() {
   figma.root.setPluginData(FILE_DOCS_REV_KEY, '')
 }
 
+/** Value-only pull from Figma → Escala. Structural edits (new/renamed vars,
+ *  hand-made components) are reported as rejected — they are not system
+ *  settings and must not invent catalogue entries or token names. */
+type FigmaEditRejection = {
+  kind: 'new-variable' | 'renamed-or-unknown' | 'new-component' | 'unsupported-value'
+  detail: string
+}
+
+type FigmaEditsReport = {
+  kind: 'escala-figma-edits/v1'
+  project: string
+  checkedAt: string
+  supported: {
+    typography?: { fontFamily?: string; headingFontFamily?: string }
+  }
+  rejected: FigmaEditRejection[]
+  summary: { supported: number; rejected: number }
+}
+
+async function collectLocalEdits(baseline: DesignTokens): Promise<FigmaEditsReport> {
+  const rejected: FigmaEditRejection[] = []
+  const supported: FigmaEditsReport['supported'] = {}
+  let supportedCount = 0
+
+  const cols = await figma.variables.getLocalVariableCollectionsAsync()
+  const allVars = await figma.variables.getLocalVariablesAsync()
+  const byColl = new Map<string, Variable[]>()
+  for (const v of allVars) {
+    const list = byColl.get(v.variableCollectionId) ?? []
+    list.push(v)
+    byColl.set(v.variableCollectionId, list)
+  }
+
+  const typoCol = cols.find((c) => c.name === COLLECTIONS.typography)
+  if (typoCol) {
+    const typoVars = byColl.get(typoCol.id) ?? []
+    const knownPrefix = (name: string) => {
+      const base = name.split('#')[0]
+      return base === TYPOGRAPHY_FAMILY_VARS.body
+        || base === TYPOGRAPHY_FAMILY_VARS.display
+        || base === TYPOGRAPHY_FAMILY_VARS.legacyBody
+        || base === TYPOGRAPHY_FAMILY_VARS.legacyDisplay
+        || base.startsWith('size/')
+        || base.startsWith('weight/')
+        || base.startsWith('line-height/')
+        || base.startsWith('letter-spacing/')
+        || base.startsWith('role/')
+    }
+    for (const v of typoVars) {
+      if (!knownPrefix(v.name)) {
+        rejected.push({
+          kind: 'new-variable',
+          detail: `Typography/${v.name} — new variables aren't system settings; add them in Escala first.`,
+        })
+      }
+    }
+
+    const bodyVar = typoVars.find((v) => v.name === TYPOGRAPHY_FAMILY_VARS.body || v.name === TYPOGRAPHY_FAMILY_VARS.legacyBody)
+    const displayVar = typoVars.find((v) => v.name === TYPOGRAPHY_FAMILY_VARS.display || v.name === TYPOGRAPHY_FAMILY_VARS.legacyDisplay)
+    const mid = typoCol.defaultModeId
+    const bodyNow = bodyVar ? varStringAt(bodyVar, mid) : undefined
+    const displayNow = displayVar ? varStringAt(displayVar, mid) : undefined
+    const firstTheme = (baseline.colors.themeOrder ?? [])[0]
+    const bodyWant = normalizeFontFamilyName(
+      (firstTheme && baseline.foundationsByTheme?.[firstTheme]?.typography?.fontFamily)
+      || baseline.typography?.fontFamily,
+    )
+    const displayWant = normalizeFontFamilyName(
+      (firstTheme && baseline.foundationsByTheme?.[firstTheme]?.typography?.headingFontFamily)
+      || baseline.typography?.headingFontFamily
+      || bodyWant,
+    )
+    if (bodyNow && normalizeFontFamilyName(bodyNow) !== bodyWant) {
+      supported.typography = { ...supported.typography, fontFamily: normalizeFontFamilyName(bodyNow) }
+      supportedCount++
+    }
+    if (displayNow && normalizeFontFamilyName(displayNow) !== displayWant) {
+      supported.typography = { ...supported.typography, headingFontFamily: normalizeFontFamilyName(displayNow) }
+      supportedCount++
+    }
+  }
+
+  // Hand-made components on non-plugin pages — never invent a catalogue key.
+  for (const pg of figma.root.children) {
+    if (pg.type !== 'PAGE' || pg.name.startsWith('⬡')) continue
+    try {
+      await (pg as PageNode).loadAsync()
+    } catch { continue }
+    const sets = (pg as PageNode).findAll((n) => n.type === 'COMPONENT_SET') as ComponentSetNode[]
+    for (const s of sets) {
+      rejected.push({
+        kind: 'new-component',
+        detail: `"${s.name}" on page "${pg.name}" — components aren't read into Escala's catalogue. Add a plugin gate first.`,
+      })
+    }
+  }
+
+  return {
+    kind: 'escala-figma-edits/v1',
+    project: baseline.project || 'design-system',
+    checkedAt: new Date().toISOString(),
+    supported,
+    rejected,
+    summary: { supported: supportedCount, rejected: rejected.length },
+  }
+}
+
 // ─── What this file actually contains ────────────────────────────────────────
 // Overview used to describe the SYSTEM (accent, typeface, themes) but never the
 // FILE, so there was no way to see that e.g. the pages were missing — which is
@@ -8668,6 +9974,7 @@ function resetFile() {
 interface FileAssets {
   cover: boolean
   documentation: boolean
+  gettingStarted: boolean
   sample: boolean
   icons: boolean
   variables: number
@@ -8688,7 +9995,11 @@ async function reportFileAssets(): Promise<FileAssets> {
   return {
     cover: names.has('⬡ Cover'),
     documentation: names.has('⬡ Documentation'),
-    sample: names.has('⬡ Components Overview'),
+    gettingStarted: names.has('⬡ Getting started'),
+    // Any category page counts as "components present" — plus the legacy
+    // single page, until it's split on the next import.
+    sample: names.has('⬡ Components Overview') ||
+      [...names].some((n) => n.startsWith('⬡ Components · ')),
     icons: names.has('⬡ Icons'),
     variables,
     collections,
@@ -8735,6 +10046,30 @@ figma.ui.onmessage = async (msg: {
   // the last run intended to build.
   if (msg.type === 'report-assets') {
     figma.ui.postMessage({ type: 'assets', assets: await reportFileAssets() })
+    return
+  }
+
+  // Diff this file's Escala variables against the last imported payload.
+  // Supported = value edits that map to system settings. Rejected = structural
+  // changes Escala cannot absorb (new vars, new components, renames).
+  if (msg.type === 'check-local-edits') {
+    const record = readFileTokens()
+    const baseline = record?.tokens ?? msg.tokens
+    if (!baseline) {
+      figma.ui.postMessage({
+        type: 'local-edits',
+        error: 'No imported system in this file — Import or Live Sync once first.',
+      })
+      return
+    }
+    try {
+      const report = await collectLocalEdits(baseline)
+      log(`Local edits: ${report.summary.supported} supported · ${report.summary.rejected} rejected`)
+      figma.ui.postMessage({ type: 'local-edits', report })
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e)
+      figma.ui.postMessage({ type: 'local-edits', error: m })
+    }
     return
   }
 
@@ -8884,6 +10219,9 @@ figma.ui.onmessage = async (msg: {
       wantComponents && 'Components',
       options.importIcons && 'Icons',
       wantCover && 'Cover',
+      // Getting started rides with Documentation — same phase gate, no toggle
+      // of its own (it's a fixed handoff page, like Cover).
+      wantDocumentation && 'Getting started',
       wantDocumentation && 'Documentation',
     ].filter(Boolean) as string[]
     let phaseIdx = 0
@@ -8928,9 +10266,14 @@ figma.ui.onmessage = async (msg: {
         // ticked when the icon tint needs to follow too.
         if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
           const added: string[] = []
-          if (semanticsRebuilt && !wantComponents) { wantComponents = true; added.push('Components') }
+          // docsMustRebuild pulls Components in too now: DOCS_REV 8 moved the
+          // catalogue from one '⬡ Components Overview' page to a page per
+          // category, so an existing file needs the rebuild to get the split
+          // (and to re-home its sets) on the next sync, not only on an
+          // explicit Import.
+          if ((semanticsRebuilt || docsMustRebuild) && !wantComponents) { wantComponents = true; added.push('Components') }
           if (!wantCover) { wantCover = true; added.push('Cover') }
-          if (!wantDocumentation) { wantDocumentation = true; added.push('Documentation') }
+          if (!wantDocumentation) { wantDocumentation = true; added.push('Getting started', 'Documentation') }
           if (added.length > 0) {
             planned.push(...added)
             const why = semanticsRebuilt
@@ -8946,7 +10289,7 @@ figma.ui.onmessage = async (msg: {
         await phase('Styles', async () => { totalStyles = await importStyles(tokens) })
       }
       if (wantComponents) {
-        await phase('Components', async () => { totalComponents = await importSample(tokens) })
+        await phase('Components', async () => { totalComponents = await importSample(tokens, options.importAllComponents === true) })
       }
       if (options.importIcons) {
         await phase('Icons', async () => { totalIcons = await importIcons(tokens) })
@@ -8955,6 +10298,7 @@ figma.ui.onmessage = async (msg: {
         await phase('Cover', async () => { hasCover = await importCover(tokens) })
       }
       if (wantDocumentation) {
+        await phase('Getting started', async () => { await importGettingStarted(tokens) })
         await phase('Documentation', async () => { totalDocs = await importDocumentation(tokens) })
         writeDocsRev()
       }

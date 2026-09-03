@@ -254,6 +254,7 @@
     border: "Border",
     opacity: "Opacity",
     size: "Size",
+    selector: "Selector",
     grid: "Grid",
     icons: "Icons",
     copy: "Copy"
@@ -261,7 +262,7 @@
   var PLUGIN_COLLECTION_NAMES = new Set(Object.values(COLLECTIONS));
   var PLUGIN_STYLE_ROOTS = /* @__PURE__ */ new Set(["Type", "Shadow", "Gradient", "Grid"]);
   var INHERITED_STYLE_FOLDERS = ["Type", "Shadow", "Gradient", "Grid", "Scale", "Semantic"];
-  var DOCS_REV = 6;
+  var DOCS_REV = 10;
   var FILE_DOCS_REV_KEY = "sd-docs-rev";
   var FILE_PRIMITIVES_HIDDEN_KEY = "sd-primitives-hidden-v1";
   function collectionPanelOrder(tokens) {
@@ -273,6 +274,7 @@
       { name: COLLECTIONS.icons, include: !!((_b = tokens.icons) == null ? void 0 : _b.library) },
       { name: COLLECTIONS.opacity, include: !!tokens.opacity },
       { name: COLLECTIONS.radius, include: true },
+      { name: COLLECTIONS.selector, include: !!tokens.selector },
       { name: COLLECTIONS.size, include: !!tokens.sizes },
       { name: COLLECTIONS.spacing, include: true },
       { name: COLLECTIONS.typography, include: true }
@@ -297,45 +299,15 @@
   function archFigmaName(groupLabel, key) {
     return figmaVarName(`${groupLabel}/${key}`);
   }
-  function scopesForSemantic(name) {
-    const group = name.split("/")[0].toLowerCase();
-    switch (group) {
-      case "content":
-      case "text":
-        return ["TEXT_FILL"];
-      case "border":
-      case "outlines":
-      case "separators":
-        return ["STROKE_COLOR"];
-      case "action":
-      case "accent":
-      case "surface":
-      case "background":
-      case "base":
-      case "card":
-      case "popover":
-      case "primary":
-      case "secondary":
-      case "muted":
-      case "layer":
-      case "field":
-      case "core":
-      case "surfaces":
-      case "backgrounds":
-      case "fills":
-      case "materials":
-        return ["FRAME_FILL", "SHAPE_FILL"];
-      case "status":
-      case "icon":
-      case "support":
-      case "destructive":
-        return ["FRAME_FILL", "SHAPE_FILL", "TEXT_FILL", "STROKE_COLOR"];
-      default:
-        return ["ALL_FILLS", "STROKE_COLOR"];
-    }
+  function scopesForSemantic(_name) {
+    return ["ALL_SCOPES"];
   }
   function scopesForCollection(collName, varName) {
     switch (collName) {
+      // Ramps exist only to back aliases — empty scopes keeps them out of every
+      // fill/stroke/effect picker. Semantics (above) stay ALL_SCOPES.
+      case COLLECTIONS.primitives:
+        return [];
       case COLLECTIONS.spacing:
         return ["GAP", "WIDTH_HEIGHT"];
       case COLLECTIONS.radius:
@@ -343,6 +315,8 @@
       case COLLECTIONS.border:
         return ["STROKE_FLOAT"];
       case COLLECTIONS.size:
+        return ["WIDTH_HEIGHT"];
+      case COLLECTIONS.selector:
         return ["WIDTH_HEIGHT"];
       case COLLECTIONS.opacity:
         return ["OPACITY"];
@@ -466,9 +440,37 @@
       "background-error-solid": ["status", "critical.surface-solid"],
       "background-success-primary": ["status", "success.surface"],
       "background-warning-primary": ["status", "warning.surface"],
-      "border-primary": ["border", "default"],
+      // Solid fills for the other three severities. Critical was the only one
+      // Categorical shipped a solid pair for, so these had nothing to bind to
+      // and fell through to the hex fallback in `pair()`.
+      "background-success-solid": ["status", "success.surface-solid"],
+      "background-warning-solid": ["status", "warning.surface-solid"],
+      // Info had NO categorical mapping at all, which is why InlineAlert Info
+      // shipped `pair()`'s literal `#1570ef` on `#131c2a` — both verified
+      // byte-for-byte in the Figma file against the fallbacks below.
+      "status-info": ["status", "info.surface-solid"],
+      "status-info-subtle": ["status", "info.surface"],
+      "text-info": ["status", "info.content"],
+      // The stroke around a status surface. Was a magic `0.4` in this file and a
+      // magic `33` (20%) in the configurator's own specimen — 40% in Figma vs
+      // 20% in the preview, same component. Now one alpha token per severity.
+      "status-error-border": ["status", "critical.border"],
+      "status-warning-border": ["status", "warning.border"],
+      "status-success-border": ["status", "success.border"],
+      "status-info-border": ["status", "info.border"],
+      // `border-primary` is the flat catalogue's CONTROL stroke, so it follows
+      // the control boundary through the phase-1 split — that role is
+      // `border.control` now, not `border.default` (which became the decorative
+      // ladder's middle rung). Same resolved value; the name moved.
+      "border-primary": ["border", "control"],
       "border-secondary": ["border", "subtle"],
-      "border-strong": ["border", "strong"],
+      "border-strong": ["border", "control-hover"],
+      // Dividers and rules. Deliberately mapped, deliberately NOT moved onto the
+      // decorative ladder's heavier rungs in this phase: every component here
+      // keeps the exact colour it had, so the split is provably a rename. Which
+      // of the ~20 stroke call sites should drop from the boundary to a
+      // decorative tone is a look decision, not a rename.
+      "border-tertiary": ["border", "subtle"],
       "border-focus": ["border", "focus"],
       "border-brand": ["border", "accent"],
       "border-error": ["border", "critical"],
@@ -479,6 +481,9 @@
       // Not an ALL_ROLES key — button label ink is content.on-action, not inverse.
       "content-on-brand": ["content", "on-action"],
       "status-on-solid": ["status", "critical.on-solid"],
+      "status-warning-on": ["status", "warning.on-solid"],
+      "status-success-on": ["status", "success.on-solid"],
+      "status-info-on": ["status", "info.on-solid"],
       "content-brand": ["content", "accent"],
       "content-brand-hover": ["content", "link.hover"],
       "content-disabled": ["content", "disabled"],
@@ -587,6 +592,7 @@
       borderStrong: sem.varFor("border-strong", "Border/strong", "border/strong"),
       board: sem.varFor("background-primary", "Surface/page", "surface/page", "background/primary", "surface/0"),
       card: sem.varFor("background-tertiary", "Surface/layer-2", "surface/layer-2", "background/tertiary", "surface/2"),
+      inverse: sem.varFor("background-inverse", "Surface/inverse", "surface/inverse", "background/inverse", "background/overlay", "bg/inverse"),
       accentText: sem.varFor("content-brand", "Content/accent", "content/accent", "Content/brand", "content/brand", "text/brand-secondary"),
       accentBorder: sem.varFor("border-brand", "Border/accent", "border/accent", "border/brand")
     };
@@ -605,6 +611,12 @@
       node.setExplicitVariableModeForCollection(pin.collection, pin.modeId);
     } catch (e) {
     }
+  }
+  function vStack(f, width) {
+    f.counterAxisSizingMode = "FIXED";
+    f.resize(width, Math.max(1, f.height));
+    f.primaryAxisSizingMode = "AUTO";
+    return f;
   }
   var ARCH_LABEL = {
     astryx: "Astryx",
@@ -785,7 +797,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C;
     let count = 0;
     semanticsRebuilt = false;
     foundationsRebuilt = false;
@@ -853,12 +865,13 @@
         }
       }
       if (found) {
-        if (scopes) {
+        if (scopes !== void 0) {
           try {
             found.scopes = scopes;
           } catch (e) {
           }
         }
+        applyVarDescription(found, collection.name, safe);
         return found;
       }
       let created;
@@ -870,7 +883,7 @@
         throw e;
       }
       count++;
-      if (scopes) {
+      if (scopes !== void 0) {
         try {
           created.scopes = scopes;
         } catch (e) {
@@ -882,9 +895,19 @@
         } catch (e) {
         }
       }
+      applyVarDescription(created, collection.name, safe);
       cache.set(safe, created);
       allVars.push(created);
       return created;
+    }
+    function applyVarDescription(variable, collectionName, varName) {
+      var _a2, _b2;
+      const desc = (_b2 = (_a2 = tokens.descriptions) == null ? void 0 : _a2[collectionName]) == null ? void 0 : _b2[varName];
+      if (typeof desc !== "string") return;
+      try {
+        if (variable.description !== desc) variable.description = desc;
+      } catch (e) {
+      }
     }
     function setDefault(collection, v, value) {
       for (const mode of collection.modes) {
@@ -922,27 +945,136 @@
         log(`Removed ${removed.length} stale ${collLabel} token${removed.length > 1 ? "s" : ""} (${removed.slice(0, 6).join(", ")}${removed.length > 6 ? `, +${removed.length - 6} more` : ""}) \u2014 not in the system any more`);
       }
     }
-    function emitCollection(collName, entries, type, transform, nameOf = (k) => k) {
+    const foundationThemes = (() => {
+      var _a2;
+      const fb = tokens.foundationsByTheme;
+      if (!fb) return [];
+      const order = (_a2 = tokens.colors.themeOrder) != null ? _a2 : [];
+      return [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))];
+    })();
+    const capFoundationTheme = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+    function themeMapsDiffer(pick, root) {
+      var _a2;
+      if (foundationThemes.length === 0) return false;
+      if (root !== void 0) {
+        const rootSig = JSON.stringify(root != null ? root : null);
+        if (foundationThemes.some((t) => {
+          var _a3;
+          return JSON.stringify((_a3 = pick(t)) != null ? _a3 : null) !== rootSig;
+        })) return true;
+      }
+      if (foundationThemes.length < 2) return false;
+      const first = JSON.stringify((_a2 = pick(foundationThemes[0])) != null ? _a2 : null);
+      return foundationThemes.slice(1).some((t) => {
+        var _a3;
+        return JSON.stringify((_a3 = pick(t)) != null ? _a3 : null) !== first;
+      });
+    }
+    function ensureNamedModes(col, keys) {
+      const labels = keys.map((k) => [k, capFoundationTheme(k)]);
+      try {
+        col.renameMode(col.defaultModeId, labels[0][1]);
+      } catch (e) {
+      }
+      pruneModes(col, new Set(labels.map(([, l]) => l)), col.name);
+      const modeIdOf2 = { [labels[0][0]]: col.defaultModeId };
+      const skipped = [];
+      for (const [key, label] of labels.slice(1)) {
+        const found = col.modes.find((m) => m.name === label);
+        if (found) {
+          modeIdOf2[key] = found.modeId;
+          continue;
+        }
+        try {
+          modeIdOf2[key] = col.addMode(label);
+        } catch (e) {
+          skipped.push(label);
+        }
+      }
+      if (skipped.length > 0) {
+        log(`\u26A0 ${skipped.length} ${col.name} theme column${skipped.length > 1 ? "s" : ""} skipped (${skipped.join(", ")}) \u2014 your Figma plan's mode-per-collection limit was reached.`);
+      }
+      return modeIdOf2;
+    }
+    function writeByTheme(v, byTheme, modeIdOf2) {
+      var _a2;
+      let fallback;
+      for (const theme of foundationThemes) {
+        const val = byTheme[theme];
+        if (val !== void 0 && fallback === void 0) fallback = val;
+      }
+      for (const theme of foundationThemes) {
+        const mid = modeIdOf2[theme];
+        const val = (_a2 = byTheme[theme]) != null ? _a2 : fallback;
+        if (mid && val !== void 0) v.setValueForMode(mid, val);
+      }
+    }
+    function emitCollection(collName, entries, type, transform, nameOf = (k) => k, themeMapOf) {
+      var _a2, _b2, _c2;
       if (!entries || entries.length === 0) return;
       const col = findOrCreateCollection(collName);
       const cache = cacheFor(col);
-      for (const [key, val] of entries) {
+      const root = Object.fromEntries(entries);
+      const useModes = !!(themeMapOf && themeMapsDiffer((t) => themeMapOf(t), root));
+      const modeIdOf2 = useModes ? ensureNamedModes(col, foundationThemes) : void 0;
+      const keys = new Set(Object.keys(root));
+      if (useModes && themeMapOf) {
+        for (const t of foundationThemes) Object.keys((_a2 = themeMapOf(t)) != null ? _a2 : {}).forEach((k) => keys.add(k));
+      }
+      for (const key of keys) {
+        const rawRoot = root[key];
+        if (rawRoot === void 0 && !(useModes && themeMapOf && foundationThemes.some((t) => {
+          var _a3;
+          return (_a3 = themeMapOf(t)) == null ? void 0 : _a3[key];
+        }))) continue;
         const varName = nameOf(key);
-        setDefault(col, upsertVarIn(col, cache, varName, type, scopesForCollection(collName, figmaVarName(varName))), transform(val));
+        const v = upsertVarIn(col, cache, varName, type, scopesForCollection(collName, figmaVarName(varName)));
+        if (modeIdOf2 && themeMapOf) {
+          const byTheme = {};
+          for (const t of foundationThemes) {
+            const raw = (_c2 = (_b2 = themeMapOf(t)) == null ? void 0 : _b2[key]) != null ? _c2 : rawRoot;
+            if (raw !== void 0) byTheme[t] = transform(raw);
+          }
+          writeByTheme(v, byTheme, modeIdOf2);
+        } else if (rawRoot !== void 0) {
+          setDefault(col, v, transform(rawRoot));
+        }
       }
     }
-    function emitRoleAliases(collName, roles, primitiveNameOf) {
-      if (!roles) return 0;
+    function emitRoleAliases(collName, roles, primitiveNameOf, themeRolesOf) {
+      var _a2, _b2, _c2;
+      const rootRoles = roles != null ? roles : {};
+      const allRoles = new Set(Object.keys(rootRoles));
+      if (themeRolesOf) {
+        for (const t of foundationThemes) Object.keys((_a2 = themeRolesOf(t)) != null ? _a2 : {}).forEach((k) => allRoles.add(k));
+      }
+      if (allRoles.size === 0) return 0;
       const col = findOrCreateCollection(collName);
       const cache = cacheFor(col);
+      const useModes = !!(themeRolesOf && themeMapsDiffer((t) => themeRolesOf(t), rootRoles));
+      const modeIdOf2 = useModes ? ensureNamedModes(col, foundationThemes) : void 0;
       let n = 0;
-      for (const [role, step] of Object.entries(roles)) {
-        if (typeof step !== "string" || !step) continue;
-        const prim = cache.get(figmaVarName(primitiveNameOf(step)));
-        if (!prim) continue;
+      for (const role of allRoles) {
         const v = upsertVarIn(col, cache, `role/${role}`, "FLOAT", scopesForCollection(collName, `role/${role}`));
-        setDefault(col, v, figma.variables.createVariableAlias(prim));
-        n++;
+        if (modeIdOf2 && themeRolesOf) {
+          const byTheme = {};
+          for (const t of foundationThemes) {
+            const step = (_c2 = (_b2 = themeRolesOf(t)) == null ? void 0 : _b2[role]) != null ? _c2 : rootRoles[role];
+            if (typeof step !== "string" || !step) continue;
+            const prim = cache.get(figmaVarName(primitiveNameOf(step)));
+            if (!prim) continue;
+            byTheme[t] = figma.variables.createVariableAlias(prim);
+          }
+          writeByTheme(v, byTheme, modeIdOf2);
+          n++;
+        } else {
+          const step = rootRoles[role];
+          if (typeof step !== "string" || !step) continue;
+          const prim = cache.get(figmaVarName(primitiveNameOf(step)));
+          if (!prim) continue;
+          setDefault(col, v, figma.variables.createVariableAlias(prim));
+          n++;
+        }
       }
       return n;
     }
@@ -986,35 +1118,98 @@
         const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body);
         return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
       })();
-      await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily);
-      await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily);
-      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
-        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody), bodyFamily);
-      }
-      if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
-        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay), headingFamily);
-      }
-      const familyNow = (() => {
-        const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body);
-        return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
-      })();
-      if (familyNow === bodyFamily) {
-        if (prevFamily && prevFamily !== bodyFamily) {
-          log(`\u21BB Typography family "${prevFamily}" \u2192 "${bodyFamily}"`);
-        } else {
-          log(`\u2713 Typography family \u2192 "${bodyFamily}"`);
+      const typoByTheme = themeMapsDiffer(
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.typography;
+        },
+        tokens.typography
+      );
+      if (typoByTheme) {
+        const modeIdOf2 = ensureNamedModes(typoCol, foundationThemes);
+        const bodyVar = upsertVarIn(typoCol, typoCache, TYPOGRAPHY_FAMILY_VARS.body, "STRING", scopesForCollection(COLLECTIONS.typography, TYPOGRAPHY_FAMILY_VARS.body));
+        const displayVar = upsertVarIn(typoCol, typoCache, TYPOGRAPHY_FAMILY_VARS.display, "STRING", scopesForCollection(COLLECTIONS.typography, TYPOGRAPHY_FAMILY_VARS.display));
+        for (const theme of foundationThemes) {
+          const f = (_d = (_c = tokens.foundationsByTheme) == null ? void 0 : _c[theme]) == null ? void 0 : _d.typography;
+          const body = normalizeFontFamilyName((_e = f == null ? void 0 : f.fontFamily) != null ? _e : tokens.typography.fontFamily);
+          const heading = normalizeFontFamilyName(
+            (_h = (_g = (_f = f == null ? void 0 : f.headingFontFamily) != null ? _f : f == null ? void 0 : f.fontFamily) != null ? _g : tokens.typography.headingFontFamily) != null ? _h : tokens.typography.fontFamily
+          );
+          const mid = modeIdOf2[theme];
+          if (!mid) continue;
+          bodyVar.setValueForMode(mid, body);
+          displayVar.setValueForMode(mid, heading);
+          for (const [key, val] of Object.entries((_i = f == null ? void 0 : f.sizes) != null ? _i : tokens.typography.sizes)) {
+            const v = (_j = typoCache.get(figmaVarName(`size/${key}`))) != null ? _j : upsertVarIn(typoCol, typoCache, `size/${key}`, "FLOAT", scopesForCollection(COLLECTIONS.typography, `size/${key}`));
+            v.setValueForMode(mid, pxToFloat(val));
+          }
+          for (const [key, val] of Object.entries((_k = f == null ? void 0 : f.weights) != null ? _k : tokens.typography.weights)) {
+            const v = (_l = typoCache.get(figmaVarName(`weight/${key}`))) != null ? _l : upsertVarIn(typoCol, typoCache, `weight/${key}`, "FLOAT", scopesForCollection(COLLECTIONS.typography, `weight/${key}`));
+            v.setValueForMode(mid, val);
+          }
+        }
+        if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
+          const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody);
+          for (const theme of foundationThemes) {
+            const mid = modeIdOf2[theme];
+            const f = (_n = (_m = tokens.foundationsByTheme) == null ? void 0 : _m[theme]) == null ? void 0 : _n.typography;
+            if (mid) leg.setValueForMode(mid, normalizeFontFamilyName((_o = f == null ? void 0 : f.fontFamily) != null ? _o : bodyFamily));
+          }
+        }
+        if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
+          const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay);
+          for (const theme of foundationThemes) {
+            const mid = modeIdOf2[theme];
+            const f = (_q = (_p = tokens.foundationsByTheme) == null ? void 0 : _p[theme]) == null ? void 0 : _q.typography;
+            if (mid) {
+              leg.setValueForMode(mid, normalizeFontFamilyName(
+                (_s = (_r = f == null ? void 0 : f.headingFontFamily) != null ? _r : f == null ? void 0 : f.fontFamily) != null ? _s : headingFamily
+              ));
+            }
+          }
+        }
+        const shown = foundationThemes.map((theme) => {
+          var _a2, _b2, _c2;
+          const f = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[theme]) == null ? void 0 : _b2.typography;
+          return `${capFoundationTheme(theme)}="${normalizeFontFamilyName((_c2 = f == null ? void 0 : f.fontFamily) != null ? _c2 : bodyFamily)}"`;
+        }).join(", ");
+        log(`\u2713 Typography per theme (${foundationThemes.length} columns) \u2014 ${shown}`);
+        if (prevFamily && prevFamily !== normalizeFontFamilyName(
+          (_w = (_v = (_u = (_t = tokens.foundationsByTheme) == null ? void 0 : _t[foundationThemes[0]]) == null ? void 0 : _u.typography) == null ? void 0 : _v.fontFamily) != null ? _w : bodyFamily
+        )) {
+          log(`\u21BB Typography family "${prevFamily}" \u2192 theme columns updated from foundationsByTheme`);
         }
       } else {
-        log(`\u2717 Typography "${TYPOGRAPHY_FAMILY_VARS.body}" is still "${familyNow != null ? familyNow : "?"}" \u2014 wanted "${bodyFamily}" from the payload`);
-      }
-      const displayNow = (() => {
-        const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.display);
-        return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
-      })();
-      if (displayNow === headingFamily) {
-        log(`\u2713 Typography families \u2014 body: "${bodyFamily}", display: "${headingFamily}"`);
-      } else {
-        log(`\u2717 Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow != null ? displayNow : "?"}" \u2014 wanted "${headingFamily}" from the payload`);
+        await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily);
+        await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily);
+        if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
+          setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody), bodyFamily);
+        }
+        if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
+          setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay), headingFamily);
+        }
+        const familyNow = (() => {
+          const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body);
+          return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
+        })();
+        if (familyNow === bodyFamily) {
+          if (prevFamily && prevFamily !== bodyFamily) {
+            log(`\u21BB Typography family "${prevFamily}" \u2192 "${bodyFamily}"`);
+          } else {
+            log(`\u2713 Typography family \u2192 "${bodyFamily}"`);
+          }
+        } else {
+          log(`\u2717 Typography "${TYPOGRAPHY_FAMILY_VARS.body}" is still "${familyNow != null ? familyNow : "?"}" \u2014 wanted "${bodyFamily}" from the payload`);
+        }
+        const displayNow = (() => {
+          const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.display);
+          return v ? varStringAt(v, typoCol.defaultModeId) : void 0;
+        })();
+        if (displayNow === headingFamily) {
+          log(`\u2713 Typography families \u2014 body: "${bodyFamily}", display: "${headingFamily}"`);
+        } else {
+          log(`\u2717 Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow != null ? displayNow : "?"}" \u2014 wanted "${headingFamily}" from the payload`);
+        }
       }
       if (tokens.typography.lineHeights) {
         Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar2(`line-height/${key}`, "FLOAT", pxToFloat(val)));
@@ -1081,7 +1276,8 @@
       return aTone - bTone;
     }).forEach(([key, hex]) => {
       if (!hex) return;
-      setDefault(primCol, upsertVarIn(primCol, primCache, primitiveVarName(key), "COLOR"), __spreadProps(__spreadValues({}, hexToRgb(hex)), { a: 1 }));
+      const name = primitiveVarName(key);
+      setDefault(primCol, upsertVarIn(primCol, primCache, name, "COLOR", scopesForCollection(COLLECTIONS.primitives, name)), __spreadProps(__spreadValues({}, hexToRgb(hex)), { a: 1 }));
     });
     log(`\u2713 Primitive scale (${Object.keys(tokens.colors.primitive).length} tones)`);
     if (tokens.colors.primitiveAlpha && Object.keys(tokens.colors.primitiveAlpha).length > 0) {
@@ -1099,12 +1295,13 @@
         return aTone - bTone;
       }).forEach(([key, hex]) => {
         if (!hex) return;
-        setDefault(primCol, upsertVarIn(primCol, primCache, primitiveAlphaVarName(key), "COLOR"), hexToRgba(hex));
+        const name = primitiveAlphaVarName(key);
+        setDefault(primCol, upsertVarIn(primCol, primCache, name, "COLOR", scopesForCollection(COLLECTIONS.primitives, name)), hexToRgba(hex));
       });
       log(`\u2713 Alpha twins (${Object.keys(tokens.colors.primitiveAlpha).length} tones)`);
     }
     if (tokens.colors.background) {
-      setDefault(primCol, upsertVarIn(primCol, primCache, "Background", "COLOR"), __spreadProps(__spreadValues({}, hexToRgb(tokens.colors.background)), { a: 1 }));
+      setDefault(primCol, upsertVarIn(primCol, primCache, "Background", "COLOR", scopesForCollection(COLLECTIONS.primitives, "Background")), __spreadProps(__spreadValues({}, hexToRgb(tokens.colors.background)), { a: 1 }));
     }
     if (figma.root.getPluginData(FILE_PRIMITIVES_HIDDEN_KEY) !== "1") {
       let hidden = 0;
@@ -1131,7 +1328,7 @@
       if (v && !primByHex.has(norm2)) primByHex.set(norm2, v);
     }
     const primAlphaByHex = /* @__PURE__ */ new Map();
-    for (const [key, hex] of Object.entries((_c = tokens.colors.primitiveAlpha) != null ? _c : {})) {
+    for (const [key, hex] of Object.entries((_x = tokens.colors.primitiveAlpha) != null ? _x : {})) {
       if (!hex) continue;
       const v = primCache.get(primitiveAlphaVarName(key));
       const norm2 = rgbaToHex8(hexToRgba(hex));
@@ -1142,7 +1339,7 @@
     const themes = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({
       light: tokens.colors.semantic || {}
     }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const ordered = ((_d = tokens.colors.themeOrder) != null ? _d : []).filter((t) => themes[t]);
+    const ordered = ((_y = tokens.colors.themeOrder) != null ? _y : []).filter((t) => themes[t]);
     const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))];
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const arch = tokens.colors.architecture;
@@ -1201,7 +1398,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_e = tok.byMode[modeKey]) != null ? _e : "", lookup);
+            const rgba = archValueRgba((_z = tok.byMode[modeKey]) != null ? _z : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -1262,7 +1459,7 @@
       for (const [mid, value] of entry.values) v.setValueForMode(mid, value);
     }
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_f = ARCH_LABEL[arch.kind]) != null ? _f : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_A = ARCH_LABEL[arch.kind]) != null ? _A : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -1276,22 +1473,86 @@
       } catch (e) {
       }
     }
-    emitCollection(COLLECTIONS.spacing, Object.entries(tokens.spacing), "FLOAT", pxToFloat);
-    const spacingRoleCount = emitRoleAliases(COLLECTIONS.spacing, tokens.spacingRoles, (s) => s);
+    emitCollection(
+      COLLECTIONS.spacing,
+      Object.entries(tokens.spacing),
+      "FLOAT",
+      pxToFloat,
+      (k) => k,
+      (t) => {
+        var _a2, _b2;
+        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.spacing;
+      }
+    );
+    const spacingRoleCount = emitRoleAliases(
+      COLLECTIONS.spacing,
+      tokens.spacingRoles,
+      (s) => s,
+      (t) => {
+        var _a2, _b2;
+        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.spacingRoles;
+      }
+    );
     log(`\u2713 Spacing tokens (${Object.keys(tokens.spacing).length} steps${spacingRoleCount ? ` \xB7 ${spacingRoleCount} roles` : ""})`);
     if (tokens.padding && Object.keys(tokens.padding).length > 0) {
-      emitCollection(COLLECTIONS.spacing, Object.entries(tokens.padding), "FLOAT", pxToFloat, (k) => `padding/${k}`);
+      emitCollection(
+        COLLECTIONS.spacing,
+        Object.entries(tokens.padding),
+        "FLOAT",
+        pxToFloat,
+        (k) => `padding/${k}`,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.padding;
+        }
+      );
       log(`\u2713 Surface padding tokens (${Object.keys(tokens.padding).length} sides)`);
     }
-    emitCollection(COLLECTIONS.radius, Object.entries(tokens.radius), "FLOAT", pxToFloat);
-    const radiusRoleCount = emitRoleAliases(COLLECTIONS.radius, tokens.radiusRoles, (s) => s);
+    emitCollection(
+      COLLECTIONS.radius,
+      Object.entries(tokens.radius),
+      "FLOAT",
+      pxToFloat,
+      (k) => k,
+      (t) => {
+        var _a2, _b2;
+        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.radius;
+      }
+    );
+    const radiusRoleCount = emitRoleAliases(
+      COLLECTIONS.radius,
+      tokens.radiusRoles,
+      (s) => s,
+      (t) => {
+        var _a2, _b2;
+        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.radiusRoles;
+      }
+    );
     log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""}`);
     const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_g = tokens.borders) == null ? void 0 : _g.width;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_B = tokens.borders) == null ? void 0 : _B.width;
     if (strokeMap) {
       const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
-      emitCollection(COLLECTIONS.border, Object.entries(strokeMap), "FLOAT", pxToFloat, nameOf);
-      const strokeRoleCount = emitRoleAliases(COLLECTIONS.border, tokens.strokeRoles, (s) => s);
+      emitCollection(
+        COLLECTIONS.border,
+        Object.entries(strokeMap),
+        "FLOAT",
+        pxToFloat,
+        nameOf,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.stroke;
+        }
+      );
+      const strokeRoleCount = emitRoleAliases(
+        COLLECTIONS.border,
+        tokens.strokeRoles,
+        (s) => s,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.strokeRoles;
+        }
+      );
       log(`\u2713 Border width tokens (${Object.keys(strokeMap).length}${strokeRoleCount ? ` \xB7 ${strokeRoleCount} roles` : ""})`);
     }
     if (tokens.opacity) {
@@ -1299,16 +1560,75 @@
       log(`\u2713 Opacity tokens (${Object.keys(tokens.opacity).length})`);
     }
     if (tokens.sizes) {
-      emitCollection(COLLECTIONS.size, Object.entries(tokens.sizes), "FLOAT", pxToFloat);
-      const sizeRoleCount = emitRoleAliases(COLLECTIONS.size, tokens.sizeRoles, (s) => s);
+      emitCollection(
+        COLLECTIONS.size,
+        Object.entries(tokens.sizes),
+        "FLOAT",
+        pxToFloat,
+        (k) => k,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.sizes;
+        }
+      );
+      const sizeRoleCount = emitRoleAliases(
+        COLLECTIONS.size,
+        tokens.sizeRoles,
+        (s) => s,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.sizeRoles;
+        }
+      );
       log(`\u2713 Size tokens (${Object.keys(tokens.sizes).length}${sizeRoleCount ? ` \xB7 ${sizeRoleCount} roles` : ""})`);
     }
+    if (tokens.selector) {
+      emitCollection(
+        COLLECTIONS.selector,
+        Object.entries(tokens.selector),
+        "FLOAT",
+        pxToFloat,
+        (k) => k,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.selector;
+        }
+      );
+      const selectorRoleCount = emitRoleAliases(
+        COLLECTIONS.selector,
+        tokens.selectorRoles,
+        (s) => s,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.selectorRoles;
+        }
+      );
+      log(`\u2713 Selector tokens (${Object.keys(tokens.selector).length}${selectorRoleCount ? ` \xB7 ${selectorRoleCount} roles` : ""})`);
+    }
     if (tokens.grid) {
-      emitCollection(COLLECTIONS.grid, Object.entries(tokens.grid), "FLOAT", pxToFloat);
-      const bpRoleCount = emitRoleAliases(COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`);
+      emitCollection(
+        COLLECTIONS.grid,
+        Object.entries(tokens.grid),
+        "FLOAT",
+        pxToFloat,
+        (k) => k,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.grid;
+        }
+      );
+      const bpRoleCount = emitRoleAliases(
+        COLLECTIONS.grid,
+        tokens.breakpointRoles,
+        (s) => `breakpoint-${s}`,
+        (t) => {
+          var _a2, _b2;
+          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.breakpointRoles;
+        }
+      );
       log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_h = tokens.icons) == null ? void 0 : _h.library) {
+    if ((_C = tokens.icons) == null ? void 0 : _C.library) {
       emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
     }
     if (tokens.copy) {
@@ -1763,7 +2083,7 @@
       b.paddingRight = 48;
       pinToLightMode(b, modePin);
       const bar = docFrame(`\xA7 ${barLabel}`, "HORIZONTAL", 8);
-      bar.fills = [docSolid(DOC.bar)];
+      bar.fills = [docSolid(DOC.bar, 1, chrome == null ? void 0 : chrome.card)];
       bar.cornerRadius = 12;
       bar.primaryAxisSizingMode = "FIXED";
       bar.counterAxisSizingMode = "FIXED";
@@ -1779,9 +2099,8 @@
     }
     return { docSolid, docText, docFrame, wrapText, docDivider, docBullet, docBoard };
   }
-  async function importSample(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q;
-    const atoms = (_b = (_a = tokens.atoms) != null ? _a : tokens.components) != null ? _b : [];
+  async function importSample(tokens, includeFullCatalogue = false) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
     const colNameById = new Map(allCols.map((c) => [c.id, c.name]));
@@ -1853,10 +2172,13 @@
       textOnBrand: pair(["Content/on-action", "content/on-action", "content/inverse", "text/on-brand", "text/primary_on-brand", "text/white"], ["content-on-brand", "content-inverse", "text-on-brand", "text-white"], "#ffffff"),
       textOnInverse: pair(["content/inverse", "text/on-inverse", "text/white"], ["content-inverse", "text-on-inverse", "text-white"], "#0f0f0f"),
       textBrand: pair(["content/brand", "text/brand-secondary", "text/brand", "text/accent-primary"], ["content-brand", "text-brand-secondary", "text-brand"], "#8ab4ff"),
-      borderDefault: pair(["border/primary", "border/default", "border"], ["border-primary", "border-default", "border"], "#333333"),
-      // Control stroke — categorical `Border/strong` (WCAG 1.4.11). Flat catalogue
-      // still has `border-strong`; content/primary is a last-resort darker ink.
-      borderStrong: pair(["Border/strong", "border/strong", "content/primary", "border/secondary"], ["border-strong", "content-primary", "border-secondary"], "#454545"),
+      borderDefault: pair(["Border/control", "border/control", "border/primary", "border/default", "border"], ["border-primary", "border-default", "border"], "#333333"),
+      // Control stroke, HOVER step — categorical `Border/control-hover` (WCAG
+      // 1.4.11). `Border/strong` stays in the list because that is what this role
+      // was called before the phase-1 split, so an older payload still resolves
+      // to the same value. Flat catalogue still has `border-strong`;
+      // content/primary is a last-resort darker ink.
+      borderStrong: pair(["Border/control-hover", "border/control-hover", "Border/strong", "border/strong", "content/primary", "border/secondary"], ["border-strong", "content-primary", "border-secondary"], "#454545"),
       borderFocus: pair(["Border/focus", "border/focus", "border/brand", "border/accent"], ["border-focus", "border-brand"], "#3B82F6"),
       borderSubtle: pair(["border/tertiary", "border/subtle", "border/default", "border"], ["border-tertiary", "border-subtle", "border-default"], "#2a2a2a"),
       borderBrand: pair(["border/brand", "border/accent"], ["border-brand"], "#3B82F6"),
@@ -1881,21 +2203,32 @@
       statusErrorSubtle: pair(["Status/critical/surface", "Status/critical.surface", "status/critical/surface", "status/critical.surface", "background/error-primary", "status/error-subtle"], ["background-error-primary", "status-error-subtle"], "#2a1513"),
       // No third "muted" tier — reuses Subtle's key, same as *Subtle above.
       statusErrorMuted: pair(["background/error-primary", "status/error-muted", "status/error-subtle"], ["background-error-primary", "status-error-muted", "status-error-subtle"], "#3a1d1a"),
-      statusWarning: pair(["background/warning-solid", "status/warning"], ["background-warning-solid", "status-warning"], "#dc6803"),
+      statusWarning: pair(["Status/warning/surface-solid", "Status/warning.surface-solid", "status/warning/surface-solid", "status/warning.surface-solid", "background/warning-solid", "status/warning"], ["background-warning-solid", "status-warning"], "#dc6803"),
+      statusWarningOn: pair(["Status/warning/on-solid", "Status/warning.on-solid", "status/warning/on-solid", "status/warning.on-solid"], ["status-warning-on"], "#ffffff"),
       statusWarningSubtle: pair(["Status/warning.surface", "status/warning.surface", "background/warning-primary", "status/warning-subtle"], ["background-warning-primary", "status-warning-subtle"], "#2a2013"),
       statusWarningMuted: pair(["background/warning-primary", "status/warning-muted", "status/warning-subtle"], ["background-warning-primary", "status-warning-muted", "status-warning-subtle"], "#3a2d1a"),
-      statusSuccess: pair(["background/success-solid", "status/success"], ["background-success-solid", "status-success"], "#079455"),
+      statusSuccess: pair(["Status/success/surface-solid", "Status/success.surface-solid", "status/success/surface-solid", "status/success.surface-solid", "background/success-solid", "status/success"], ["background-success-solid", "status-success"], "#079455"),
+      statusSuccessOn: pair(["Status/success/on-solid", "Status/success.on-solid", "status/success/on-solid", "status/success.on-solid"], ["status-success-on"], "#ffffff"),
       statusSuccessSubtle: pair(["Status/success.surface", "status/success.surface", "background/success-primary", "status/success-subtle"], ["background-success-primary", "status-success-subtle"], "#132a1e"),
       statusSuccessMuted: pair(["background/success-primary", "status/success-muted", "status/success-subtle"], ["background-success-primary", "status-success-muted", "status-success-subtle"], "#1a3a2a"),
-      // No background-info-* role exists — left on its old-only keys (see file banner).
-      statusInfo: pair(["status/info"], ["status-info"], "#1570ef"),
-      statusInfoSubtle: pair(["status/info-subtle"], ["status-info-subtle"], "#131c2a"),
-      statusInfoMuted: pair(["status/info-muted", "status/info-subtle"], ["status-info-muted", "status-info-subtle"], "#1a2a3a"),
+      // Info now has real Categorical roles (`Status/info/*`). Until it did, both
+      // of these bound to nothing and painted the literals below — which is
+      // exactly what shipped: an Info alert with a `#1570ef` stroke on `#131c2a`.
+      statusInfo: pair(["Status/info/surface-solid", "Status/info.surface-solid", "status/info/surface-solid", "status/info.surface-solid", "status/info"], ["status-info"], "#1570ef"),
+      statusInfoOn: pair(["Status/info/on-solid", "Status/info.on-solid", "status/info/on-solid", "status/info.on-solid"], ["status-info-on"], "#ffffff"),
+      statusInfoSubtle: pair(["Status/info/surface", "Status/info.surface", "status/info/surface", "status/info.surface", "status/info-subtle"], ["status-info-subtle"], "#131c2a"),
+      statusInfoMuted: pair(["Status/info/surface", "Status/info.surface", "status/info-muted", "status/info-subtle"], ["status-info-muted", "status-info-subtle"], "#1a2a3a"),
+      // The stroke of a status surface — one alpha token per severity, replacing
+      // a hardcoded 0.4 opacity applied to the SOLID fill. See ARCH_ROLE_MAP.
+      statusErrorBorder: pair(["Status/critical/border", "Status/critical.border", "status/critical/border", "status/critical.border"], ["status-error-border"], "#f0443866"),
+      statusWarningBorder: pair(["Status/warning/border", "Status/warning.border", "status/warning/border", "status/warning.border"], ["status-warning-border"], "#f7900966"),
+      statusSuccessBorder: pair(["Status/success/border", "Status/success.border", "status/success/border", "status/success.border"], ["status-success-border"], "#17b26a66"),
+      statusInfoBorder: pair(["Status/info/border", "Status/info.border", "status/info/border", "status/info.border"], ["status-info-border"], "#2e90fa66"),
       textError: pair(["Status/critical/content", "Status/critical.content", "status/critical/content", "status/critical.content", "content/error", "text/error"], ["content-error", "text-error"], "#f97066"),
       textWarning: pair(["Status/warning.content", "status/warning.content", "content/warning", "text/warning"], ["content-warning", "text-warning"], "#fdb022"),
       textSuccess: pair(["Status/success.content", "status/success.content", "content/success", "text/success"], ["content-success", "text-success"], "#47cd89"),
       // No content-info role exists — left on its old-only keys (see file banner).
-      textInfo: pair(["text/info"], ["text-info"], "#53b1fd")
+      textInfo: pair(["Status/info/content", "Status/info.content", "status/info/content", "status/info.content", "text/info"], ["text-info"], "#53b1fd")
     };
     if (unboundRoles.length > 0) {
       log(`\u2139 ${unboundRoles.length} component role${unboundRoles.length > 1 ? "s have" : " has"} no token in "${COLLECTIONS.semantics}" (${unboundRoles.slice(0, 6).join(", ")}${unboundRoles.length > 6 ? `, +${unboundRoles.length - 6} more` : ""}) \u2014 painted from the system's value, unbound`);
@@ -1909,24 +2242,27 @@
     const wMedium = bestVar(T, "weight/medium");
     const wSemibold = bestVar(T, "weight/semibold", "weight/semi-bold");
     const familyVar = bestVar(T, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody);
+    const radXs = bestVar(COLLECTIONS.radius, "xs");
     const radSm = bestVar(COLLECTIONS.radius, "sm");
     const radMd = bestVar(COLLECTIONS.radius, "md");
     const radLg = bestVar(COLLECTIONS.radius, "lg");
-    const radiusXs = pxToFloat((_d = (_c = tokens.radius) == null ? void 0 : _c.xs) != null ? _d : "4px");
-    const radiusSm = pxToFloat((_f = (_e = tokens.radius) == null ? void 0 : _e.sm) != null ? _f : "4px");
-    const radiusMd = pxToFloat((_h = (_g = tokens.radius) == null ? void 0 : _g.md) != null ? _h : "8px");
-    const radiusLg = pxToFloat((_j = (_i = tokens.radius) == null ? void 0 : _i.lg) != null ? _j : "12px");
-    const radiusXl = pxToFloat((_l = (_k = tokens.radius) == null ? void 0 : _k.xl) != null ? _l : "16px");
-    const radControl = (_m = findVar(COLLECTIONS.radius, "role/control")) != null ? _m : radSm;
-    const radAction = (_n = findVar(COLLECTIONS.radius, "role/action")) != null ? _n : radMd;
-    const radContainer = (_o = findVar(COLLECTIONS.radius, "role/container")) != null ? _o : radLg;
-    const radOverlay = (_p = findVar(COLLECTIONS.radius, "role/overlay")) != null ? _p : radLg;
+    const radiusXs = pxToFloat((_b = (_a = tokens.radius) == null ? void 0 : _a.xs) != null ? _b : "4px");
+    const radiusSm = pxToFloat((_d = (_c = tokens.radius) == null ? void 0 : _c.sm) != null ? _d : "4px");
+    const radiusMd = pxToFloat((_f = (_e = tokens.radius) == null ? void 0 : _e.md) != null ? _f : "8px");
+    const radiusLg = pxToFloat((_h = (_g = tokens.radius) == null ? void 0 : _g.lg) != null ? _h : "12px");
+    const radiusXl = pxToFloat((_j = (_i = tokens.radius) == null ? void 0 : _i.xl) != null ? _j : "16px");
+    const radControl = (_k = findVar(COLLECTIONS.radius, "role/control")) != null ? _k : radXs;
+    const radAction = (_l = findVar(COLLECTIONS.radius, "role/action")) != null ? _l : radSm;
+    const radContainer = (_m = findVar(COLLECTIONS.radius, "role/container")) != null ? _m : radLg;
+    const radOverlay = (_n = findVar(COLLECTIONS.radius, "role/overlay")) != null ? _n : radLg;
     const radPill = findVar(COLLECTIONS.radius, "role/pill");
     const radiusControl = radiusXs;
+    const radiusAction = radiusSm;
     const radiusContainer = radiusLg;
-    const radiusOverlay = radiusXl;
+    const radiusOverlay = radiusLg;
     function fillOf(v, hex, opacity = 1) {
-      let paint = { type: "SOLID", color: hexToRgb(hex), opacity };
+      const { r, g, b, a } = hexToRgba(hex);
+      let paint = { type: "SOLID", color: { r, g, b }, opacity: opacity * a };
       if ((v == null ? void 0 : v.resolvedType) === "COLOR") paint = figma.variables.setBoundVariableForPaint(paint, "color", v);
       return paint;
     }
@@ -2071,7 +2407,81 @@
       arc.y = 0;
       return f;
     }
-    const atomSet = new Set(atoms);
+    let circleMaster = null;
+    let squareMaster = null;
+    function paintSolidTree(root, paint) {
+      const nodes = "findAll" in root ? [root, ...root.findAll()] : [root];
+      for (const n of nodes) {
+        const g = n;
+        if (!("fills" in g) || !Array.isArray(g.fills)) continue;
+        if (!g.fills.some((f) => f.type === "SOLID")) continue;
+        try {
+          g.fills = [paint];
+        } catch (e) {
+        }
+      }
+    }
+    function svgGlyphFromPath(path, size) {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><path fill="#000000" d="${path}"/></svg>`;
+      const glyph = figma.createNodeFromSvg(svg);
+      if (glyph.width !== size && glyph.width > 0) glyph.rescale(size / glyph.width);
+      return glyph;
+    }
+    function createPlaceholderMaster(name, path) {
+      const frame = svgGlyphFromPath(path, PLACEHOLDER_MASTER_SIZE);
+      frame.name = "glyph";
+      const comp = figma.createComponentFromNode(frame);
+      comp.name = name;
+      try {
+        comp.description = name === PLACEHOLDER_CIRCLE_NAME ? "Empty circular icon slot (Phosphor circle-dashed). Swap this instance for any icon/<library>/\u2026 set." : "Empty square icon slot (Phosphor rectangle-dashed). Swap this instance for any icon/<library>/\u2026 set.";
+      } catch (e) {
+      }
+      return comp;
+    }
+    function iconSlot(size, colorPr, name = "icon", kind = "circle") {
+      const f = figma.createFrame();
+      f.name = name;
+      f.fills = [];
+      f.resize(size, size);
+      f.clipsContent = false;
+      const master = kind === "square" ? squareMaster : circleMaster;
+      if (master && !master.removed) {
+        try {
+          const inst = master.createInstance();
+          inst.name = kind === "square" ? "square-dashed" : "circle-dashed";
+          if (Math.abs(inst.width - size) > 0.05 && inst.width > 0) inst.rescale(size / inst.width);
+          paintSolidTree(inst, fillP(colorPr));
+          f.appendChild(inst);
+          inst.x = 0;
+          inst.y = 0;
+          return f;
+        } catch (e) {
+          log(`\u26A0 placeholder instance failed (${e instanceof Error ? e.message : String(e)}) \u2014 inline SVG`);
+        }
+      }
+      try {
+        const path = kind === "square" ? SQUARE_DASHED_PATH : CIRCLE_DASHED_PATH;
+        const glyph = svgGlyphFromPath(path, size);
+        glyph.name = kind === "square" ? "square-dashed" : "circle-dashed";
+        paintSolidTree(glyph, fillP(colorPr));
+        f.appendChild(glyph);
+        glyph.x = 0;
+        glyph.y = 0;
+      } catch (e) {
+        const ring = kind === "square" ? figma.createRectangle() : figma.createEllipse();
+        ring.name = kind === "square" ? "square-dashed" : "circle-dashed";
+        ring.resize(size, size);
+        if (kind === "square" && "cornerRadius" in ring) ring.cornerRadius = Math.max(2, size * 0.12);
+        ring.fills = [];
+        ring.strokes = [fillP(colorPr, 0.75)];
+        ring.strokeWeight = Math.max(1, Math.round(size / 12 * 10) / 10);
+        ring.dashPattern = [2.5, 2];
+        f.appendChild(ring);
+        ring.x = 0;
+        ring.y = 0;
+      }
+      return f;
+    }
     const STATES = ["Default", "Hover", "Pressed", "Focused", "Loading", "Disabled"];
     const BTN_COLORS = {
       Brand: {
@@ -2097,7 +2507,7 @@
       Success: {
         solid: p.statusSuccess,
         hover: p.statusSuccess,
-        on: p.textOnBrand,
+        on: p.statusSuccessOn,
         soft: p.statusSuccessSubtle,
         softText: p.textSuccess,
         line: p.statusSuccess,
@@ -2113,8 +2523,7 @@
       LG: { padV: 12, padH: 20, f: 15, fv: sizeMd, gap: 8 },
       XL: { padV: 14, padH: 24, f: 16, fv: sizeMd, gap: 10 }
     };
-    const BTN_ICON_POS = ["None", "Leading", "Trailing"];
-    function buildButton(c, out, color, style, state, size = "MD", iconPos = "Leading") {
+    function buildButton(c, out, color, style, state, size = "MD") {
       var _a2;
       const k = BTN_COLORS[color];
       const sz = (_a2 = BTN_SIZES[size]) != null ? _a2 : BTN_SIZES.MD;
@@ -2124,7 +2533,7 @@
       c.counterAxisAlignItems = "CENTER";
       pad(c, sz.padV, sz.padH, sz.padV, sz.padH);
       gap(c, sz.gap);
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       const disabled = state === "Disabled";
       const hoverish = state === "Hover" || state === "Pressed";
       const dim = state === "Pressed" ? 0.88 : 1;
@@ -2155,15 +2564,12 @@
         c.fills = hoverish ? [fillP(k.soft, 0.5 * dim)] : [];
       }
       if (state === "Focused") focusRing(c, k.ringHex);
-      const makeIcon = () => {
-        const icon = txt("+", { style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP });
-        icon.name = "icon";
-        return icon;
-      };
       if (state === "Loading") {
         c.appendChild(miniSpinner(sz.f, textP));
-      } else if (iconPos === "Leading") {
-        c.appendChild(makeIcon());
+      } else {
+        const lead = iconSlot(sz.f, textP, "icon-leading", "circle");
+        c.appendChild(lead);
+        out.push({ node: lead, prop: "Show leading icon", def: true });
       }
       const label = txt("Button", {
         roleKey: "button",
@@ -2176,10 +2582,10 @@
       });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Button" });
-      if (iconPos === "Trailing" && state !== "Loading") {
-        const icon = makeIcon();
-        icon.name = "icon-trailing";
-        c.appendChild(icon);
+      if (state !== "Loading") {
+        const trail = iconSlot(sz.f, textP, "icon-trailing", "square");
+        c.appendChild(trail);
+        out.push({ node: trail, prop: "Show trailing icon", def: true });
       }
     }
     const INPUT_STATES = ["Default", "Hover", "Focused", "Filled", "Error", "Loading", "Disabled"];
@@ -2239,7 +2645,7 @@
       labelRow.appendChild(label);
       labelRow.appendChild(txt("*", { style: "Medium", size: s.label, weightVar: wMedium, colorP: p.textError }));
       labelRow.appendChild(txt("(Optional)", { size: s.meta, colorP: metaP }));
-      labelRow.appendChild(txt("\u24D8", { size: s.meta, colorP: metaP }));
+      labelRow.appendChild(iconSlot(s.meta, metaP, "icon-hint", "circle"));
       c.appendChild(labelRow);
       out.push({ node: labelRow, prop: "Show Label", def: true });
       const desc = txt("Description or any kind of additional text.", { size: s.meta, colorP: metaP });
@@ -2260,7 +2666,7 @@
       box.paddingRight = s.padX;
       tryBind(box, "paddingLeft", closestSpacing(s.padX));
       tryBind(box, "paddingRight", closestSpacing(s.padX));
-      bindRadius(box, radAction, radiusMd);
+      bindRadius(box, radAction, radiusAction);
       box.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)];
       const border = disabled ? p.borderDisabled : error ? p.borderError : focused || loading ? p.borderFocus : state === "Hover" ? p.borderStrong : p.borderStrong;
       box.strokes = [fillP(border)];
@@ -2279,7 +2685,8 @@
         d.resize(1, s.h - 14);
       };
       if (meta.lead) {
-        const lead = txt(meta.lead, { size: s.f, colorP: iconP });
+        const leadIsSlot = type === "Icon Leading" || type === "E-Mail" || type === "Password" || type === "Search";
+        const lead = leadIsSlot ? iconSlot(s.f, iconP, "icon-leading", "circle") : txt(meta.lead, { size: s.f, colorP: iconP });
         lead.name = "icon-leading";
         box.appendChild(lead);
       }
@@ -2319,15 +2726,14 @@
         if (type === "E-Mail" && (state === "Hover" || focused)) {
           box.appendChild(circleGlyph(14, "\u2715", p.surface3, p.textSecondary));
         } else if (type === "Password") {
-          const eye = txt("\u{1F441}", { size: s.f, colorP: iconP });
-          eye.name = "icon-eye";
+          const eye = iconSlot(s.f, iconP, "icon-eye", "square");
           box.appendChild(eye);
         } else if (type === "Phone Number") {
-          box.appendChild(txt("\u24D8", { size: s.meta, colorP: iconP }));
+          box.appendChild(iconSlot(s.meta, iconP, "icon-info", "circle"));
         }
       }
       if (meta.trail) {
-        const trail = txt(meta.trail, { size: s.f, colorP: iconP });
+        const trail = type === "Icon Trailing" ? iconSlot(s.f, iconP, "icon-trailing", "square") : txt(meta.trail, { size: s.f, colorP: iconP });
         trail.name = "icon-trailing";
         box.appendChild(trail);
       }
@@ -2335,7 +2741,7 @@
         const d = boxDivider();
         box.appendChild(d);
         fixDivider(d);
-        box.appendChild(txt("\u29C9", { size: s.f, colorP: iconP }));
+        box.appendChild(iconSlot(s.f, iconP, "icon-copy", "square"));
       }
       if (type === "Search") {
         if (!error) {
@@ -2395,7 +2801,7 @@
       c.resize(240, sz.h);
       pad(c, sz.padV, 12, sz.padV, 12);
       gap(c, 8);
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       const disabled = state === "Disabled";
       c.fills = [fillP(disabled ? p.actionDisabledSubtle : p.surfaceInput)];
       const border = disabled ? p.borderDisabled : state === "Error" ? p.borderError : state === "Focused" ? p.borderFocus : p.borderStrong;
@@ -2415,9 +2821,20 @@
       ch.name = "chevron";
       c.appendChild(ch);
     }
+    const selControl = (_o = findVar(COLLECTIONS.selector, "role/control")) != null ? _o : findVar(COLLECTIONS.selector, "md");
+    const selCompact = (_p = findVar(COLLECTIONS.selector, "role/compact")) != null ? _p : findVar(COLLECTIONS.selector, "sm");
+    const selIndicator = (_q = findVar(COLLECTIONS.selector, "role/indicator")) != null ? _q : findVar(COLLECTIONS.selector, "xs");
+    const selectorMd = pxToFloat((_s = (_r = tokens.selector) == null ? void 0 : _r.md) != null ? _s : "18px");
+    const selectorSm = pxToFloat((_u = (_t = tokens.selector) == null ? void 0 : _t.sm) != null ? _u : "15px");
+    const selectorXs = pxToFloat((_w = (_v = tokens.selector) == null ? void 0 : _v.xs) != null ? _w : "12px");
+    function bindBoxSize(node, v, fallback) {
+      node.resize(fallback, fallback);
+      tryBind(node, "width", v);
+      tryBind(node, "height", v);
+    }
     const CHECK_SIZES = {
-      MD: { d: 18, check: 11, f: 14, fv: sizeSm },
-      SM: { d: 15, check: 9, f: 13, fv: sizeSm }
+      MD: { d: selectorMd, dv: selControl != null ? selControl : void 0, check: Math.max(9, Math.round(selectorMd * 0.6)), f: 14, fv: sizeSm },
+      SM: { d: selectorSm, dv: selCompact != null ? selCompact : void 0, check: Math.max(8, Math.round(selectorSm * 0.6)), f: 13, fv: sizeSm }
     };
     function buildCheckbox(c, out, checked, state, size = "MD") {
       var _a2;
@@ -2450,14 +2867,14 @@
       }
       if (state === "Focused") focusRing(box, p.action.hex);
       c.appendChild(box);
-      box.resize(sz.d, sz.d);
+      bindBoxSize(box, sz.dv, sz.d);
       const label = txt("Label", { roleKey: "label", size: sz.f, sizeVar: sz.fv, colorP: disabled ? p.textDisabled : p.textPrimary });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Label" });
     }
     const TOGGLE_SIZES = {
-      MD: { w: 40, h: 22, knob: 18, f: 14, fv: sizeSm },
-      SM: { w: 34, h: 18, knob: 14, f: 13, fv: sizeSm }
+      MD: { w: selectorMd * 2 + 4, h: selectorMd, hv: selControl != null ? selControl : void 0, knob: Math.max(12, selectorMd - 4), f: 14, fv: sizeSm },
+      SM: { w: selectorSm * 2 + 4, h: selectorSm, hv: selCompact != null ? selCompact : void 0, knob: Math.max(10, selectorSm - 4), f: 13, fv: sizeSm }
     };
     function buildToggle(c, out, on, state, size = "MD") {
       var _a2;
@@ -2477,6 +2894,7 @@
       track.primaryAxisAlignItems = on ? "MAX" : "MIN";
       track.counterAxisAlignItems = "CENTER";
       track.resize(sz.w, sz.h);
+      tryBind(track, "height", sz.hv);
       track.paddingLeft = 2;
       track.paddingRight = 2;
       track.fills = [fillP(
@@ -2500,10 +2918,10 @@
     const BADGE_COLORS = {
       Neutral: { solid: p.surfaceInv, on: p.textOnInverse, soft: p.surface2, text: p.textSecondary, line: p.borderStrong },
       Brand: { solid: p.action, on: p.textOnBrand, soft: p.brandSubtle, text: p.textBrand, line: p.borderBrand },
-      Success: { solid: p.statusSuccess, on: p.textOnBrand, soft: p.statusSuccessSubtle, text: p.textSuccess, line: p.statusSuccess },
-      Warning: { solid: p.statusWarning, on: p.textOnBrand, soft: p.statusWarningSubtle, text: p.textWarning, line: p.statusWarning },
-      Error: { solid: p.statusError, on: p.textOnBrand, soft: p.statusErrorSubtle, text: p.textError, line: p.borderError },
-      Info: { solid: p.statusInfo, on: p.textOnBrand, soft: p.statusInfoSubtle, text: p.textInfo, line: p.statusInfo }
+      Success: { solid: p.statusSuccess, on: p.statusSuccessOn, soft: p.statusSuccessSubtle, text: p.textSuccess, line: p.statusSuccess },
+      Warning: { solid: p.statusWarning, on: p.statusWarningOn, soft: p.statusWarningSubtle, text: p.textWarning, line: p.statusWarning },
+      Error: { solid: p.statusError, on: p.statusErrorOn, soft: p.statusErrorSubtle, text: p.textError, line: p.borderError },
+      Info: { solid: p.statusInfo, on: p.statusInfoOn, soft: p.statusInfoSubtle, text: p.textInfo, line: p.statusInfo }
     };
     const BADGE_SIZES = {
       SM: { padV: 2, padH: 8, f: 11, fv: sizeXs },
@@ -2536,16 +2954,12 @@
         tryBind(c, "strokeWeight", borderWidthVar());
         textP = k.text;
       }
-      const makeIcon = (name) => {
-        const icon = txt("\u25CF", { size: Math.round(sz.f * 0.7), colorP: textP });
-        icon.name = name;
-        return icon;
-      };
-      if (iconPos === "Leading") c.appendChild(makeIcon("icon-leading"));
+      const makeIcon = (name, kind = "circle") => iconSlot(Math.round(sz.f * 0.9), textP, name, kind);
+      if (iconPos === "Leading") c.appendChild(makeIcon("icon-leading", "circle"));
       const label = txt("Badge", { roleKey: "label", style: "Medium", size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: textP });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Badge" });
-      if (iconPos === "Trailing") c.appendChild(makeIcon("icon-trailing"));
+      if (iconPos === "Trailing") c.appendChild(makeIcon("icon-trailing", "square"));
     }
     const AVATAR_SIZES = {
       XS: { d: 24, f: 10, sv: sizeXs },
@@ -2606,11 +3020,11 @@
       c.layoutSizingVertical = "HUG";
     }
     const ALERT_STATUS = {
-      Neutral: { solid: p.surfaceInv, subtle: p.surface2, text: p.textSecondary, glyph: "\u24D8" },
-      Info: { solid: p.statusInfo, subtle: p.statusInfoSubtle, text: p.textInfo, glyph: "\u24D8" },
-      Success: { solid: p.statusSuccess, subtle: p.statusSuccessSubtle, text: p.textSuccess, glyph: "\u2713" },
-      Warning: { solid: p.statusWarning, subtle: p.statusWarningSubtle, text: p.textWarning, glyph: "\u26A0" },
-      Error: { solid: p.statusError, subtle: p.statusErrorSubtle, text: p.textError, glyph: "\u2715" }
+      Neutral: { solid: p.surfaceInv, subtle: p.surface2, text: p.textSecondary, on: p.textOnInverse, border: p.borderSubtle },
+      Info: { solid: p.statusInfo, subtle: p.statusInfoSubtle, text: p.textInfo, on: p.statusInfoOn, border: p.statusInfoBorder },
+      Success: { solid: p.statusSuccess, subtle: p.statusSuccessSubtle, text: p.textSuccess, on: p.statusSuccessOn, border: p.statusSuccessBorder },
+      Warning: { solid: p.statusWarning, subtle: p.statusWarningSubtle, text: p.textWarning, on: p.statusWarningOn, border: p.statusWarningBorder },
+      Error: { solid: p.statusError, subtle: p.statusErrorSubtle, text: p.textError, on: p.statusErrorOn, border: p.statusErrorBorder }
     };
     function buildAlertBanner(c, out, status, style) {
       var _a2;
@@ -2628,13 +3042,12 @@
         c.fills = [fillP(k.solid)];
       } else {
         c.fills = [fillP(k.subtle)];
-        c.strokes = [fillP(k.solid, 0.45)];
+        c.strokes = [fillP(k.border)];
         c.strokeWeight = 1;
         tryBind(c, "strokeWeight", borderWidthVar());
       }
-      const onP = solid ? status === "Neutral" ? p.textOnInverse : p.textOnBrand : k.text;
-      const icon = txt(k.glyph, { style: "Medium", size: 14, weightVar: wMedium, colorP: onP });
-      icon.name = "icon-status";
+      const onP = solid ? k.on : k.text;
+      const icon = iconSlot(14, onP, "icon-status", "circle");
       c.appendChild(icon);
       const body = col("content", 2);
       const title = txt("Alert banner title", {
@@ -2663,8 +3076,7 @@
       action.textDecoration = "UNDERLINE";
       c.appendChild(action);
       out.push({ node: action, prop: "Action", def: "Learn more" });
-      const close = txt("\u2715", { size: 12, colorP: onP, opacity: solid ? 0.8 : 0.7 });
-      close.name = "icon-close";
+      const close = iconSlot(12, onP, "icon-close", "square");
       c.appendChild(close);
       out.push({ node: close, prop: "Show Close", def: true });
       c.layoutSizingVertical = "HUG";
@@ -2681,18 +3093,16 @@
       gap(c, 10);
       bindRadius(c, radContainer, radiusContainer);
       c.fills = [fillP(k.subtle)];
-      c.strokes = [fillP(k.solid, 0.4)];
+      c.strokes = [fillP(k.border)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      const icon = txt(k.glyph, { style: "Medium", size: 13, weightVar: wMedium, colorP: k.text });
-      icon.name = "icon-status";
+      const icon = iconSlot(13, k.text, "icon-status", "circle");
       c.appendChild(icon);
       const message = txt("A short inline alert message.", { roleKey: "body-sm", size: 13, sizeVar: sizeSm, colorP: p.textSecondary });
       c.appendChild(message);
       message.layoutSizingHorizontal = "FILL";
       out.push({ node: message, prop: "Message", def: "A short inline alert message." });
-      const close = txt("\u2715", { size: 11, colorP: k.text, opacity: 0.7 });
-      close.name = "icon-close";
+      const close = iconSlot(11, k.text, "icon-close", "square");
       c.appendChild(close);
       out.push({ node: close, prop: "Show Close", def: true });
       c.layoutSizingVertical = "HUG";
@@ -2772,13 +3182,13 @@
       pad(secondary, 8, 14, 8, 14);
       secondary.strokes = [fillP(p.borderDefault)];
       secondary.strokeWeight = 1;
-      bindRadius(secondary, radAction, radiusMd);
+      bindRadius(secondary, radAction, radiusAction);
       secondary.appendChild(txt("Cancel", { roleKey: "button", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textSecondary }));
       footer.appendChild(secondary);
       const primary = row("button-primary", 8);
       pad(primary, 8, 14, 8, 14);
       primary.fills = [fillP(p.action)];
-      bindRadius(primary, radAction, radiusMd);
+      bindRadius(primary, radAction, radiusAction);
       primary.appendChild(txt("Confirm", { roleKey: "button", style: "Medium", size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }));
       footer.appendChild(primary);
       c.appendChild(footer);
@@ -2867,8 +3277,7 @@
       const hoverish = state === "Hover" || state === "Pressed";
       c.fills = hoverish ? [fillP(p.surface2, state === "Pressed" ? 1 : 0.8)] : [];
       if (state === "Focused") focusRing(c, p.action.hex);
-      const icon = txt("\u2715", { style: "Medium", size: sz.f, weightVar: wMedium, colorP: disabled ? p.textDisabled : p.textSecondary });
-      icon.name = "icon";
+      const icon = iconSlot(sz.f, disabled ? p.textDisabled : p.textSecondary, "icon", "circle");
       c.appendChild(icon);
     }
     const FAB_SIZES = {
@@ -2894,8 +3303,7 @@
         visible: true,
         blendMode: "NORMAL"
       }];
-      const icon = txt("+", { style: "Medium", size: s.f, weightVar: wMedium, colorP: p.textOnBrand });
-      icon.name = "icon";
+      const icon = iconSlot(s.f, p.textOnBrand, "icon", "circle");
       c.appendChild(icon);
     }
     const BTNGROUP_SIZES = {
@@ -2913,7 +3321,7 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       c.clipsContent = true;
       ["Day", "Week", "Month"].forEach((label, i) => {
         const seg = row(`segment-${label.toLowerCase()}`, 8);
@@ -2947,7 +3355,7 @@
       c.counterAxisAlignItems = "CENTER";
       pad(c, sz.padV, sz.padH, sz.padV, sz.padH);
       gap(c, 10);
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       c.fills = state === "Hover" ? [fillP(p.surface1)] : [fillP(p.surface0)];
       c.strokes = [fillP(state === "Hover" ? p.borderStrong : p.borderDefault)];
       c.strokeWeight = 1;
@@ -2986,7 +3394,7 @@
       c.fills = [fillP(p.surfaceInv)];
       c.strokes = [fillP(p.borderStrong)];
       c.strokeWeight = 1;
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       const icon = txt(apple ? "" : "\u25B6", { size: 18, colorP: p.textOnInverse });
       icon.name = "store-icon";
       c.appendChild(icon);
@@ -3014,6 +3422,8 @@
         tryBind(box, "strokeWeight", borderWidthVar());
       }
       box.resize(18, 18);
+      tryBind(box, "width", selControl);
+      tryBind(box, "height", selControl);
       return box;
     }
     function buildCheckboxGroup(c, out) {
@@ -3058,6 +3468,8 @@
         dot.layoutSizingVertical = "FIXED";
       }
       o.resize(d, d);
+      tryBind(o, "width", d === selectorSm ? selCompact : selControl);
+      tryBind(o, "height", d === selectorSm ? selCompact : selControl);
       return o;
     }
     function buildRadio(c, out, selected, state, size = "MD") {
@@ -3110,7 +3522,7 @@
       if (state !== "Focused") tryBind(c, "strokeWeight", borderWidthVar());
       if (state === "Focused") focusRing(c, p.borderFocus.hex);
       if (state === "Error") focusRing(c, p.statusError.hex);
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       const content = txt("Placeholder\u2026", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: disabled ? p.textDisabled : p.textPlaceholder });
       content.name = "placeholder";
       c.appendChild(content);
@@ -3146,7 +3558,7 @@
         cell.strokeWeight = active ? 1.5 : 1;
         if (!active) tryBind(cell, "strokeWeight", borderWidthVar());
         if (active) focusRing(cell, p.borderBrand.hex);
-        bindRadius(cell, radAction, radiusMd);
+        bindRadius(cell, radAction, radiusAction);
         if (state === "Filled") {
           cell.appendChild(txt(d, { style: "Medium", size: sz.f, weightVar: wMedium, colorP: p.textPrimary }));
         }
@@ -3163,7 +3575,7 @@
       c.strokes = [fillP(state === "Disabled" ? p.borderDisabled : p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       c.clipsContent = true;
       const disabled = state === "Disabled";
       const stepBtn = (label, name) => {
@@ -3202,7 +3614,7 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       for (const t of ["Design", "Tokens"]) {
         const tag = row(`tag-${t.toLowerCase()}`, 4);
         tag.counterAxisAlignItems = "CENTER";
@@ -3210,7 +3622,7 @@
         tag.fills = [fillP(p.surface2)];
         bindRadius(tag, radControl, radiusControl);
         tag.appendChild(txt(t, { roleKey: "label", size: 12, sizeVar: sizeXs, colorP: p.textSecondary }));
-        tag.appendChild(txt("\u2715", { size: 10, colorP: p.textTertiary }));
+        tag.appendChild(iconSlot(10, p.textTertiary, "remove", "square"));
         c.appendChild(tag);
       }
       const placeholder = txt("Add tag\u2026", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder });
@@ -3268,7 +3680,7 @@
       c.paddingRight = 2;
       c.itemSpacing = 2;
       c.fills = [fillP(p.surface2)];
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       ["List", "Board", "Timeline"].forEach((label, i) => {
         const active = i === 0;
         const seg = row(`segment-${label.toLowerCase()}`, 8);
@@ -3392,8 +3804,7 @@
       const label = txt("Chip", { roleKey: "label", style: "Medium", size: sz.f, sizeVar: sizeXs, weightVar: wMedium, colorP });
       c.appendChild(label);
       out.push({ node: label, prop: "Label", def: "Chip" });
-      const remove = txt("\u2715", { size: sz.rm, colorP, opacity: 0.8 });
-      remove.name = "remove";
+      const remove = iconSlot(sz.rm, colorP, "remove", "square");
       c.appendChild(remove);
     }
     function buildStatusBadge(c, out, status) {
@@ -3409,7 +3820,7 @@
       c.fills = [fillP(k.soft)];
       const dot = figma.createFrame();
       dot.name = "dot";
-      dot.resize(6, 6);
+      bindBoxSize(dot, selIndicator, selectorXs);
       dot.cornerRadius = 9999;
       dot.fills = [fillP(k.solid)];
       c.appendChild(dot);
@@ -3488,11 +3899,11 @@
       trigger.strokes = [fillP(open ? p.borderBrand : p.borderDefault)];
       trigger.strokeWeight = open ? 1.5 : 1;
       if (!open) tryBind(trigger, "strokeWeight", borderWidthVar());
-      bindRadius(trigger, radAction, radiusMd);
+      bindRadius(trigger, radAction, radiusAction);
       pad(trigger, 10, 12, 10, 12);
       if (open) focusRing(trigger, p.borderBrand.hex);
       const lead = row("lead", 8);
-      lead.appendChild(txt("\u{1F50D}", { size: 12, colorP: p.iconQuaternary }));
+      lead.appendChild(iconSlot(12, p.iconQuaternary, "icon", "circle"));
       const query = txt(open ? "ber" : "Search options\u2026", {
         size: 14,
         sizeVar: sizeSm,
@@ -3538,7 +3949,7 @@
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
       tryBind(c, "strokeWeight", borderWidthVar());
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       c.clipsContent = true;
       const prefix = row("prefix", 0);
       prefix.counterAxisSizingMode = "FIXED";
@@ -3621,7 +4032,7 @@
       box.strokes = [fillP(error ? p.borderError : p.borderDefault)];
       box.strokeWeight = 1;
       if (!error) tryBind(box, "strokeWeight", borderWidthVar());
-      bindRadius(box, radAction, radiusMd);
+      bindRadius(box, radAction, radiusAction);
       pad(box, 10, 12, 10, 12);
       box.appendChild(txt("Placeholder Text..", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder }));
       c.appendChild(box);
@@ -3829,7 +4240,7 @@
       out.push({ node: body, prop: "Body", def: body.characters });
       const action = row("action", 6);
       action.fills = [fillP(p.action)];
-      bindRadius(action, radAction, radiusMd);
+      bindRadius(action, radAction, radiusAction);
       pad(action, 8, 14, 8, 14);
       action.appendChild(txt("Copy link", { roleKey: "button", style: "Medium", size: 13, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textOnBrand }));
       c.appendChild(action);
@@ -3842,7 +4253,7 @@
       c.counterAxisAlignItems = "CENTER";
       gap(c, 8);
       c.fills = [];
-      c.appendChild(txt("\u24D8", { size: 14, colorP: p.iconQuaternary }));
+      c.appendChild(iconSlot(14, p.iconQuaternary, "icon", "circle"));
       const bubble = row("bubble", 0);
       bubble.fills = [fillP(p.surfaceInv)];
       bindRadius(bubble, radControl, radiusControl);
@@ -3959,7 +4370,7 @@
       c.fills = [fillP(p.surface1)];
       c.strokes = [fillP(p.borderDefault)];
       c.strokeWeight = 1;
-      bindRadius(c, radAction, radiusMd);
+      bindRadius(c, radAction, radiusAction);
       c.effects = [{ type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.14 }, offset: { x: 0, y: 6 }, radius: 24, spread: -4, visible: true, blendMode: "NORMAL" }];
       for (const item of items) {
         if (item.kind === "separator") {
@@ -4018,7 +4429,7 @@
       const search = row("search", 10);
       search.primaryAxisSizingMode = "FIXED";
       pad(search, 14, 16, 14, 16);
-      search.appendChild(txt("\u{1F50D}", { size: 13, colorP: p.iconQuaternary }));
+      search.appendChild(iconSlot(13, p.iconQuaternary, "icon", "circle"));
       const query = txt("Type a command or search\u2026", { roleKey: "placeholder", size: 14, sizeVar: sizeSm, colorP: p.textPlaceholder });
       search.appendChild(query);
       query.layoutSizingHorizontal = "FILL";
@@ -4049,17 +4460,17 @@
       groupPad.appendChild(group);
       list.appendChild(groupPad);
       const cmds = [
-        ["\u{1F4C4}", "New document", true],
-        ["\u{1F464}", "Invite teammate", false],
-        ["\u2699", "Open settings", false]
+        ["New document", true],
+        ["Invite teammate", false],
+        ["Open settings", false]
       ];
-      for (const [glyph, label, active] of cmds) {
+      for (const [label, active] of cmds) {
         const rowF = row(`cmd-${label.toLowerCase().replace(/\s+/g, "-")}`, 10);
         rowF.primaryAxisSizingMode = "FIXED";
         pad(rowF, 9, 10, 9, 10);
         bindRadius(rowF, radControl, radiusControl);
         if (active) rowF.fills = [fillP(p.surface1Hover)];
-        rowF.appendChild(txt(glyph, { size: 13, colorP: p.iconTertiary }));
+        rowF.appendChild(iconSlot(13, p.iconTertiary, "icon", "circle"));
         rowF.appendChild(txt(label, { roleKey: "body-sm", size: 13, sizeVar: sizeSm, colorP: p.textPrimary }));
         list.appendChild(rowF);
         rowF.layoutSizingHorizontal = "FILL";
@@ -4110,7 +4521,7 @@
       }
       c.appendChild(nav);
       const cluster = row("actions", 10);
-      cluster.appendChild(txt("\u{1F50D}", { size: 14, colorP: p.iconTertiary }));
+      cluster.appendChild(iconSlot(14, p.iconTertiary, "icon-search", "circle"));
       const avatar = figma.createFrame();
       avatar.name = "avatar";
       avatar.layoutMode = "HORIZONTAL";
@@ -4141,13 +4552,13 @@
         g.appendChild(txt(label, { style: "Medium", size: 10, weightVar: wMedium, colorP: p.textPlaceholder }));
         c.appendChild(g);
       }
-      function navItem(glyph, label, active = false) {
+      function navItem(label, active = false) {
         const rowF = row(`item-${label.toLowerCase()}`, 10);
         rowF.primaryAxisSizingMode = "FIXED";
         pad(rowF, 8, 10, 8, 10);
         bindRadius(rowF, radControl, radiusControl);
         if (active) rowF.fills = [fillP(p.brandSubtle)];
-        rowF.appendChild(txt(glyph, { size: 13, colorP: active ? p.iconBrand : p.iconTertiary }));
+        rowF.appendChild(iconSlot(13, active ? p.iconBrand : p.iconTertiary, "icon", "circle"));
         rowF.appendChild(txt(label, {
           style: active ? "Medium" : "Regular",
           size: 13,
@@ -4159,27 +4570,25 @@
         rowF.layoutSizingHorizontal = "FILL";
       }
       groupLabel("WORKSPACE");
-      navItem("\u{1F3E0}", "Dashboard", true);
-      navItem("\u{1F4C1}", "Projects");
-      navItem("\u{1F465}", "Team");
+      navItem("Dashboard", true);
+      navItem("Projects");
+      navItem("Team");
       groupLabel("SYSTEM", true);
-      navItem("\u2699", "Settings");
-      navItem("\u2753", "Support");
+      navItem("Settings");
+      navItem("Support");
       c.resize(220, c.height);
     }
     const SPECS = {
       Button: {
         cols: BTN_COLORS ? Object.keys(BTN_COLORS).length * BTN_STYLES.length : 12,
-        description: "Universal action button. Size \xD7 Color \xD7 Style \xD7 State \xD7 Icon (None/Leading/Trailing) matrix; fills \u2192 component tokens \u2192 semantics.",
+        description: "Universal action button. Size \xD7 Color \xD7 Style \xD7 State; Show leading/trailing icon are set-level toggles bound to icon/circle-dashed \xB7 icon/square-dashed instances.",
         variants: BTN_SIZE_KEYS.flatMap(
           (size) => STATES.flatMap(
             (state) => Object.keys(BTN_COLORS).flatMap(
-              (color) => BTN_STYLES.flatMap(
-                (style) => BTN_ICON_POS.map((iconPos) => ({
-                  props: { Size: size, Color: color, Style: style, State: state, Icon: iconPos },
-                  build: (c, out) => buildButton(c, out, color, style, state, size, iconPos)
-                }))
-              )
+              (color) => BTN_STYLES.map((style) => ({
+                props: { Size: size, Color: color, Style: style, State: state },
+                build: (c, out) => buildButton(c, out, color, style, state, size)
+              }))
             )
           )
         )
@@ -4617,6 +5026,11 @@
         ]
       }
     ];
+    const CATEGORY_ORDER = CATALOG.map((c) => c.category);
+    const CATEGORY_OF_SET = /* @__PURE__ */ new Map();
+    for (const { category, entries } of CATALOG) {
+      for (const e of entries) if (!CATEGORY_OF_SET.has(e.set)) CATEGORY_OF_SET.set(e.set, category);
+    }
     const SAMPLE_PAGE = "\u2B21 Components Overview";
     const SAMPLE = [
       {
@@ -4624,16 +5038,18 @@
         spec: "Button",
         page: "Button",
         cols: 4,
-        // 3 colours × 4 styles × 3 states = 36. Size and Icon collapse to one
-        // value and get stripped from the variant panel by sampleSpec().
-        keep: (p2) => p2.Size === "MD" && p2.Icon === "None" && (p2.State === "Default" || p2.State === "Hover" || p2.State === "Disabled")
+        // Size=MD keeps Overview readable; full State ladder for Brand Solid so
+        // Loading / Focused show up. Other Color×Style combos stay at Default.
+        keep: (p2) => p2.Size === "MD" && (p2.Color === "Brand" && p2.Style === "Solid" && (p2.State === "Default" || p2.State === "Hover" || p2.State === "Pressed" || p2.State === "Focused" || p2.State === "Loading" || p2.State === "Disabled") || p2.State === "Default" && !(p2.Color === "Brand" && p2.Style === "Solid"))
       },
       {
         set: "Input",
         spec: "Input",
         page: "Input",
         cols: 4,
-        keep: (p2) => p2.Size === "MD" && p2.Type === "Default" && (p2.State === "Default" || p2.State === "Focused" || p2.State === "Error" || p2.State === "Disabled")
+        // Playbook: Size × State × Type. Include icon types + the full state
+        // ladder so the variant panel matches Docs, not a 4-cell stub.
+        keep: (p2) => p2.Size === "MD" && (p2.Type === "Default" && (p2.State === "Default" || p2.State === "Hover" || p2.State === "Focused" || p2.State === "Filled" || p2.State === "Error" || p2.State === "Loading" || p2.State === "Disabled") || (p2.Type === "Icon Leading" || p2.Type === "Icon Trailing" || p2.Type === "Search" || p2.Type === "Password" || p2.Type === "E-Mail") && p2.State === "Default")
       },
       {
         set: "Select",
@@ -4692,6 +5108,35 @@
       }));
       return { cols: (_a2 = e.cols) != null ? _a2 : base.cols, variants, description: base.description };
     }
+    function representativeSpec(specKey) {
+      const base = SPECS[specKey];
+      if (!base || base.variants.length === 0) return void 0;
+      if (base.variants.length <= 24) return __spreadProps(__spreadValues({}, base), { representative: true });
+      const uncovered = /* @__PURE__ */ new Set();
+      for (const variant of base.variants) {
+        for (const [key, value] of Object.entries(variant.props)) uncovered.add(`${key}\0${value}`);
+      }
+      const chosen = [];
+      const remaining = [...base.variants];
+      while (uncovered.size > 0 && remaining.length > 0) {
+        let bestIndex = 0;
+        let bestGain = -1;
+        for (let i = 0; i < remaining.length; i++) {
+          let gain = 0;
+          for (const [key, value] of Object.entries(remaining[i].props)) {
+            if (uncovered.has(`${key}\0${value}`)) gain++;
+          }
+          if (gain > bestGain) {
+            bestGain = gain;
+            bestIndex = i;
+          }
+        }
+        const [picked] = remaining.splice(bestIndex, 1);
+        chosen.push(picked);
+        for (const [key, value] of Object.entries(picked.props)) uncovered.delete(`${key}\0${value}`);
+      }
+      return __spreadProps(__spreadValues({}, base), { variants: chosen, representative: true });
+    }
     const ITEM_PREFIX = "   \u21B3 ";
     const oldPage = figma.root.children.find((pg) => pg.name === "\u2B21 Components");
     const existingSets = /* @__PURE__ */ new Map();
@@ -4749,6 +5194,12 @@
     let builtAtoms = 0;
     let boardX = 0;
     let boardIndex = 0;
+    let boardY = 0;
+    let rowH = 0;
+    let rowCategory;
+    const CATEGORY_GAP = 240;
+    const HEAD_GAP = 48;
+    const BAND_W = 560;
     const cursorByPage = /* @__PURE__ */ new Map();
     let firstBuiltPage;
     const sampleTypo = await typoVarMap();
@@ -4805,8 +5256,7 @@
       panel.paddingBottom = PANEL_PAD;
       panel.paddingLeft = PANEL_PAD;
       panel.paddingRight = PANEL_PAD;
-      panel.counterAxisSizingMode = "FIXED";
-      panel.resize(PANEL_W, 100);
+      vStack(panel, PANEL_W);
       const crumb = docFrame("breadcrumb", "HORIZONTAL", 8);
       crumb.primaryAxisSizingMode = "FIXED";
       crumb.counterAxisSizingMode = "FIXED";
@@ -4876,8 +5326,7 @@
       hint.paddingBottom = 14;
       hint.paddingLeft = 16;
       hint.paddingRight = 16;
-      hint.counterAxisSizingMode = "FIXED";
-      hint.resize(PANEL_INNER, 60);
+      vStack(hint, PANEL_INNER);
       hint.appendChild(wrapText(docText("Insert components easily to your canvas", 12, "Medium", DOC.text, 1, sampleChrome.text), PANEL_INNER - 32));
       hint.appendChild(wrapText(docText(`hold \u21E7 Shift + I, search \u201C${entry.set}\u201D and press insert \u2014 or drag it from Assets to the canvas`, 10.5, "Regular", DOC.muted, 1, sampleChrome.muted), PANEL_INNER - 32));
       panel.appendChild(hint);
@@ -4901,6 +5350,60 @@
     }
     function buildVariantMatrix(entry, spec, nodes, set) {
       var _a2;
+      if (spec.representative) {
+        const cols = Math.max(1, Math.min(4, spec.cols, nodes.length));
+        const rows = Math.ceil(nodes.length / cols);
+        const LABEL_PAD = 16;
+        const MIN_CELL_W = 216;
+        const cellW2 = Math.max(MIN_CELL_W, Math.max(...nodes.map((n) => n.width)) + 48);
+        const labelW = cellW2 - LABEL_PAD * 2;
+        const labels = nodes.map((variant) => {
+          const t = docText(variant.name, 10, "Medium", MATRIX_INK);
+          t.lineHeight = { value: 140, unit: "PERCENT" };
+          t.textAutoResize = "NONE";
+          t.resize(labelW, 200);
+          t.textAutoResize = "HEIGHT";
+          return t;
+        });
+        const CAP_H = Math.max(...labels.map((t) => Math.ceil(t.height))) + 20;
+        const cellH2 = Math.max(...nodes.map((n) => n.height)) + CAP_H + 28;
+        const wrapper2 = figma.createFrame();
+        wrapper2.name = `\u2756 ${entry.page}`;
+        wrapper2.layoutMode = "NONE";
+        wrapper2.fills = [];
+        wrapper2.resize(cols * cellW2, rows * cellH2);
+        wrapper2.appendChild(set);
+        set.x = 0;
+        set.y = 0;
+        set.visible = false;
+        nodes.forEach((variant, i) => {
+          const x = i % cols * cellW2;
+          const y = Math.floor(i / cols) * cellH2;
+          const cell = figma.createFrame();
+          cell.name = `cell-${i + 1}`;
+          cell.layoutMode = "NONE";
+          cell.fills = [];
+          cell.strokes = [docSolid(MATRIX_INK, 0.4)];
+          cell.strokeWeight = 1;
+          try {
+            cell.dashPattern = [3, 3];
+          } catch (e) {
+          }
+          cell.resize(cellW2, cellH2);
+          wrapper2.appendChild(cell);
+          cell.x = x;
+          cell.y = y;
+          const label = labels[i];
+          wrapper2.appendChild(label);
+          label.x = x + LABEL_PAD;
+          label.y = y + 10;
+          const instance = variant.createInstance();
+          wrapper2.appendChild(instance);
+          instance.x = x + (cellW2 - instance.width) / 2;
+          instance.y = y + CAP_H + (cellH2 - CAP_H - instance.height) / 2;
+        });
+        return wrapper2;
+      }
       const axes = computeDisplayAxes(spec.variants);
       const colAxis = axes.length > 0 ? axes[axes.length - 1] : void 0;
       const rowAxes = axes.slice(0, Math.max(0, axes.length - 1));
@@ -5054,14 +5557,34 @@
       }
     }
     function buildEntry(entry, spec, pg, category) {
-      var _a2;
+      var _a2, _b2, _c2;
       const pending = [];
       const isVariantSet = spec.variants.length > 1;
       const cursorY = (_a2 = cursorByPage.get(pg.id)) != null ? _a2 : 120;
       let placedNode;
       let variantNodes;
       if (isVariantSet) {
-        const existingSet = existingSets.get(entry.set);
+        let existingSet = existingSets.get(entry.set);
+        if (existingSet) {
+          const wantedAxes = new Set(Object.keys((_c2 = (_b2 = spec.variants[0]) == null ? void 0 : _b2.props) != null ? _c2 : {}));
+          const existingAxes = /* @__PURE__ */ new Set();
+          try {
+            for (const [key, def] of Object.entries(existingSet.componentPropertyDefinitions)) {
+              if (def.type === "VARIANT") existingAxes.add(key.split("#")[0]);
+            }
+          } catch (e) {
+          }
+          const axesMatch = wantedAxes.size === existingAxes.size && [...wantedAxes].every((a) => existingAxes.has(a));
+          if (!axesMatch) {
+            log(`\u21BB ${entry.set}: variant axes changed (${[...existingAxes].sort().join(", ") || "\u2205"} \u2192 ${[...wantedAxes].sort().join(", ")}) \u2014 rebuilding set`);
+            try {
+              existingSet.remove();
+            } catch (e) {
+            }
+            existingSets.delete(entry.set);
+            existingSet = void 0;
+          }
+        }
         const childByName = /* @__PURE__ */ new Map();
         if (existingSet) {
           for (const ch of existingSet.children) {
@@ -5105,10 +5628,32 @@
           });
           set = figma.combineAsVariants(nodes, pg);
           set.name = entry.set;
+          existingSets.set(entry.set, set);
         } else {
           if (set.parent !== pg) pg.appendChild(set);
-          for (const n of nodes) {
-            if (n.parent !== set) set.appendChild(n);
+          try {
+            for (const n of nodes) {
+              if (n.parent !== set) set.appendChild(n);
+            }
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            log(`\u21BB ${entry.set}: could not reuse set (${m}) \u2014 rebuilding`);
+            try {
+              set.remove();
+            } catch (e2) {
+            }
+            existingSets.delete(entry.set);
+            nodes.forEach((n, i) => {
+              if (n.parent) try {
+                pg.appendChild(n);
+              } catch (e2) {
+              }
+              n.x = MARGIN + i % spec.cols * cellW;
+              n.y = cursorY + Math.floor(i / spec.cols) * cellH;
+            });
+            set = figma.combineAsVariants(nodes, pg);
+            set.name = entry.set;
+            existingSets.set(entry.set, set);
           }
           const expected = new Set(spec.variants.map((vd) => normName(variantName(vd.props))));
           for (const ch of [...set.children]) {
@@ -5161,7 +5706,7 @@
       const panel = buildDocPanel(entry, spec, category, propNames, toggleNames);
       const barW = Math.ceil(panel.width);
       const bar = docFrame(`\xA7 ${category}  /  ${entry.page}`, "HORIZONTAL", 8);
-      bar.fills = [docSolid(DOC.bar)];
+      bar.fills = [docSolid(DOC.bar, 1, sampleChrome.card)];
       bar.cornerRadius = 12;
       bar.primaryAxisSizingMode = "FIXED";
       bar.counterAxisSizingMode = "FIXED";
@@ -5190,51 +5735,210 @@
       board.appendChild(leftCol);
       board.appendChild(rightContent);
       board.x = boardX;
-      board.y = 0;
+      board.y = boardY;
       boardX += Math.ceil(board.width) + BOARD_GAP;
+      rowH = Math.max(rowH, Math.ceil(board.height));
       builtAtoms++;
     }
-    const planned = SAMPLE.map((e) => ({ entry: e, spec: sampleSpec(e) })).filter((x) => x.spec !== void 0);
+    function startCategoryRow(category, pg, count, index, total) {
+      if (rowCategory !== void 0) boardY += rowH + CATEGORY_GAP;
+      rowCategory = category;
+      rowH = 0;
+      boardX = 0;
+      const band = docFrame(`docs/category \xB7 ${category}`, "VERTICAL", 12);
+      band.fills = [docSolid(DOC.board, 1, sampleChrome.board)];
+      band.cornerRadius = 24;
+      band.paddingTop = 36;
+      band.paddingBottom = 36;
+      band.paddingLeft = 44;
+      band.paddingRight = 44;
+      vStack(band, BAND_W);
+      pinToLightMode(band, sampleModePin);
+      const eyebrow = docText(
+        `${String(index + 1).padStart(2, "0")} / ${String(total).padStart(2, "0")}  \xB7  CATEGORY`,
+        10,
+        "Medium",
+        DOC.muted,
+        1,
+        sampleChrome.muted
+      );
+      eyebrow.letterSpacing = { value: 1.4, unit: "PIXELS" };
+      band.appendChild(eyebrow);
+      band.appendChild(docText(category, 34, "Semi Bold", DOC.text, 1, sampleChrome.text));
+      band.appendChild(docText(
+        `${count} element${count === 1 ? "" : "s"} \xB7 ${tokens.project || "Design System"}`,
+        12,
+        "Regular",
+        DOC.muted,
+        1,
+        sampleChrome.muted
+      ));
+      const rule = figma.createFrame();
+      rule.name = "rule";
+      rule.resize(360, 3);
+      rule.cornerRadius = 999;
+      rule.fills = [docSolid(DOC.ink, 1, sampleChrome.inverse)];
+      band.appendChild(rule);
+      pg.appendChild(band);
+      band.x = 0;
+      band.y = boardY;
+      boardY += Math.ceil(band.height) + HEAD_GAP;
+    }
+    const planned = includeFullCatalogue ? CATALOG.flatMap(({ category, entries }) => entries.map((entry) => ({
+      entry,
+      spec: representativeSpec(entry.spec),
+      category
+    }))).filter((x) => x.spec !== void 0) : SAMPLE.map((e) => {
+      var _a2;
+      return {
+        entry: { page: e.page, set: e.set, gate: e.set, spec: e.spec },
+        spec: sampleSpec(e),
+        // The real catalogue category, so the sample sheet groups by the same
+        // roles the full catalogue (and the configurator's rail) does.
+        category: (_a2 = CATEGORY_OF_SET.get(e.set)) != null ? _a2 : "Components Overview"
+      };
+    }).filter((x) => x.spec !== void 0);
+    const catRank = (c) => {
+      const i = CATEGORY_ORDER.indexOf(c);
+      return i === -1 ? CATEGORY_ORDER.length : i;
+    };
+    planned.sort((a, b) => catRank(a.category) - catRank(b.category));
     const plannedTotal = planned.length;
     let plannedDone = 0;
-    const legacySamplePage = pageByName("\u2B21 Sample");
-    if (legacySamplePage) legacySamplePage.name = SAMPLE_PAGE;
-    const samplePage = (_q = makePage(SAMPLE_PAGE)) != null ? _q : oldPage != null ? oldPage : figma.currentPage;
-    await harvest(samplePage);
+    const byCategory = /* @__PURE__ */ new Map();
+    for (const p2 of planned) {
+      let bucket = byCategory.get(p2.category);
+      if (!bucket) {
+        bucket = [];
+        byCategory.set(p2.category, bucket);
+      }
+      bucket.push(p2);
+    }
+    const categoryList = [...byCategory.keys()];
+    for (const legacyName of ["\u2B21 Sample", SAMPLE_PAGE]) {
+      const p2 = pageByName(legacyName);
+      if (p2) await harvest(p2);
+    }
     for (const { entry } of planned) {
       const legacy = pageByName(ITEM_PREFIX + entry.page);
-      if (legacy && legacy !== samplePage) await harvest(legacy);
+      if (legacy) await harvest(legacy);
     }
-    figma.root.appendChild(samplePage);
-    try {
-      samplePage.backgrounds = [docSolid(DOC.page)];
-    } catch (e) {
+    {
+      const PLACEHOLDERS_PAGE = "\u2B21 Icon Placeholders";
+      let host = pageByName(PLACEHOLDERS_PAGE);
+      if (!host) host = makePage(PLACEHOLDERS_PAGE);
+      if (!host) host = figma.currentPage;
+      await harvest(host);
+      const take = (name) => {
+        const hit = existingSingles.get(name);
+        return hit && !hit.removed ? hit : null;
+      };
+      circleMaster = take(PLACEHOLDER_CIRCLE_NAME);
+      squareMaster = take(PLACEHOLDER_SQUARE_NAME);
+      if (!circleMaster) {
+        circleMaster = createPlaceholderMaster(PLACEHOLDER_CIRCLE_NAME, CIRCLE_DASHED_PATH);
+        existingSingles.set(PLACEHOLDER_CIRCLE_NAME, circleMaster);
+      }
+      if (!squareMaster) {
+        squareMaster = createPlaceholderMaster(PLACEHOLDER_SQUARE_NAME, SQUARE_DASHED_PATH);
+        existingSingles.set(PLACEHOLDER_SQUARE_NAME, squareMaster);
+      }
+      for (const ch of [...host.children]) {
+        if (ch.type === "FRAME" && ch.name === "placeholder-library") ch.remove();
+        else if (ch.type === "TEXT" && ch.name.startsWith("label/placeholder")) ch.remove();
+      }
+      host.appendChild(circleMaster);
+      host.appendChild(squareMaster);
+      circleMaster.x = 80;
+      circleMaster.y = 140;
+      squareMaster.x = 200;
+      squareMaster.y = 140;
+      try {
+        const title = figma.createText();
+        title.name = "label/placeholder-title";
+        title.fontName = { family: "Inter", style: "Semi Bold" };
+        title.fontSize = 18;
+        title.characters = "Icon placeholders";
+        title.fills = [{ type: "SOLID", color: { r: 0.1, g: 0.1, b: 0.12 } }];
+        host.appendChild(title);
+        title.x = 80;
+        title.y = 80;
+        const sub = figma.createText();
+        sub.name = "label/placeholder-sub";
+        sub.fontName = { family: "Inter", style: "Regular" };
+        sub.fontSize = 12;
+        sub.characters = "Swap these instances inside Buttons, Inputs, Alerts\u2026 for a real glyph from Assets (icon/\u2026).";
+        sub.fills = [{ type: "SOLID", color: { r: 0.4, g: 0.4, b: 0.45 } }];
+        host.appendChild(sub);
+        sub.x = 80;
+        sub.y = 108;
+      } catch (e) {
+      }
+      try {
+        host.backgrounds = [{ type: "SOLID", color: { r: 0.96, g: 0.96, b: 0.97 } }];
+      } catch (e) {
+      }
+      log("\u2713 Icon placeholders: circle-dashed \xB7 square-dashed");
     }
-    pinToLightMode(samplePage, sampleModePin);
-    firstBuiltPage = samplePage;
-    for (const { entry, spec } of planned) {
-      progress("Components", plannedDone, plannedTotal, entry.page);
-      buildEntry({ page: entry.page, set: entry.set, gate: entry.set, spec: entry.spec }, spec, samplePage, "Components Overview");
-      plannedDone++;
-      await yieldToUI();
+    const catPageName = (c) => `\u2B21 Components \xB7 ${c}`;
+    const builtCatPages = [];
+    let firstCatPage;
+    let capFallbackPage;
+    let lastPage;
+    for (const category of categoryList) {
+      const entries = byCategory.get(category);
+      const made = makePage(catPageName(category));
+      const pg = (_y = (_x = made != null ? made : capFallbackPage) != null ? _x : oldPage) != null ? _y : figma.currentPage;
+      if (made) capFallbackPage = made;
+      firstCatPage = firstCatPage != null ? firstCatPage : pg;
+      if (!builtCatPages.includes(pg)) builtCatPages.push(pg);
+      if (pg !== lastPage) {
+        await harvest(pg);
+        figma.root.appendChild(pg);
+        try {
+          pg.backgrounds = [docSolid(DOC.page)];
+        } catch (e) {
+        }
+        pinToLightMode(pg, sampleModePin);
+        boardX = 0;
+        boardY = 0;
+        rowH = 0;
+        rowCategory = void 0;
+        boardIndex = 0;
+      }
+      lastPage = pg;
+      startCategoryRow(category, pg, entries.length, categoryList.indexOf(category), categoryList.length);
+      for (const { entry, spec } of entries) {
+        progress("Components", plannedDone, plannedTotal, entry.page);
+        buildEntry(entry, spec, pg, category);
+        plannedDone++;
+        await yieldToUI();
+      }
     }
     progress("Components", plannedTotal, plannedTotal);
-    if (oldPage && oldPage !== samplePage && oldPage !== figma.currentPage && oldPage.children.length === 0) {
-      oldPage.remove();
+    firstBuiltPage = firstCatPage;
+    for (const legacyName of ["\u2B21 Sample", SAMPLE_PAGE, "\u2B21 Components"]) {
+      const p2 = pageByName(legacyName);
+      if (p2 && p2 !== figma.currentPage && !builtCatPages.includes(p2) && p2.children.length === 0) {
+        try {
+          p2.remove();
+        } catch (e) {
+        }
+      }
     }
     if (pageLimitHit) {
-      log(`\u26A0 This file's page limit was reached \u2014 the sample sheet shares an existing page.`);
+      log(`\u26A0 This file's page limit was reached \u2014 some categories share a page instead of getting their own.`);
     }
     if (firstBuiltPage) {
       await figma.setCurrentPageAsync(firstBuiltPage);
       const placed = firstBuiltPage.children.filter((n) => n.type === "COMPONENT" || n.type === "COMPONENT_SET");
       if (placed.length > 0) figma.viewport.scrollAndZoomIntoView(placed);
     }
-    log(`\u2713 Components Overview \u2014 ${builtAtoms} elements (${builtVariants} variants), every fill, radius, spacing and text bound to your tokens`);
+    log(`\u2713 Components \u2014 ${builtAtoms} elements (${builtVariants} variants) across ${builtCatPages.length} categor${builtCatPages.length === 1 ? "y" : "ies"}, every fill, radius, spacing and text bound to your tokens`);
     return builtVariants;
   }
   async function importDocumentation(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
     const colNameById = new Map(allCols.map((c) => [c.id, c.name]));
@@ -5398,8 +6102,7 @@
       card.paddingBottom = 44;
       card.paddingLeft = 40;
       card.paddingRight = 40;
-      card.counterAxisSizingMode = "FIXED";
-      card.resize(CARD_W, 100);
+      vStack(card, CARD_W);
       const head = autoFrame(`${title}__head`, "VERTICAL", 8);
       head.appendChild(mkText(title, { size: 24, style: "Semi Bold", colorVar: textVar, colorHex: textHex }));
       const sub = mkText(subtitle, { size: 12, colorVar: mutedVar, colorHex: mutedHex });
@@ -5414,7 +6117,7 @@
     }
     function sectionBar(label) {
       const bar = autoFrame(`\xA7 ${label}`, "HORIZONTAL", 8);
-      bar.fills = [solid("#E6E6F7")];
+      bar.fills = [boundFill(cardVar, "#E6E6F7")];
       bar.cornerRadius = 12;
       bar.primaryAxisSizingMode = "FIXED";
       bar.counterAxisSizingMode = "FIXED";
@@ -5493,8 +6196,7 @@
       cover.strokeWeight = 1;
       cover.cornerRadius = 16;
       cover.clipsContent = true;
-      cover.counterAxisSizingMode = "FIXED";
-      cover.resize(CARD_W, 100);
+      vStack(cover, CARD_W);
       root.appendChild(cover);
       const bar = autoFrame("cover__bar", "HORIZONTAL", 8);
       bar.fills = [solid(inkHex)];
@@ -6192,10 +6894,11 @@
     {
       const grid = (_t = tokens.grid) != null ? _t : {};
       const sizes = Object.entries((_u = tokens.sizes) != null ? _u : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
-      if (Object.keys(grid).length > 0 || sizes.length > 0) {
+      const selectors = Object.entries((_v = tokens.selector) != null ? _v : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
         await newBoard("Grid & Sizes");
         root.appendChild(sectionBar("Grid & Sizes"));
-        const { card, body } = section("Grid & Sizes", "Layout grid settings and component height scale.");
+        const { card, body } = section("Grid & Sizes", "Layout grid settings, component heights, and selector glyph sizes.");
         if (Object.keys(grid).length > 0) {
           const spec = Object.entries(grid).map(([k, v]) => `${k} ${v}`).join("   \xB7   ");
           body.appendChild(mkText(spec, { size: 12, colorVar: textVar, opacity: 0.9 }));
@@ -6219,7 +6922,7 @@
         }
         if (tokens.sizeRoles) {
           for (const [role, step] of Object.entries(tokens.sizeRoles)) {
-            const px = pxToFloat((_w = (_v = tokens.sizes) == null ? void 0 : _v[step]) != null ? _w : "");
+            const px = pxToFloat((_x = (_w = tokens.sizes) == null ? void 0 : _w[step]) != null ? _x : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -6235,17 +6938,55 @@
             body.appendChild(row);
           }
         }
+        if (selectors.length > 0) {
+          body.appendChild(mkText("Selector glyphs \u2014 checkbox / radio / switch track height", { size: 11, colorVar: mutedVar, colorHex: mutedHex }));
+          for (const [key, px] of selectors) {
+            const row = autoFrame(`selector-${key}`, "HORIZONTAL", 16);
+            row.counterAxisAlignItems = "CENTER";
+            const label = mkText(`${key} \xB7 ${px}px`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
+            row.appendChild(label);
+            label.resize(90, label.height);
+            const sq = figma.createFrame();
+            sq.name = `selector-${key}`;
+            sq.resize(px, px);
+            sq.cornerRadius = Math.min(4, px / 4);
+            sq.fills = [boundFill(accentVar, accentHex, 0.55)];
+            bindField(sq, "width", findVar(COLLECTIONS.selector, key));
+            bindField(sq, "height", findVar(COLLECTIONS.selector, key));
+            row.appendChild(sq);
+            body.appendChild(row);
+          }
+          if (tokens.selectorRoles) {
+            for (const [role, step] of Object.entries(tokens.selectorRoles)) {
+              const px = pxToFloat((_z = (_y = tokens.selector) == null ? void 0 : _y[step]) != null ? _z : "");
+              const row = autoFrame(`role-selector-${role}`, "HORIZONTAL", 16);
+              row.counterAxisAlignItems = "CENTER";
+              const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
+              row.appendChild(label);
+              label.resize(200, label.height);
+              const sq = figma.createFrame();
+              sq.name = `role-selector-${role}`;
+              sq.resize(Math.max(px, 8), Math.max(px, 8));
+              sq.cornerRadius = 4;
+              sq.fills = [boundFill(accentVar, accentHex, 0.35)];
+              bindField(sq, "width", findVar(COLLECTIONS.selector, figmaVarName(`role/${role}`)));
+              bindField(sq, "height", findVar(COLLECTIONS.selector, figmaVarName(`role/${role}`)));
+              row.appendChild(sq);
+              body.appendChild(row);
+            }
+          }
+        }
         root.appendChild(card);
         sections++;
       }
     }
     {
-      const entries = Object.entries((_x = tokens.gradients) != null ? _x : {});
+      const entries = Object.entries((_A = tokens.gradients) != null ? _A : {});
       if (entries.length > 0) {
         await newBoard("Gradients");
         root.appendChild(sectionBar("Gradients"));
         const { card, body } = section("Gradients", 'Named gradients from the configurator. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
-        const assigned = (_y = tokens.gradientAssignments) != null ? _y : {};
+        const assigned = (_B = tokens.gradientAssignments) != null ? _B : {};
         const row = autoFrame("gradients", "HORIZONTAL", 24);
         row.layoutWrap = "WRAP";
         row.counterAxisSpacing = 24;
@@ -6285,6 +7026,24 @@
     radix: "radix-icons",
     material: "material-symbols"
   };
+  var CIRCLE_DASHED_PATH = "M96.26 37.05a8 8 0 0 1 5.74-9.76a104.1 104.1 0 0 1 52 0a8 8 0 0 1-2 15.75a8.2 8.2 0 0 1-2-.26a88.1 88.1 0 0 0-44 0a8 8 0 0 1-9.74-5.73M53.79 55.14a104.05 104.05 0 0 0-26 45a8 8 0 0 0 15.42 4.27a88 88 0 0 1 22-38.09a8 8 0 0 0-11.42-11.18m-10.58 96.41a8 8 0 1 0-15.42 4.28a104.1 104.1 0 0 0 26 45a8 8 0 0 0 11.41-11.22a88.14 88.14 0 0 1-21.99-38.06M150 213.22a88 88 0 0 1-44 0a8 8 0 1 0-4 15.49a104.1 104.1 0 0 0 52 0a8 8 0 0 0-4-15.49M222.65 146a8 8 0 0 0-9.85 5.58a87.9 87.9 0 0 1-22 38.08a8 8 0 1 0 11.42 11.21a104 104 0 0 0 26-45a8 8 0 0 0-5.57-9.87m-9.86-41.54a8 8 0 0 0 15.42-4.28a104 104 0 0 0-26-45A8 8 0 1 0 190.8 66.4a88 88 0 0 1 21.99 38.05Z";
+  var SQUARE_DASHED_PATH = "M80,48a8,8,0,0,1-8,8H40V72a8,8,0,0,1-16,0V56A16,16,0,0,1,40,40H72A8,8,0,0,1,80,48ZM32,152a8,8,0,0,0,8-8V112a8,8,0,0,0-16,0v32A8,8,0,0,0,32,152Zm40,48H40V184a8,8,0,0,0-16,0v16a16,16,0,0,0,16,16H72a8,8,0,0,0,0-16Zm72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm80-24a8,8,0,0,0-8,8v16H184a8,8,0,0,0,0,16h32a16,16,0,0,0,16-16V184A8,8,0,0,0,224,176Zm0-72a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V112A8,8,0,0,0,224,104Zm-8-64H184a8,8,0,0,0,0,16h32V72a8,8,0,0,0,16,0V56A16,16,0,0,0,216,40Zm-72,0H112a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Z";
+  var PLACEHOLDER_MASTER_SIZE = 24;
+  var PLACEHOLDER_CIRCLE_NAME = "icon/circle-dashed";
+  var PLACEHOLDER_SQUARE_NAME = "icon/square-dashed";
+  var ICON_FIGMA_FILES = {
+    phosphor: {
+      label: "Phosphor Icons \u2014 Figma Community",
+      url: "https://www.figma.com/community/file/903830135544202908/phosphor-icons"
+    }
+  };
+  function iconLibrarySource(libKey, libName) {
+    var _a;
+    return (_a = ICON_FIGMA_FILES[libKey]) != null ? _a : {
+      label: `${libName || "Icon libraries"} \u2014 Figma Community`,
+      url: `https://www.figma.com/community/search?resource_type=files&q=${encodeURIComponent(libName || "icons")}`
+    };
+  }
   var ICON_CORE = [
     // Navigation
     { name: "home", alias: { lucide: "house", ph: "house" } },
@@ -6310,6 +7069,8 @@
     { name: "minus", alias: { "material-symbols": "remove" } },
     { name: "x", alias: { heroicons: "x-mark", "radix-icons": "cross-2", "material-symbols": "close" } },
     { name: "check" },
+    { name: "circle-dashed" },
+    { name: "square-dashed", alias: { ph: "rectangle-dashed", lucide: "square-dashed" } },
     { name: "check-circle", alias: { lucide: "circle-check", "radix-icons": "check-circled" } },
     { name: "x-circle", alias: { lucide: "circle-x", "radix-icons": "cross-circled", "material-symbols": "cancel" } },
     { name: "plus-circle", alias: { lucide: "circle-plus", "radix-icons": "plus-circled", "material-symbols": "add-circle" } },
@@ -6487,9 +7248,7 @@
         card = figma.createFrame();
         card.name = name;
         card.layoutMode = "VERTICAL";
-        card.primaryAxisSizingMode = "AUTO";
-        card.counterAxisSizingMode = "FIXED";
-        card.resize(GRID_W, 100);
+        vStack(card, GRID_W);
         card.itemSpacing = 16;
         card.paddingTop = 24;
         card.paddingBottom = 24;
@@ -6542,10 +7301,12 @@
     }
     let created = 0;
     let libCard;
+    let libGrid;
     let libCount = 0;
     if (prefix) {
       const { card, grid } = sectionCard(`icons/lib-${libKey}`, `${libName} \u2014 Core UI Set`);
       libCard = card;
+      libGrid = grid;
       for (const [name, comp] of existingComponents) {
         if (name.startsWith(`icon/${libKey}/`) && comp.parent !== grid) grid.appendChild(comp);
       }
@@ -6700,8 +7461,7 @@
     panel.paddingBottom = PANEL_PAD;
     panel.paddingLeft = PANEL_PAD;
     panel.paddingRight = PANEL_PAD;
-    panel.counterAxisSizingMode = "FIXED";
-    panel.resize(PANEL_W, 100);
+    vStack(panel, PANEL_W);
     const crumb = docFrame("breadcrumb", "HORIZONTAL", 8);
     crumb.primaryAxisSizingMode = "FIXED";
     crumb.counterAxisSizingMode = "FIXED";
@@ -6753,6 +7513,11 @@
       "Token-tinted",
       "Library glyphs bind fills and strokes to the primary ink semantic variable \u2014 switch the page's variable mode and every icon follows the theme."
     );
+    docBullet(
+      specs,
+      "Empty slots, not stand-in glyphs",
+      'Components render instances of icon/circle-dashed and icon/square-dashed wherever an icon belongs. Swap those for a real glyph from Assets. See "Bring your own icons" below.'
+    );
     panel.appendChild(specs);
     panel.appendChild(docDivider("FEATURES"));
     const sem = (_v = (_u = tokens.colors) == null ? void 0 : _u.semantic) != null ? _v : {};
@@ -6783,8 +7548,7 @@
     hint.paddingBottom = 14;
     hint.paddingLeft = 16;
     hint.paddingRight = 16;
-    hint.counterAxisSizingMode = "FIXED";
-    hint.resize(PANEL_INNER, 60);
+    vStack(hint, PANEL_INNER);
     hint.appendChild(wrapText(docText("Insert icons easily to your canvas", 12, "Medium", DOC.text, 1, iconsChrome.text), PANEL_INNER - 32));
     hint.appendChild(wrapText(docText("hold \u21E7 Shift + I, search \u201Cicon/\u201D and press insert \u2014 or drag any glyph from Assets to the canvas", 10.5, "Regular", DOC.muted, 1, iconsChrome.muted), PANEL_INNER - 32));
     panel.appendChild(hint);
@@ -6798,6 +7562,131 @@
     pg.appendChild(board);
     board.x = MARGIN;
     board.y = TOP;
+    {
+      const source = iconLibrarySource(libKey, libName);
+      const swap = docFrame("docs/icons-swap-panel", "VERTICAL", 20);
+      swap.fills = [docSolid(DOC.card, 1, iconsChrome.board)];
+      swap.strokes = [docSolid(DOC.border, 1, iconsChrome.border)];
+      swap.strokeWeight = 1;
+      swap.cornerRadius = 16;
+      swap.paddingTop = PANEL_PAD;
+      swap.paddingBottom = PANEL_PAD;
+      swap.paddingLeft = PANEL_PAD;
+      swap.paddingRight = PANEL_PAD;
+      vStack(swap, PANEL_W);
+      swap.appendChild(docText("Foundations  /  Icons  /  Library", 9, "Regular", DOC.muted, 1, iconsChrome.secondary));
+      swap.appendChild(wrapText(docText("Bring your own icons", 22, "Semi Bold", DOC.text, 1, iconsChrome.text), PANEL_INNER));
+      const swapIntro = wrapText(docText(
+        "Buttons, inputs, alerts and nav rows ship with an empty slot \u2014 circle-dashed or square-dashed \u2014 never a real glyph. Swap the instance for any icon/<library>/\u2026 set from this page or Community.",
+        12,
+        "Regular",
+        DOC.muted,
+        1,
+        iconsChrome.muted
+      ), PANEL_INNER);
+      swapIntro.lineHeight = { value: 150, unit: "PERCENT" };
+      swap.appendChild(swapIntro);
+      const demo = docFrame("slot-specimen", "HORIZONTAL", 16);
+      demo.counterAxisAlignItems = "CENTER";
+      demo.paddingTop = 14;
+      demo.paddingBottom = 14;
+      demo.paddingLeft = 16;
+      demo.paddingRight = 16;
+      demo.cornerRadius = 10;
+      demo.fills = [docSolid(DOC.faint, 1, iconsChrome.card)];
+      demo.strokes = [docSolid(DOC.border, 1, iconsChrome.border)];
+      demo.strokeWeight = 1;
+      const paint = docSolid(DOC.text, 1, iconsChrome.text);
+      const showPath = (path, label) => {
+        const wrap = figma.createFrame();
+        wrap.name = label;
+        wrap.fills = [];
+        wrap.resize(24, 24);
+        try {
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><path fill="#000000" d="${path}"/></svg>`;
+          const glyph = figma.createNodeFromSvg(svg);
+          if (glyph.width !== 24) glyph.rescale(24 / glyph.width);
+          glyph.name = label;
+          for (const n of [glyph, ...glyph.findAll()]) {
+            const g = n;
+            if ("fills" in g && Array.isArray(g.fills) && g.fills.some((f) => f.type === "SOLID")) {
+              try {
+                g.fills = [paint];
+              } catch (e) {
+              }
+            }
+          }
+          wrap.appendChild(glyph);
+          glyph.x = 0;
+          glyph.y = 0;
+        } catch (e) {
+        }
+        demo.appendChild(wrap);
+      };
+      showPath(CIRCLE_DASHED_PATH, "circle-dashed");
+      showPath(SQUARE_DASHED_PATH, "square-dashed");
+      demo.appendChild(wrapText(docText(
+        "Select the nested circle-dashed / square-dashed instance \u2192 Swap instance \u2192 pick icon/<library>/\u2026",
+        10.5,
+        "Regular",
+        DOC.muted,
+        1,
+        iconsChrome.muted
+      ), PANEL_INNER - 32 - 72));
+      swap.appendChild(demo);
+      swap.appendChild(docDivider("HOW TO"));
+      const steps = docFrame("steps", "VERTICAL", 14);
+      docBullet(
+        steps,
+        `1 \xB7 Open ${libName || "your icon library"} in the Community`,
+        "Follow the link below, then \u201COpen in Figma\u201D \u2014 it lands as a separate file you can copy from."
+      );
+      docBullet(
+        steps,
+        "2 \xB7 Or use the sets on this page",
+        libCount > 0 ? `The ${libCount} glyphs above are already components \u2014 right-click the placeholder instance \u2192 \u201CSwap instance\u201D and pick one of icon/${libKey}/\u2026` : "Once a library is selected in the configurator, its core set is imported here as swappable components."
+      );
+      docBullet(
+        steps,
+        "3 \xB7 Swap the placeholder",
+        "Inside a component, select the nested circle-dashed or square-dashed instance and swap it for the glyph you need. Masters live on \u2B21 Icon Placeholders."
+      );
+      docBullet(
+        steps,
+        "4 \xB7 Paste from Community if you prefer",
+        "Select a glyph in the Community file, \u2318C / Ctrl+C, paste over the placeholder, then delete the old instance."
+      );
+      swap.appendChild(steps);
+      swap.appendChild(docDivider("SOURCE"));
+      const linkBox = docFrame("community-link", "VERTICAL", 6);
+      linkBox.fills = [docSolid(DOC.faint, 1, iconsChrome.card)];
+      linkBox.strokes = [docSolid(DOC.border, 1, iconsChrome.border)];
+      linkBox.strokeWeight = 1;
+      linkBox.cornerRadius = 10;
+      linkBox.paddingTop = 14;
+      linkBox.paddingBottom = 14;
+      linkBox.paddingLeft = 16;
+      linkBox.paddingRight = 16;
+      vStack(linkBox, PANEL_INNER);
+      linkBox.appendChild(wrapText(docText(source.label, 12, "Medium", DOC.text, 1, iconsChrome.text), PANEL_INNER - 32));
+      const url = wrapText(docText(source.url, 10.5, "Regular", accent, 1, iconsChrome.accentText), PANEL_INNER - 32);
+      try {
+        url.hyperlink = { type: "URL", value: source.url };
+      } catch (e) {
+      }
+      linkBox.appendChild(url);
+      swap.appendChild(linkBox);
+      const swapBoard = docBoard(
+        "docs/board \xB7 Icons \u2014 Library",
+        "Foundations  /  Icons  /  Library",
+        tokens.project || "Design System",
+        PANEL_W
+      );
+      swapBoard.appendChild(swap);
+      pg.appendChild(swapBoard);
+      swapBoard.x = MARGIN;
+      swapBoard.y = TOP + Math.ceil(board.height) + 64;
+    }
     if (prevPage !== pg) {
       try {
         await figma.setCurrentPageAsync(prevPage);
@@ -6805,6 +7694,158 @@
       }
     }
     return created;
+  }
+  async function importGettingStarted(tokens) {
+    var _a;
+    const PAGE = "\u2B21 Getting started";
+    const project = tokens.project || "Design System";
+    const SITE = "www.escalatokens.com";
+    const REPO = "https://github.com/Duscenko/escala-tokens";
+    const slug = project.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "design-system";
+    const allVars = await figma.variables.getLocalVariablesAsync();
+    const allCols = await figma.variables.getLocalVariableCollectionsAsync();
+    const chrome = docChromeVarsFrom(semLookupFor(tokens, allVars, allCols));
+    const modePin = docModePin(tokens, allCols);
+    const typo = await typoVarMap();
+    const fontFamily = ((_a = tokens.typography) == null ? void 0 : _a.fontFamily) || "Inter";
+    const loaded = /* @__PURE__ */ new Set();
+    for (const style of ["Regular", "Medium", "Semi Bold", "Bold"]) {
+      try {
+        await figma.loadFontAsync({ family: fontFamily, style });
+        loaded.add(style);
+      } catch (e) {
+        try {
+          await figma.loadFontAsync({ family: "Inter", style });
+        } catch (e2) {
+        }
+      }
+    }
+    const fontFor = (s) => loaded.has(s) ? { family: fontFamily, style: s } : { family: "Inter", style: s };
+    const { docSolid, docText, docFrame, wrapText, docBoard } = docChrome(fontFor, typo, tokens.typography.sizes, chrome, modePin);
+    let page = figma.root.children.find((p) => p.name === PAGE);
+    if (!page) {
+      page = figma.createPage();
+      page.name = PAGE;
+    } else {
+      await page.loadAsync();
+      for (const child of [...page.children]) child.remove();
+    }
+    const pg = page;
+    try {
+      pg.backgrounds = [docSolid(DOC.page)];
+    } catch (e) {
+    }
+    pinToLightMode(pg, modePin);
+    const W = 640;
+    const GAP = 96;
+    let x = 120;
+    function h2(parent, s) {
+      parent.appendChild(wrapText(docText(s, 26, "Semi Bold", DOC.text, 1, chrome.text), W));
+    }
+    function para(parent, s) {
+      const t = wrapText(docText(s, 13, "Regular", DOC.muted, 1, chrome.muted), W);
+      t.lineHeight = { value: 155, unit: "PERCENT" };
+      parent.appendChild(t);
+    }
+    function bullet(parent, title, desc, link) {
+      const b = docFrame(`b-${title.toLowerCase().replace(/\W+/g, "-")}`, "VERTICAL", 4);
+      b.appendChild(wrapText(docText(title, 13, "Medium", DOC.text, 1, chrome.text), W));
+      const d = wrapText(docText(desc, 12, "Regular", DOC.muted, 1, chrome.muted), W);
+      d.lineHeight = { value: 150, unit: "PERCENT" };
+      if (link) {
+        try {
+          d.hyperlink = { type: "URL", value: link };
+        } catch (e) {
+        }
+      }
+      b.appendChild(d);
+      parent.appendChild(b);
+    }
+    function divider(parent) {
+      const r = figma.createFrame();
+      r.name = "rule";
+      r.resize(W, 1);
+      r.fills = [docSolid(DOC.border, 1, chrome.border)];
+      parent.appendChild(r);
+      r.layoutSizingHorizontal = "FILL";
+    }
+    function board(barLabel, build) {
+      const b = docBoard(`docs/gs \xB7 ${barLabel}`, `Getting started  /  ${barLabel}`, project, W);
+      const body = docFrame("body", "VERTICAL", 16);
+      vStack(body, W);
+      b.appendChild(body);
+      build(body);
+      pg.appendChild(b);
+      b.x = x;
+      b.y = 120;
+      x += Math.ceil(b.width) + GAP;
+      return b;
+    }
+    board("Introduction", (body) => {
+      h2(body, "This file is generated");
+      para(body, `Every page here is built by the Escala plugin from a single payload published by Escala Tokens (${SITE}) \u2014 a configurator for design-token systems. You define a palette, type scale, spacing, radius and the rest once; Escala derives the full scales, keeps light and dark in step, and ships tokens.json, variables.css, a README and this Figma file, all from that one payload.`);
+      para(body, "Nothing here is drawn by hand. Every fill, radius, gap and text style binds to a Figma Variable, so a re-sync updates the file in place and switching a variable mode previews a theme.");
+      divider(body);
+      bullet(body, "Source", `${REPO.replace("https://", "")} \u2014 MIT licence`, REPO);
+    });
+    board("Where this comes from", (body) => {
+      h2(body, "Where this comes from");
+      para(body, "Escala Tokens is the source of truth. It publishes your system as tokens.json to a per-project URL; the plugin fetches that JSON and writes it into this file as Variables, styles, components and docs.");
+      divider(body);
+      bullet(body, "1 \xB7 Configure", `${SITE} \u2014 edit the system on the web. Every export derives from one payload.`);
+      bullet(body, "2 \xB7 Publish", `${SITE}/api/tokens?project=${slug} \u2014 the web app POSTs tokens.json to this scoped URL. This is the sync channel.`);
+      bullet(body, "3 \xB7 Import", "This plugin. Paste the URL once; it reads the JSON and builds the file.");
+      bullet(body, "4 \xB7 Live sync (optional)", "With auto-sync on, a web edit re-publishes and the plugin re-imports variables + styles ~1.5s after you stop.");
+    });
+    board("Two ways to work", (body) => {
+      h2(body, "Two ways to work");
+      para(body, "How you consume this file depends on how you plan to use the system.");
+      divider(body);
+      bullet(body, "Option 1 \xB7 Design inside this file", "Use it directly for exploration and early concepts. Simple, but it mixes system maintenance with product work \u2014 less suited to long-term product design.");
+      bullet(body, "Option 2 \xB7 Publish as a library (recommended)", "Publish this file as a Figma library and build product screens in separate files. The system stays isolated and stable; product files stay light. Library updates are reviewed and applied selectively, so a product stays aligned without surprise breakage.");
+    });
+    board("The plugin & the JSON", (body) => {
+      h2(body, "The plugin & the JSON");
+      para(body, "An Import runs up to six phases \u2014 Variables, Styles, Components, Icons, Cover, Documentation. Each is independent: one failing never blocks the others.");
+      para(body, "A Live Sync is not a full import. It refreshes Variables and Styles only, never pages. Everything the plugin draws is variable-bound, so updating the variables re-themes every placed instance automatically. New components, the cover and these boards come from a manual Import.");
+      divider(body);
+      bullet(body, "Sync URL", `${SITE}/api/tokens?project=${slug} \u2014 GET is public (that's what the plugin reads); POST is the web app only.`);
+    });
+    board("Save to GitHub", (body) => {
+      h2(body, "Save to GitHub");
+      para(body, "The sync URL is a delivery channel, not a backup. Treat it as disposable and keep the durable copy in a repo.");
+      divider(body);
+      bullet(body, "The slug is the project name", `Renaming the system changes its slug (${slug}) and its sync URL. Old links stop resolving.`);
+      bullet(body, "The write key is local", "The first publish returns a claim, stored in that browser's localStorage. Clear the browser or move machines and you can no longer overwrite that slug.");
+      bullet(body, "GitHub is the durable copy", "Pushing to a repo writes .escala/system.json \u2014 the full system plus the claim. It is the only way to recover the system, and its write access, from another machine or after a browser reset, and what future previews and updates should build from.");
+    });
+    board("Naming conventions", (body) => {
+      h2(body, "Naming conventions");
+      para(body, "Names describe intent, not appearance, so the system can change visually without a rename.");
+      divider(body);
+      bullet(body, "Primitives \u2014 1 to 12", "Every colour family is a 12-step Radix ramp: accent-1 \u2026 accent-12. Step 9 is the anchor (your input hex); 11\u201312 are the accessible text tones. Never referenced by a component directly.");
+      bullet(body, "Semantics \u2014 by role", "Surface/page, Content/primary, Action/primary/default, Border/control \u2014 a role names what a value is for. Components bind here.");
+      bullet(body, "One collection per category", "Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid \u2014 each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme.");
+    });
+    board("How this file is organized", (body) => {
+      h2(body, "How this file is organized");
+      para(body, "Pages run from foundational to applied \u2014 the same order the system is built in.");
+      divider(body);
+      bullet(body, "Getting started", "This page.");
+      bullet(body, "Documentation", "Every foundation \u2014 colour, type, spacing, radius, shadow, grid, sizes \u2014 as live specimens bound to the variables.");
+      bullet(body, "Components \xB7 <category>", "One page per catalogue category: Button & Actions, Form Controls, Indicators, Content & Surfaces, Feedback, Navigation. Splitting by role keeps each page scannable; every element is a documented, token-bound component set.");
+      bullet(body, "Icons", "The chosen icon library as swappable components, plus how to bring your own.");
+    });
+    board("Repository & licence", (body) => {
+      h2(body, "Repository & licence");
+      para(body, "Escala Tokens and its source are the work of Cesar Durango.");
+      divider(body);
+      bullet(body, "GitHub", REPO.replace("https://", ""), REPO);
+      bullet(body, "Licence", "MIT \xB7 \xA9 2026 Duscenko");
+      bullet(body, "Contact", "duscenko.com");
+    });
+    log(`\u2713 Getting started page rebuilt on "${PAGE}" (8 boards)`);
+    return true;
   }
   async function importCover(tokens) {
     var _a, _b, _c, _d, _e, _f;
@@ -7083,12 +8124,29 @@
     return { data: out, total };
   }
   figma.showUI(__html__, { width: 880, height: 620, themeColors: true });
+  var COMPONENT_CATEGORY_ORDER = [
+    "Button & Actions",
+    "Form Controls",
+    "Indicators",
+    "Content & Surfaces",
+    "Feedback",
+    "Navigation"
+  ];
   function ensureFoundationPageOrder() {
     let idx = 0;
-    for (const name of ["\u2B21 Cover", "\u2B21 Documentation", "\u2B21 Components Overview", "\u2B21 Icons"]) {
-      const foundation = figma.root.children.find((p) => p.name === name);
-      if (foundation) figma.root.insertChild(idx++, foundation);
-    }
+    const place = (p) => {
+      if (p) figma.root.insertChild(idx++, p);
+    };
+    const byName = (name) => figma.root.children.find((p) => p.name === name);
+    place(byName("\u2B21 Cover"));
+    place(byName("\u2B21 Getting started"));
+    place(byName("\u2B21 Documentation"));
+    place(byName("\u2B21 Components Overview"));
+    for (const cat of COMPONENT_CATEGORY_ORDER) place(byName(`\u2B21 Components \xB7 ${cat}`));
+    for (const p of figma.root.children.filter(
+      (p2) => p2.name.startsWith("\u2B21 Components \xB7 ") && !COMPONENT_CATEGORY_ORDER.some((c) => p2.name === `\u2B21 Components \xB7 ${c}`)
+    )) place(p);
+    place(byName("\u2B21 Icons"));
   }
   ensureFoundationPageOrder();
   var SETTINGS_KEY = "sd-sync-settings";
@@ -7252,6 +8310,79 @@
     figma.root.setPluginData(FILE_PROJECTS_KEY, "");
     figma.root.setPluginData(FILE_DOCS_REV_KEY, "");
   }
+  async function collectLocalEdits(baseline) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+    const rejected = [];
+    const supported = {};
+    let supportedCount = 0;
+    const cols = await figma.variables.getLocalVariableCollectionsAsync();
+    const allVars = await figma.variables.getLocalVariablesAsync();
+    const byColl = /* @__PURE__ */ new Map();
+    for (const v of allVars) {
+      const list = (_a = byColl.get(v.variableCollectionId)) != null ? _a : [];
+      list.push(v);
+      byColl.set(v.variableCollectionId, list);
+    }
+    const typoCol = cols.find((c) => c.name === COLLECTIONS.typography);
+    if (typoCol) {
+      const typoVars = (_b = byColl.get(typoCol.id)) != null ? _b : [];
+      const knownPrefix = (name) => {
+        const base = name.split("#")[0];
+        return base === TYPOGRAPHY_FAMILY_VARS.body || base === TYPOGRAPHY_FAMILY_VARS.display || base === TYPOGRAPHY_FAMILY_VARS.legacyBody || base === TYPOGRAPHY_FAMILY_VARS.legacyDisplay || base.startsWith("size/") || base.startsWith("weight/") || base.startsWith("line-height/") || base.startsWith("letter-spacing/") || base.startsWith("role/");
+      };
+      for (const v of typoVars) {
+        if (!knownPrefix(v.name)) {
+          rejected.push({
+            kind: "new-variable",
+            detail: `Typography/${v.name} \u2014 new variables aren't system settings; add them in Escala first.`
+          });
+        }
+      }
+      const bodyVar = typoVars.find((v) => v.name === TYPOGRAPHY_FAMILY_VARS.body || v.name === TYPOGRAPHY_FAMILY_VARS.legacyBody);
+      const displayVar = typoVars.find((v) => v.name === TYPOGRAPHY_FAMILY_VARS.display || v.name === TYPOGRAPHY_FAMILY_VARS.legacyDisplay);
+      const mid = typoCol.defaultModeId;
+      const bodyNow = bodyVar ? varStringAt(bodyVar, mid) : void 0;
+      const displayNow = displayVar ? varStringAt(displayVar, mid) : void 0;
+      const firstTheme = ((_c = baseline.colors.themeOrder) != null ? _c : [])[0];
+      const bodyWant = normalizeFontFamilyName(
+        firstTheme && ((_f = (_e = (_d = baseline.foundationsByTheme) == null ? void 0 : _d[firstTheme]) == null ? void 0 : _e.typography) == null ? void 0 : _f.fontFamily) || ((_g = baseline.typography) == null ? void 0 : _g.fontFamily)
+      );
+      const displayWant = normalizeFontFamilyName(
+        firstTheme && ((_j = (_i = (_h = baseline.foundationsByTheme) == null ? void 0 : _h[firstTheme]) == null ? void 0 : _i.typography) == null ? void 0 : _j.headingFontFamily) || ((_k = baseline.typography) == null ? void 0 : _k.headingFontFamily) || bodyWant
+      );
+      if (bodyNow && normalizeFontFamilyName(bodyNow) !== bodyWant) {
+        supported.typography = __spreadProps(__spreadValues({}, supported.typography), { fontFamily: normalizeFontFamilyName(bodyNow) });
+        supportedCount++;
+      }
+      if (displayNow && normalizeFontFamilyName(displayNow) !== displayWant) {
+        supported.typography = __spreadProps(__spreadValues({}, supported.typography), { headingFontFamily: normalizeFontFamilyName(displayNow) });
+        supportedCount++;
+      }
+    }
+    for (const pg of figma.root.children) {
+      if (pg.type !== "PAGE" || pg.name.startsWith("\u2B21")) continue;
+      try {
+        await pg.loadAsync();
+      } catch (e) {
+        continue;
+      }
+      const sets = pg.findAll((n) => n.type === "COMPONENT_SET");
+      for (const s of sets) {
+        rejected.push({
+          kind: "new-component",
+          detail: `"${s.name}" on page "${pg.name}" \u2014 components aren't read into Escala's catalogue. Add a plugin gate first.`
+        });
+      }
+    }
+    return {
+      kind: "escala-figma-edits/v1",
+      project: baseline.project || "design-system",
+      checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      supported,
+      rejected,
+      summary: { supported: supportedCount, rejected: rejected.length }
+    };
+  }
   async function reportFileAssets() {
     const names = new Set(figma.root.children.map((p) => p.name.trim()));
     let variables = 0;
@@ -7264,14 +8395,17 @@
     return {
       cover: names.has("\u2B21 Cover"),
       documentation: names.has("\u2B21 Documentation"),
-      sample: names.has("\u2B21 Components Overview"),
+      gettingStarted: names.has("\u2B21 Getting started"),
+      // Any category page counts as "components present" — plus the legacy
+      // single page, until it's split on the next import.
+      sample: names.has("\u2B21 Components Overview") || [...names].some((n) => n.startsWith("\u2B21 Components \xB7 ")),
       icons: names.has("\u2B21 Icons"),
       variables,
       collections
     };
   }
   figma.ui.onmessage = async (msg) => {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     if (msg.type === "ping") {
       figma.ui.postMessage({ type: "pong" });
       return;
@@ -7293,6 +8427,26 @@
     }
     if (msg.type === "report-assets") {
       figma.ui.postMessage({ type: "assets", assets: await reportFileAssets() });
+      return;
+    }
+    if (msg.type === "check-local-edits") {
+      const record = readFileTokens();
+      const baseline = (_c = record == null ? void 0 : record.tokens) != null ? _c : msg.tokens;
+      if (!baseline) {
+        figma.ui.postMessage({
+          type: "local-edits",
+          error: "No imported system in this file \u2014 Import or Live Sync once first."
+        });
+        return;
+      }
+      try {
+        const report = await collectLocalEdits(baseline);
+        log(`Local edits: ${report.summary.supported} supported \xB7 ${report.summary.rejected} rejected`);
+        figma.ui.postMessage({ type: "local-edits", report });
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e);
+        figma.ui.postMessage({ type: "local-edits", error: m });
+      }
       return;
     }
     if (msg.type === "save-file-sync") {
@@ -7331,7 +8485,7 @@
       return;
     }
     if (msg.type === "export-tokens") {
-      figma.ui.postMessage({ type: "export-tokens-data", tokens: (_d = (_c = readFileTokens()) == null ? void 0 : _c.tokens) != null ? _d : null });
+      figma.ui.postMessage({ type: "export-tokens-data", tokens: (_e = (_d = readFileTokens()) == null ? void 0 : _d.tokens) != null ? _e : null });
       return;
     }
     if (msg.type === "import") {
@@ -7371,14 +8525,17 @@
       let hasCover = false;
       let hadError = false;
       let wantComponents = options.importComponents;
-      let wantCover = (_e = options.importCover) != null ? _e : options.importDocs !== false;
-      let wantDocumentation = (_f = options.importDocumentation) != null ? _f : options.importDocs !== false;
+      let wantCover = (_f = options.importCover) != null ? _f : options.importDocs !== false;
+      let wantDocumentation = (_g = options.importDocumentation) != null ? _g : options.importDocs !== false;
       const planned = [
         options.importVariables && "Variables",
         options.importStyles && "Styles",
         wantComponents && "Components",
         options.importIcons && "Icons",
         wantCover && "Cover",
+        // Getting started rides with Documentation — same phase gate, no toggle
+        // of its own (it's a fixed handoff page, like Cover).
+        wantDocumentation && "Getting started",
         wantDocumentation && "Documentation"
       ].filter(Boolean);
       let phaseIdx = 0;
@@ -7403,7 +8560,7 @@
           });
           if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
             const added = [];
-            if (semanticsRebuilt && !wantComponents) {
+            if ((semanticsRebuilt || docsMustRebuild) && !wantComponents) {
               wantComponents = true;
               added.push("Components");
             }
@@ -7413,7 +8570,7 @@
             }
             if (!wantDocumentation) {
               wantDocumentation = true;
-              added.push("Documentation");
+              added.push("Getting started", "Documentation");
             }
             if (added.length > 0) {
               planned.push(...added);
@@ -7429,7 +8586,7 @@
         }
         if (wantComponents) {
           await phase("Components", async () => {
-            totalComponents = await importSample(tokens);
+            totalComponents = await importSample(tokens, options.importAllComponents === true);
           });
         }
         if (options.importIcons) {
@@ -7443,6 +8600,9 @@
           });
         }
         if (wantDocumentation) {
+          await phase("Getting started", async () => {
+            await importGettingStarted(tokens);
+          });
           await phase("Documentation", async () => {
             totalDocs = await importDocumentation(tokens);
           });
