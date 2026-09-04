@@ -374,7 +374,56 @@
     "black-a": 12,
     "white-a": 13
   };
+  var STATE_SLOT_SEGS = /* @__PURE__ */ new Set(["error", "warning", "success", "info"]);
+  function slotFolderFor(family) {
+    var _a;
+    let base = family;
+    if (base.endsWith("-dark")) base = base.slice(0, -5);
+    base = base.replace(/-\d+$/, "");
+    const seg = (_a = base.split("-").pop()) != null ? _a : "";
+    if (seg === "gray") return "Neutrals";
+    if (STATE_SLOT_SEGS.has(seg)) return "States";
+    return "Accents";
+  }
+  var SLOT_FOLDER_ORDER = { Accents: 100, Neutrals: 101, States: 102 };
+  function primitiveSortTriple(flatKey) {
+    var _a;
+    const dash = flatKey.lastIndexOf("-");
+    const fam = dash === -1 ? flatKey : flatKey.slice(0, dash);
+    const tone = parseInt(flatKey.slice(dash + 1), 10) || 0;
+    if (fam === "black-a" || fam === "white-a") return [SLOT_FOLDER_ORDER.Neutrals - 0.5, fam, tone];
+    if (fam in FAMILY_ORDER) return [FAMILY_ORDER[fam], fam, tone];
+    return [(_a = SLOT_FOLDER_ORDER[slotFolderFor(fam)]) != null ? _a : 199, fam, tone];
+  }
+  function comparePrimitiveKeys(a, b) {
+    const [ao, af, at] = primitiveSortTriple(a);
+    const [bo, bf, bt] = primitiveSortTriple(b);
+    if (ao !== bo) return ao - bo;
+    if (af !== bf) return af.localeCompare(bf);
+    return at - bt;
+  }
+  function titleCaseFamily(family) {
+    return family.replace(/-+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  function primitiveGroupFor(family) {
+    if (PRIMITIVE_GROUPS[family]) return PRIMITIVE_GROUPS[family];
+    if (family.includes("/")) {
+      return family.split("/").map((seg) => {
+        var _a;
+        return (_a = PRIMITIVE_GROUPS[seg]) != null ? _a : seg.charAt(0).toUpperCase() + seg.slice(1);
+      }).join("/");
+    }
+    return `${slotFolderFor(family)}/${titleCaseFamily(family)}`;
+  }
   function primitiveVarName(key) {
+    const dash = key.lastIndexOf("-");
+    if (dash === -1) return key;
+    const family = key.slice(0, dash);
+    const tone = key.slice(dash + 1);
+    const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone;
+    return `${primitiveGroupFor(family)}/${paddedTone}`;
+  }
+  function legacyPrimitiveVarName(key) {
     var _a;
     const dash = key.lastIndexOf("-");
     if (dash === -1) return key;
@@ -393,9 +442,22 @@
       const dash = key.lastIndexOf("-");
       const tone = key.slice(dash + 1);
       const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone;
-      return `${neutralLadder[1] === "black" ? "Black" : "White"} Alpha/${paddedTone}`;
+      return `Neutrals/${neutralLadder[1] === "black" ? "Black" : "White"} Alpha/${paddedTone}`;
     }
     const solid = primitiveVarName(key);
+    const slash = solid.lastIndexOf("/");
+    if (slash === -1) return `Alpha/${solid}`;
+    return `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`;
+  }
+  function legacyPrimitiveAlphaVarName(key) {
+    const neutralLadder = /^(black|white)-a-\d+$/.exec(key);
+    if (neutralLadder) {
+      const dash = key.lastIndexOf("-");
+      const tone = key.slice(dash + 1);
+      const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone;
+      return `${neutralLadder[1] === "black" ? "Black" : "White"} Alpha/${paddedTone}`;
+    }
+    const solid = legacyPrimitiveVarName(key);
     const slash = solid.lastIndexOf("/");
     if (slash === -1) return `Alpha/${solid}`;
     return `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`;
@@ -819,7 +881,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D;
     let count = 0;
     semanticsRebuilt = false;
     foundationsRebuilt = false;
@@ -1284,38 +1346,31 @@
         }
       }
     }
-    Object.entries(tokens.colors.primitive).sort(([a], [b]) => {
-      var _a2, _b2;
-      const aDash = a.lastIndexOf("-"), bDash = b.lastIndexOf("-");
-      const aFam = aDash === -1 ? a : a.slice(0, aDash);
-      const bFam = bDash === -1 ? b : b.slice(0, bDash);
-      const aOrd = (_a2 = FAMILY_ORDER[aFam]) != null ? _a2 : 99;
-      const bOrd = (_b2 = FAMILY_ORDER[bFam]) != null ? _b2 : 99;
-      if (aOrd !== bOrd) return aOrd - bOrd;
-      if (aFam !== bFam) return aFam.localeCompare(bFam);
-      const aTone = parseInt(a.slice(aDash + 1), 10) || 0;
-      const bTone = parseInt(b.slice(bDash + 1), 10) || 0;
-      return aTone - bTone;
-    }).forEach(([key, hex]) => {
+    const renamePrimitive = (from, to) => {
+      if (from === to) return;
+      const v = primCache.get(from);
+      if (!v || primCache.has(to)) return;
+      try {
+        v.name = to;
+        primCache.delete(from);
+        primCache.set(to, v);
+      } catch (e) {
+      }
+    };
+    for (const key of Object.keys(tokens.colors.primitive)) {
+      renamePrimitive(legacyPrimitiveVarName(key), primitiveVarName(key));
+    }
+    for (const key of Object.keys((_x = tokens.colors.primitiveAlpha) != null ? _x : {})) {
+      renamePrimitive(legacyPrimitiveAlphaVarName(key), primitiveAlphaVarName(key));
+    }
+    Object.entries(tokens.colors.primitive).sort(([a], [b]) => comparePrimitiveKeys(a, b)).forEach(([key, hex]) => {
       if (!hex) return;
       const name = primitiveVarName(key);
       setDefault(primCol, upsertVarIn(primCol, primCache, name, "COLOR", scopesForCollection(COLLECTIONS.primitives, name)), __spreadProps(__spreadValues({}, hexToRgb(hex)), { a: 1 }));
     });
     log(`\u2713 Primitive scale (${Object.keys(tokens.colors.primitive).length} tones)`);
     if (tokens.colors.primitiveAlpha && Object.keys(tokens.colors.primitiveAlpha).length > 0) {
-      Object.entries(tokens.colors.primitiveAlpha).sort(([a], [b]) => {
-        var _a2, _b2;
-        const aDash = a.lastIndexOf("-"), bDash = b.lastIndexOf("-");
-        const aFam = aDash === -1 ? a : a.slice(0, aDash);
-        const bFam = bDash === -1 ? b : b.slice(0, bDash);
-        const aOrd = (_a2 = FAMILY_ORDER[aFam]) != null ? _a2 : 99;
-        const bOrd = (_b2 = FAMILY_ORDER[bFam]) != null ? _b2 : 99;
-        if (aOrd !== bOrd) return aOrd - bOrd;
-        if (aFam !== bFam) return aFam.localeCompare(bFam);
-        const aTone = parseInt(a.slice(aDash + 1), 10) || 0;
-        const bTone = parseInt(b.slice(bDash + 1), 10) || 0;
-        return aTone - bTone;
-      }).forEach(([key, hex]) => {
+      Object.entries(tokens.colors.primitiveAlpha).sort(([a], [b]) => comparePrimitiveKeys(a, b)).forEach(([key, hex]) => {
         if (!hex) return;
         const name = primitiveAlphaVarName(key);
         setDefault(primCol, upsertVarIn(primCol, primCache, name, "COLOR", scopesForCollection(COLLECTIONS.primitives, name)), hexToRgba(hex));
@@ -1350,7 +1405,7 @@
       if (v && !primByHex.has(norm2)) primByHex.set(norm2, v);
     }
     const primAlphaByHex = /* @__PURE__ */ new Map();
-    for (const [key, hex] of Object.entries((_x = tokens.colors.primitiveAlpha) != null ? _x : {})) {
+    for (const [key, hex] of Object.entries((_y = tokens.colors.primitiveAlpha) != null ? _y : {})) {
       if (!hex) continue;
       const v = primCache.get(primitiveAlphaVarName(key));
       const norm2 = rgbaToHex8(hexToRgba(hex));
@@ -1361,7 +1416,7 @@
     const themes = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({
       light: tokens.colors.semantic || {}
     }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const ordered = ((_y = tokens.colors.themeOrder) != null ? _y : []).filter((t) => themes[t]);
+    const ordered = ((_z = tokens.colors.themeOrder) != null ? _z : []).filter((t) => themes[t]);
     const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))];
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const arch = tokens.colors.architecture;
@@ -1420,7 +1475,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_z = tok.byMode[modeKey]) != null ? _z : "", lookup);
+            const rgba = archValueRgba((_A = tok.byMode[modeKey]) != null ? _A : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -1481,7 +1536,7 @@
       for (const [mid, value] of entry.values) v.setValueForMode(mid, value);
     }
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_A = ARCH_LABEL[arch.kind]) != null ? _A : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_B = ARCH_LABEL[arch.kind]) != null ? _B : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -1552,7 +1607,7 @@
     );
     log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""}`);
     const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_B = tokens.borders) == null ? void 0 : _B.width;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_C = tokens.borders) == null ? void 0 : _C.width;
     if (strokeMap) {
       const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
       emitCollection(
@@ -1650,7 +1705,7 @@
       );
       log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_C = tokens.icons) == null ? void 0 : _C.library) {
+    if ((_D = tokens.icons) == null ? void 0 : _D.library) {
       emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
     }
     if (tokens.copy) {

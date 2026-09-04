@@ -641,18 +641,91 @@ const FAMILY_ORDER: Record<string, number> = {
   'black-a': 12, 'white-a': 13,
 }
 
+// A THEME-MINTED family's key encodes the slot it serves (ThemePanel's
+// `slotsFromAccent`): "<theme>" is the accent, "<theme>-gray" the neutral,
+// "<theme>-error" / "-warning" / "-success" / "-info" a status. `uniqueKey` may
+// append "-2" for a second adoption, and the payload adds "-dark" for the twin.
+// Mapping that back to the platform's Accents / Neutrals / States folders makes
+// a custom theme's primitives read the same in Figma's Variables panel as in
+// the configurator's Primitives nav (see the reference the user attached).
+// Global built-ins keep their PRIMITIVE_GROUPS names untouched.
+const STATE_SLOT_SEGS = new Set(['error', 'warning', 'success', 'info'])
+function slotFolderFor(family: string): 'Accents' | 'Neutrals' | 'States' {
+  let base = family
+  if (base.endsWith('-dark')) base = base.slice(0, -5)
+  base = base.replace(/-\d+$/, '')
+  const seg = base.split('-').pop() ?? ''
+  if (seg === 'gray') return 'Neutrals'
+  if (STATE_SLOT_SEGS.has(seg)) return 'States'
+  return 'Accents'
+}
+const SLOT_FOLDER_ORDER: Record<string, number> = { Accents: 100, Neutrals: 101, States: 102 }
+
+// Sort a flat primitive/alpha key: global built-ins by FAMILY_ORDER, then custom
+// families grouped by slot folder (Accents → Neutrals → States) and name, then
+// tone. Keeps Figma's group-creation order matching the platform's Primitives nav.
+function primitiveSortTriple(flatKey: string): [number, string, number] {
+  const dash = flatKey.lastIndexOf('-')
+  const fam = dash === -1 ? flatKey : flatKey.slice(0, dash)
+  const tone = parseInt(flatKey.slice(dash + 1), 10) || 0
+  // `black-a` / `white-a` are in FAMILY_ORDER but render under `Neutrals/` now —
+  // sort them with that folder, not at their old 12/13, so Accents comes first.
+  if (fam === 'black-a' || fam === 'white-a') return [SLOT_FOLDER_ORDER.Neutrals - 0.5, fam, tone]
+  if (fam in FAMILY_ORDER) return [FAMILY_ORDER[fam], fam, tone]
+  return [SLOT_FOLDER_ORDER[slotFolderFor(fam)] ?? 199, fam, tone]
+}
+function comparePrimitiveKeys(a: string, b: string): number {
+  const [ao, af, at] = primitiveSortTriple(a)
+  const [bo, bf, bt] = primitiveSortTriple(b)
+  if (ao !== bo) return ao - bo
+  if (af !== bf) return af.localeCompare(bf)
+  return at - bt
+}
+// "core--minimalist-gray-2-dark" → "Core Minimalist Gray 2 Dark".
+function titleCaseFamily(family: string): string {
+  return family
+    .replace(/-+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 // Turn a flat primitive key into a grouped Figma variable name:
 // "accent-1" → "Accent/01", "error-500" → "State/Error/500", "teal-3" → "Teal/03".
 // Splits on the LAST "-" so hundreds-based tone labels (accent-500) are preserved.
 // Single-digit tones are zero-padded (1→01…9→09) so Figma's alphabetical panel
 // sort matches numeric order instead of lexicographic (1, 10, 11, 12, 2…).
+function primitiveGroupFor(family: string): string {
+  // Global built-ins — exact map, unchanged so no existing file's variables
+  // are renamed.
+  if (PRIMITIVE_GROUPS[family]) return PRIMITIVE_GROUPS[family]
+  // Legacy theme-namespaced families ("ocean/accent") — kept for old payloads.
+  if (family.includes('/')) {
+    return family
+      .split('/')
+      .map((seg) => PRIMITIVE_GROUPS[seg] ?? (seg.charAt(0).toUpperCase() + seg.slice(1)))
+      .join('/')
+  }
+  // Theme-minted / custom family → Accents|Neutrals|States / <Name>.
+  return `${slotFolderFor(family)}/${titleCaseFamily(family)}`
+}
+
 function primitiveVarName(key: string): string {
   const dash = key.lastIndexOf('-')
   if (dash === -1) return key
   const family = key.slice(0, dash)
   const tone = key.slice(dash + 1)
-  // Theme-namespaced families ("ocean/accent") nest under the theme group,
-  // resolving each segment through PRIMITIVE_GROUPS (else Title Case).
+  const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone
+  return `${primitiveGroupFor(family)}/${paddedTone}`
+}
+
+// The pre-slot-folder name for a custom family (`Core--minimalist-gray/09`) —
+// used only to rename existing variables in place on re-import so bindings
+// survive the move to `Neutrals/Core Minimalist Gray/09`.
+function legacyPrimitiveVarName(key: string): string {
+  const dash = key.lastIndexOf('-')
+  if (dash === -1) return key
+  const family = key.slice(0, dash)
+  const tone = key.slice(dash + 1)
   const group = PRIMITIVE_GROUPS[family]
     ?? family
       .split('/')
@@ -678,9 +751,25 @@ function primitiveAlphaVarName(key: string): string {
     const dash = key.lastIndexOf('-')
     const tone = key.slice(dash + 1)
     const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone
-    return `${neutralLadder[1] === 'black' ? 'Black' : 'White'} Alpha/${paddedTone}`
+    // Under Neutrals, matching the platform's Primitives nav — black/white
+    // alpha are a neutral wash, not a family of their own.
+    return `Neutrals/${neutralLadder[1] === 'black' ? 'Black' : 'White'} Alpha/${paddedTone}`
   }
   const solid = primitiveVarName(key)
+  const slash = solid.lastIndexOf('/')
+  if (slash === -1) return `Alpha/${solid}`
+  return `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`
+}
+
+function legacyPrimitiveAlphaVarName(key: string): string {
+  const neutralLadder = /^(black|white)-a-\d+$/.exec(key)
+  if (neutralLadder) {
+    const dash = key.lastIndexOf('-')
+    const tone = key.slice(dash + 1)
+    const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone
+    return `${neutralLadder[1] === 'black' ? 'Black' : 'White'} Alpha/${paddedTone}`
+  }
+  const solid = legacyPrimitiveVarName(key)
   const slash = solid.lastIndexOf('/')
   if (slash === -1) return `Alpha/${solid}`
   return `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`
@@ -1892,21 +1981,34 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     }
   }
 
-  // Sort by family priority (FAMILY_ORDER) then tone numerically so Figma
-  // creates groups in the right order: Accent → Neutral → State/* → custom.
+  // Migrate custom / theme-minted families onto the platform's slot folders:
+  //   "Core--minimalist-gray/09" → "Neutrals/Core Minimalist Gray/09"
+  //   "Black Alpha/05"           → "Neutrals/Black Alpha/05"
+  // Rename in place (Figma keeps the variable id) so every existing binding
+  // survives — same technique as `migrateLegacyFamilyName` for typography.
+  // Global built-ins are untouched (their legacy name equals their new name).
+  const renamePrimitive = (from: string, to: string) => {
+    if (from === to) return
+    const v = primCache.get(from)
+    if (!v || primCache.has(to)) return
+    try {
+      v.name = to
+      primCache.delete(from)
+      primCache.set(to, v)
+    } catch { /* permission / collision — the new var is created below anyway */ }
+  }
+  for (const key of Object.keys(tokens.colors.primitive)) {
+    renamePrimitive(legacyPrimitiveVarName(key), primitiveVarName(key))
+  }
+  for (const key of Object.keys(tokens.colors.primitiveAlpha ?? {})) {
+    renamePrimitive(legacyPrimitiveAlphaVarName(key), primitiveAlphaVarName(key))
+  }
+
+  // Sort so Figma creates groups in the platform's order: built-ins by
+  // FAMILY_ORDER, then custom families by slot folder (Accents → Neutrals →
+  // States) and name, then tone.
   Object.entries(tokens.colors.primitive)
-    .sort(([a], [b]) => {
-      const aDash = a.lastIndexOf('-'), bDash = b.lastIndexOf('-')
-      const aFam  = aDash === -1 ? a : a.slice(0, aDash)
-      const bFam  = bDash === -1 ? b : b.slice(0, bDash)
-      const aOrd  = FAMILY_ORDER[aFam] ?? 99
-      const bOrd  = FAMILY_ORDER[bFam] ?? 99
-      if (aOrd !== bOrd) return aOrd - bOrd
-      if (aFam !== bFam) return aFam.localeCompare(bFam)
-      const aTone = parseInt(a.slice(aDash + 1), 10) || 0
-      const bTone = parseInt(b.slice(bDash + 1), 10) || 0
-      return aTone - bTone
-    })
+    .sort(([a], [b]) => comparePrimitiveKeys(a, b))
     .forEach(([key, hex]) => {
       if (!hex) return
       const name = primitiveVarName(key)
@@ -1919,18 +2021,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   // inside Color Primitives, in the same family order as the solids.
   if (tokens.colors.primitiveAlpha && Object.keys(tokens.colors.primitiveAlpha).length > 0) {
     Object.entries(tokens.colors.primitiveAlpha)
-      .sort(([a], [b]) => {
-        const aDash = a.lastIndexOf('-'), bDash = b.lastIndexOf('-')
-        const aFam  = aDash === -1 ? a : a.slice(0, aDash)
-        const bFam  = bDash === -1 ? b : b.slice(0, bDash)
-        const aOrd  = FAMILY_ORDER[aFam] ?? 99
-        const bOrd  = FAMILY_ORDER[bFam] ?? 99
-        if (aOrd !== bOrd) return aOrd - bOrd
-        if (aFam !== bFam) return aFam.localeCompare(bFam)
-        const aTone = parseInt(a.slice(aDash + 1), 10) || 0
-        const bTone = parseInt(b.slice(bDash + 1), 10) || 0
-        return aTone - bTone
-      })
+      .sort(([a], [b]) => comparePrimitiveKeys(a, b))
       .forEach(([key, hex]) => {
         if (!hex) return
         const name = primitiveAlphaVarName(key)
