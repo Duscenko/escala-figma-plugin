@@ -727,6 +727,15 @@
   .sync-now { margin-left: auto; flex-shrink: 0; }
   .sync-hint { font-size: 10px; color: var(--text-sub); line-height: 1.5; }
 
+  /* The sync contract. Deliberately quiet type — it is a standing fact about
+     the connection, not a warning, and it must not compete with the status
+     dot right above it. */
+  .sync-scope { display: flex; flex-direction: column; gap: 6px; }
+  .sync-scope-row { font-size: 10px; color: var(--text-sub); line-height: 1.55; display: flex; gap: 6px; align-items: baseline; }
+  .sync-scope-yes { color: var(--success); flex: none; }
+  .sync-scope-no { color: var(--text-dim); flex: none; }
+  .sync-scope-why { color: var(--text-dim); }
+
   /* Reset row: a quiet, secondary zone below the sync config — not styled as
      a call to action, since resetting is the exception, not something anyone
      reaches for on a normal visit. .link-btn.is-danger only appears for the
@@ -1184,6 +1193,19 @@
                       title="Check the publish URL right now instead of waiting for the next check">Update now</button>
             </div>
             <span class="sync-hint">Scope to one system with <code>?project=name</code></span>
+          </div>
+          <!-- What a sync actually covers, stated where it is claimed.
+               fetchAndSync posts importComponents/importIcons/importDocs
+               false — routine sync has ALWAYS been Variables + Styles only,
+               because everything the plugin draws is variable-bound and
+               re-themes itself when those change. Nothing said so, so a green
+               "Up to date" read as a promise about the whole file, and a
+               component added on the web that never appeared here read as the
+               plugin being broken. Keep this list in step with fetchAndSync's
+               options if they ever change. -->
+          <div class="sync-scope">
+            <div class="sync-scope-row"><span class="sync-scope-yes">✓</span> Variables and styles — updated automatically</div>
+            <div class="sync-scope-row"><span class="sync-scope-no">—</span> Components, cover and boards — re-run Import to refresh them<br /><span class="sync-scope-why">They're bound to the variables, so your colours, type and spacing already follow along. Import is only needed for new or renamed elements.</span></div>
           </div>
           <div class="ov-divide"></div>
           <!-- Disconnects THIS file only: clears its imported system and its
@@ -2624,7 +2646,7 @@ async function fetchAndSync(url) {
       const quiet = Date.now() - noChangeSince
       updateSyncStatus('active', quiet > SYNC_STALE_MS
         ? `Up to date — no changes for ${Math.round(quiet / 60000)}m. If you're editing on the platform, check that Keep Figma in sync is on there.`
-        : 'Up to date — no changes')
+        : 'Variables up to date — no changes')
       return
     }
     // A payload we already failed on, repeatedly. Retrying it a fourth time
@@ -2644,6 +2666,11 @@ async function fetchAndSync(url) {
 
     const payloadFamily = (tokens.typography && tokens.typography.fontFamily) || '?'
     addLog(`Sync: fetched "${tokens.project}" — payload family "${payloadFamily}"`)
+    // Neutral on purpose: this is set before the sandbox reports its first
+    // phase, and a rare escalation (see semanticsRebuilt in code.ts) makes a
+    // sync do more than variables. The standing scope card states the rule;
+    // the progress handler overwrites this line with the real phase within a
+    // second either way.
     updateSyncStatus('active', `Refreshing "${tokens.project}"…`)
     importInFlight = true
     showProgress('Starting…', 0, 0)

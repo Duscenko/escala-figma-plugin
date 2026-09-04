@@ -522,6 +522,34 @@ const FILE_DOCS_REV_KEY = 'sd-docs-rev'
 // syncs never touch hiddenFromPublishing again, so a user who manually
 // re-exposes a ramp keeps that choice forever.
 const FILE_PRIMITIVES_HIDDEN_KEY = 'sd-primitives-hidden-v1'
+// Fingerprint of a semantic order that this file provably CANNOT be rebuilt
+// into (see the order check in importVariables). Cleared the moment the order
+// matches, or by Reset this file.
+const FILE_SEM_ORDER_STUCK_KEY = 'sd-sem-order-stuck'
+// Style-folder prefixes from a previous system that this file provably cannot
+// shed — a user's OWN layer still applies one, so `removeInheritedStyles`'
+// `s.remove()` will refuse forever. Same latch, same reason, as the semantic
+// order above: without it, `scanInheritedStylePrefixes` re-reports them on
+// every poll and re-escalates a Variables-only sync into a full rebuild.
+const FILE_INHERITED_BLOCKED_KEY = 'sd-inherited-blocked'
+// Fallback for the project name when writeFileTokens hits pluginData's ~100KB
+// ceiling. `foundationsRebuilt` compares the payload's project against the
+// stored one, so a system too large to store made that comparison fail on
+// every single import — Cover + Getting started + Documentation, forever.
+// The name alone always fits.
+const FILE_PROJECT_NAME_KEY = 'sd-file-project-name'
+/** Cheap, stable digest of the desired variable order. Storing the full list
+ *  would be ~2KB of the root's pluginData budget for a value only ever
+ *  compared for equality. */
+function orderFingerprint(names: string[]): string {
+  let h = 2166136261
+  const s = names.join(' ')
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return `${names.length}:${(h >>> 0).toString(36)}`
+}
 
 /** Sidebar order in Figma's Variables panel. Figma has no reorder API — a
  *  collection's position is its creation order — so we create Color Semantics
@@ -1445,7 +1473,14 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   // A leftover collection / Documentation board named after a PREVIOUS system
   // (e.g. "Jasdy") is not cleaned by the current-project sweep below. Detect
   // the rename here so the import handler also rebuilds Cover + Docs.
+  // `?? getPluginData(...)`: writeFileTokens can fail on an oversized system
+  // (pluginData's ~100KB ceiling), and then this read returns undefined
+  // forever — so the name comparison below reported a project change on EVERY
+  // import and escalated every sync into a Cover + Getting started +
+  // Documentation rebuild. The name on its own always fits.
   const previousProject = readFileTokens()?.tokens.project
+    || figma.root.getPluginData(FILE_PROJECT_NAME_KEY)
+    || undefined
   if (previousProject && tokens.project && previousProject !== tokens.project) {
     foundationsRebuilt = true
     log(`↻ System changed "${previousProject}" → "${tokens.project}" — leftover collections and docs will follow the new name`)
@@ -2269,7 +2304,32 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     .map((id) => byId.get(id))
     .filter((v): v is Variable => v !== undefined)
   const currentNames = currentVars.map((v) => v.name)
-  if (currentNames.length > 0 && currentNames.join(' ') !== desired.join(' ')) {
+  const desiredKey = orderFingerprint(desired)
+  // ── The reorder must be allowed to GIVE UP ────────────────────────────────
+  // `v.remove()` is best-effort — Figma refuses on a variable another file
+  // still consumes (this file published as a library), and the loop below has
+  // always counted those as `stuck`. But a stuck variable stays in
+  // `semCol.variableIds`, so `currentNames` can NEVER equal `desired` again:
+  // the next import re-detects a mismatch, re-runs the rebuild, and sets
+  // `semanticsRebuilt` again — which the import handler escalates into a full
+  // Components + Cover + Getting started + Documentation pass.
+  //
+  // Under Live Sync that repeats on EVERY POLL. At the default 10s interval
+  // it is a complete heavy import every ten seconds, forever, on a file that
+  // looks idle. Reported as the plugin "se está pegando" and never finishing
+  // the link — this is the mechanism.
+  //
+  // So a failed attempt records the order it failed to reach. The same order
+  // is not attempted twice: values still flow through the upsert below (a
+  // colour edit syncs exactly as before), only the cosmetic REORDER is given
+  // up on, and nothing escalates. A genuinely new order — a different
+  // architecture, a role added — has a different fingerprint and gets its one
+  // honest attempt.
+  const blockedKey = figma.root.getPluginData(FILE_SEM_ORDER_STUCK_KEY)
+  const orderMatches = currentNames.length === 0 || currentNames.join(' ') === desired.join(' ')
+  // `blockedKey !== desiredKey` is the whole loop-breaker: this exact order was
+  // already attempted and provably cannot be reached in this file.
+  if (!orderMatches && blockedKey !== desiredKey) {
     let dropped = 0
     let stuck = 0
     // By object, not by name: two variables can carry the same name (the cache
@@ -2284,8 +2344,29 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       } catch (e) { stuck++ }
     }
     semCache.clear()
+    if (stuck > 0) {
+      // Partial reorder — record it so the next pass doesn't try again, and say
+      // once, here where it is news, what it means and what fixes it. Silence
+      // afterwards is deliberate: at a 10s poll this would otherwise write
+      // 8,640 identical lines a day into the one window the user has on real
+      // problems.
+      try { figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, desiredKey) } catch { /* best-effort */ }
+      log(`⚠ "${COLLECTIONS.semantics}": ${stuck} token${stuck === 1 ? '' : 's'} could not be recreated in the platform's order — Figma refuses to remove a variable another file still uses. Their VALUES keep syncing normally; only the grouping stays as it was. To fix the order, unpublish this file as a library (or run Reset this file) and import once more. This is not retried — retrying would rebuild the whole file on every sync.`)
+    } else {
+      try { figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, '') } catch { /* best-effort */ }
+      log(`↻ "${COLLECTIONS.semantics}" rebuilt in the platform's order (${dropped} token${dropped === 1 ? '' : 's'} recreated) — Figma has no reorder API, so recreating them is the only way the groups can follow the system`)
+    }
+    // TRUE in both branches, including the partial one. Whatever `v.remove()`
+    // DID succeed on is gone, and every binding that pointed at those objects
+    // is dead — the upsert below recreates the NAMES, not the objects. So the
+    // repair pass is still owed and still runs. The block above changes only
+    // that it runs ONCE: this import redraws and rebinds, the next one skips
+    // the check instead of re-earning the same escalation ten seconds later.
     semanticsRebuilt = true
-    log(`↻ "${COLLECTIONS.semantics}" rebuilt in the platform's order (${dropped} token${dropped === 1 ? '' : 's'} recreated${stuck > 0 ? `, ${stuck} could not be removed and stay where they were` : ''}) — Figma has no reorder API, so recreating them is the only way the groups can follow the system`)
+  } else if (orderMatches && blockedKey) {
+    // The order matches now — the file was unpublished, or reset. Clear the
+    // block so a future architecture change gets its own honest attempt.
+    try { figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, '') } catch { /* best-effort */ }
   }
 
   for (const entry of plan) {
@@ -6587,12 +6668,20 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
           (n) => n.type === 'COMPONENT_SET' ||
             (n.type === 'COMPONENT' && n.parent?.type !== 'COMPONENT_SET'),
         )) {
-          if (inner.type === 'COMPONENT_SET' && !existingSets.has(inner.name)) {
+          // Reparent UNCONDITIONALLY, and only then decide whether this is the
+          // copy the registry keeps. The name check used to gate the rescue
+          // itself, so a second board holding a set of the same name (a
+          // duplicate left by an older generation, or the same element built on
+          // two pages) kept that set inside the board — and `child.remove()`
+          // two lines down then DELETED it, breaking every instance placed from
+          // it. A duplicate is now a loose page child, which sweepOrphans()
+          // parks in the retired slab where it stays reachable.
+          if (inner.type === 'COMPONENT_SET') {
             pg.appendChild(inner)
-            existingSets.set(inner.name, inner as ComponentSetNode)
-          } else if (inner.type === 'COMPONENT' && !existingSingles.has(inner.name)) {
+            if (!existingSets.has(inner.name)) existingSets.set(inner.name, inner as ComponentSetNode)
+          } else if (inner.type === 'COMPONENT') {
             pg.appendChild(inner)
-            existingSingles.set(inner.name, inner as ComponentNode)
+            if (!existingSingles.has(inner.name)) existingSingles.set(inner.name, inner as ComponentNode)
           }
         }
         child.remove()
@@ -7477,6 +7566,83 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     boardY += Math.ceil(band.height) + HEAD_GAP
   }
 
+  // ── Park whatever this import didn't rebuild ──────────────────────────────
+  // harvest() lifts every set OUT of its board onto the page before a rebuild,
+  // and Figma's appendChild keeps the node's BOARD-RELATIVE x/y — small numbers
+  // — so a lifted set lands at the page ORIGIN. buildEntry() reparents the ones
+  // it rebuilds; anything it doesn't just stays there, stacked on the origin on
+  // top of the first boards of the new row.
+  //
+  // "Doesn't rebuild" is the ordinary case, not an error path: importing
+  // Components Overview after a Full catalogue leaves ~48 of 58 sets behind
+  // (SAMPLE is ten entries), and every one of them piles onto the same spot.
+  // Reported as the plugin rendering its extracted elements "encimados" — a
+  // heap of unrelated components (Tooltip over Scroll Area over Modal) sitting
+  // across the sheet it had just built correctly.
+  //
+  // They are NOT deleted. A set left over from a previous import is very likely
+  // to have instances in the user's own file, and removing it would detach
+  // every one of them. They're parked in a labelled slab below the built rows
+  // instead, in a plain grid, with names untouched — and because that slab is
+  // named 'docs/…', the NEXT import's harvest() lifts them straight back out
+  // and rebuilds them the moment they're part of the selection again.
+  const ORPHAN_GAP = 40
+  function sweepOrphans(pg: PageNode) {
+    const orphans = pg.children.filter(
+      (n): n is ComponentNode | ComponentSetNode =>
+        n.type === 'COMPONENT_SET' || n.type === 'COMPONENT',
+    )
+    if (orphans.length === 0) return
+
+    // Below everything the run actually built, measured rather than taken from
+    // the layout cursor: with the page cap in play two categories share a page
+    // and the cursor belongs to whichever ran last.
+    let bottom = 0
+    for (const n of pg.children) {
+      if (n.type === 'COMPONENT_SET' || n.type === 'COMPONENT') continue
+      bottom = Math.max(bottom, n.y + n.height)
+    }
+
+    const cellW = Math.max(...orphans.map((n) => n.width)) + ORPHAN_GAP
+    const cellH = Math.max(...orphans.map((n) => n.height)) + ORPHAN_GAP
+    const cols = Math.max(1, Math.min(4, orphans.length))
+    const rows = Math.ceil(orphans.length / cols)
+
+    const PAD = 48
+    const HEAD = 96
+    const slab = figma.createFrame()
+    slab.name = `docs/retired · not in this import`
+    slab.clipsContent = false
+    slab.fills = [docSolid(DOC.board, 1, sampleChrome.board)]
+    slab.cornerRadius = 24
+    slab.resize(cols * cellW - ORPHAN_GAP + PAD * 2, HEAD + rows * cellH - ORPHAN_GAP + PAD)
+    pg.appendChild(slab)
+    slab.x = 0
+    slab.y = bottom + CATEGORY_GAP
+    pinToLightMode(slab, sampleModePin)
+
+    try {
+      const title = docText('NOT IN THIS IMPORT', 10, 'Medium', DOC.muted, 1, sampleChrome.muted)
+      title.letterSpacing = { value: 1.4, unit: 'PIXELS' }
+      slab.appendChild(title)
+      title.x = PAD; title.y = PAD
+      const sub = docText(
+        `${orphans.length} element${orphans.length === 1 ? '' : 's'} built by an earlier import. Kept so existing instances stay linked — re-import them to bring them back into the sheet.`,
+        12, 'Regular', DOC.muted, 1, sampleChrome.muted)
+      sub.textAutoResize = 'HEIGHT'
+      sub.resize(Math.min(560, slab.width - PAD * 2), sub.height)
+      slab.appendChild(sub)
+      sub.x = PAD; sub.y = PAD + 20
+    } catch { /* fonts still loading — the slab alone is enough to stop the pile */ }
+
+    orphans.forEach((n, i) => {
+      slab.appendChild(n)
+      n.x = PAD + (i % cols) * cellW
+      n.y = HEAD + Math.floor(i / cols) * cellH
+    })
+    log(`↳ ${pg.name}: parked ${orphans.length} element${orphans.length === 1 ? '' : 's'} not part of this import`)
+  }
+
   // Resolve the specs up front so the progress bar counts what will actually
   // be built (a spec whose filter matched nothing is skipped, not reported).
   type PlannedEntry = { entry: CatalogEntry; spec: AtomSpec; category: string }
@@ -7683,6 +7849,21 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     }
   }
   progress('Components', plannedTotal, plannedTotal)
+  // After every category, so a page shared by two of them (page cap) is swept
+  // once, with all of its boards already placed. EVERY harvested page, not just
+  // the ones built onto: harvest() empties the legacy homes ('⬡ Components
+  // Overview', the per-item '   ↳ …' pages) the same way, so a set it lifted
+  // and nothing rebuilt is stranded at THEIR origin too — and the retirement
+  // loop below then refuses to delete the page, correctly, because it isn't
+  // empty. The placeholder page is exempt: its two masters are page-level
+  // components BY DESIGN, not leftovers.
+  for (const pg of figma.root.children) {
+    if (!harvested.has(pg.id) && !builtCatPages.includes(pg)) continue
+    if (pg.name === '⬡ Icon Placeholders') continue
+    try { sweepOrphans(pg) } catch (e) {
+      log(`⚠ ${pg.name}: could not park leftovers (${e instanceof Error ? e.message : String(e)})`)
+    }
+  }
   firstBuiltPage = firstCatPage
 
   // Retire the emptied legacy homes. Only if truly empty and not the page the
@@ -7700,7 +7881,11 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
 
   if (firstBuiltPage) {
     await figma.setCurrentPageAsync(firstBuiltPage)
-    const placed = firstBuiltPage.children.filter((n) => n.type === 'COMPONENT' || n.type === 'COMPONENT_SET')
+    // The boards, not the sets: sweepOrphans() leaves no COMPONENT/
+    // COMPONENT_SET as a direct page child, so filtering for those would frame
+    // nothing (and, before the sweep existed, framed exactly the stranded pile
+    // instead of the sheet).
+    const placed = firstBuiltPage.children.filter((n) => /^\d{2} · /.test(n.name) || n.name.startsWith('docs/category · '))
     if (placed.length > 0) figma.viewport.scrollAndZoomIntoView(placed)
   }
 
@@ -10410,6 +10595,9 @@ function resetFile() {
   figma.root.setPluginData(FILE_SYNC_KEY, '')
   figma.root.setPluginData(FILE_PROJECTS_KEY, '')
   figma.root.setPluginData(FILE_DOCS_REV_KEY, '')
+  figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, '')
+  figma.root.setPluginData(FILE_INHERITED_BLOCKED_KEY, '')
+  figma.root.setPluginData(FILE_PROJECT_NAME_KEY, '')
 }
 
 /** Value-only pull from Figma → Escala. Structural edits (new/renamed vars,
@@ -10819,7 +11007,13 @@ figma.ui.onmessage = async (msg: {
     // update that adds Type/Spacing/Size/Stroke boards — or when this file
     // still carries a previous project's style folder (Jasdy/Type/…) — rebuild
     // Cover + Documentation even on a sync pass.
-    const inheritedPrefixes = await scanInheritedStylePrefixes()
+    // Latched-off prefixes are excluded: a full rebuild already ran for them
+    // once and still could not remove them (see FILE_INHERITED_BLOCKED_KEY).
+    const blockedPrefixes = new Set(
+      (figma.root.getPluginData(FILE_INHERITED_BLOCKED_KEY) || '').split('\n').filter(Boolean),
+    )
+    const presentPrefixes = await scanInheritedStylePrefixes()
+    const inheritedPrefixes = presentPrefixes.filter((p) => !blockedPrefixes.has(p))
     const staleDocs = readDocsRev() < DOCS_REV
     let docsMustRebuild = inheritedPrefixes.length > 0 || staleDocs
     if (docsMustRebuild) {
@@ -10926,6 +11120,22 @@ figma.ui.onmessage = async (msg: {
         // ticked when the icon tint needs to follow too.
         if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
           const added: string[] = []
+          // An escalation is the plugin deciding on the user's behalf, in the
+          // background, during a poll they didn't press a button for. It gets
+          // the CONNECTED KIT, never the 58-type catalogue, whatever the
+          // Import panel's checkbox happens to say.
+          //
+          // The checkbox was honored here so an escalated rebuild wouldn't
+          // leave the catalogue's extra sets bound to dead aliases. True, but
+          // it made the automatic path the heaviest one that exists: a Live
+          // Sync tick could silently start a 2–4 minute, ~1,400-variant
+          // rebuild. Those extra sets are a manual import and stay the user's
+          // to refresh — the log line below says so, and says how.
+          const wasFullCatalogue = options.importAllComponents === true
+          if (wasFullCatalogue) {
+            options.importAllComponents = false
+            log(`↻ Rebinding the core components only. The full catalogue (58 types) is not rebuilt automatically — re-run Import with "Full catalogue" ticked when you want those re-bound too.`)
+          }
           // docsMustRebuild pulls Components in too now: DOCS_REV 8 moved the
           // catalogue from one '⬡ Components Overview' page to a page per
           // category, so an existing file needs the rebuild to get the split
@@ -10974,11 +11184,36 @@ figma.ui.onmessage = async (msg: {
     if (inheritedDropped > 0) {
       log(`✓ Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? '' : 's'} prefixed with a previous project name`)
     }
+    // Whatever is STILL there after a rebuild that ran specifically to free it
+    // is applied by something this plugin does not draw — one of the user's own
+    // layers. It will never be removable, so stop letting it ask for the
+    // rebuild again. Only latched on a run that actually attempted the rebuild
+    // (`inheritedPrefixes.length > 0`) and completed it (`!hadError`), so a
+    // prefix is never written off on the strength of a pass that failed
+    // partway — the boards still holding the style might simply not have been
+    // redrawn yet.
+    if (inheritedPrefixes.length > 0 && !hadError) {
+      try {
+        const survivors = (await scanInheritedStylePrefixes()).filter((p) => inheritedPrefixes.includes(p))
+        // Rewritten whole, never appended: a prefix the user has since deleted
+        // must fall out of the latch, or a future system of the same name
+        // could never trigger its own cleanup.
+        const keep = [...new Set([...survivors, ...[...blockedPrefixes].filter((p) => presentPrefixes.includes(p))])]
+        figma.root.setPluginData(FILE_INHERITED_BLOCKED_KEY, keep.join('\n'))
+        if (survivors.length > 0) {
+          log(`⚠ Style folder${survivors.length > 1 ? 's' : ''} ${survivors.join(', ')} could not be removed — one of your own layers still uses ${survivors.length > 1 ? 'them' : 'it'}. Everything the plugin draws has been rebound; delete or re-style those layers to clear the folder. Not retried — retrying would rebuild the file on every sync.`)
+        }
+      } catch { /* best-effort */ }
+    }
 
       // Keep the payload for manual export and Overview — scoped to THIS file
       // (see writeFileTokens), so it survives restarts without leaking into
       // any other file the user opens with the plugin.
       writeFileTokens(tokens)
+      // Always, and separately from the payload: this is the value
+      // `foundationsRebuilt` compares against, and it must be stored even when
+      // the full record was too big to keep.
+      try { figma.root.setPluginData(FILE_PROJECT_NAME_KEY, tokens.project || '') } catch { /* best-effort */ }
 
       const summary = [
         totalVars      > 0 ? `${totalVars} variables`     : null,

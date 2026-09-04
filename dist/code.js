@@ -265,6 +265,18 @@
   var DOCS_REV = 11;
   var FILE_DOCS_REV_KEY = "sd-docs-rev";
   var FILE_PRIMITIVES_HIDDEN_KEY = "sd-primitives-hidden-v1";
+  var FILE_SEM_ORDER_STUCK_KEY = "sd-sem-order-stuck";
+  var FILE_INHERITED_BLOCKED_KEY = "sd-inherited-blocked";
+  var FILE_PROJECT_NAME_KEY = "sd-file-project-name";
+  function orderFingerprint(names) {
+    let h = 2166136261;
+    const s = names.join(" ");
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return `${names.length}:${(h >>> 0).toString(36)}`;
+  }
   function collectionPanelOrder(tokens) {
     var _a, _b;
     const rest = [
@@ -885,7 +897,7 @@
     let count = 0;
     semanticsRebuilt = false;
     foundationsRebuilt = false;
-    const previousProject = (_a = readFileTokens()) == null ? void 0 : _a.tokens.project;
+    const previousProject = ((_a = readFileTokens()) == null ? void 0 : _a.tokens.project) || figma.root.getPluginData(FILE_PROJECT_NAME_KEY) || void 0;
     if (previousProject && tokens.project && previousProject !== tokens.project) {
       foundationsRebuilt = true;
       log(`\u21BB System changed "${previousProject}" \u2192 "${tokens.project}" \u2014 leftover collections and docs will follow the new name`);
@@ -1513,7 +1525,10 @@
     const byId = new Map(allVars.map((v) => [v.id, v]));
     const currentVars = semCol.variableIds.map((id) => byId.get(id)).filter((v) => v !== void 0);
     const currentNames = currentVars.map((v) => v.name);
-    if (currentNames.length > 0 && currentNames.join(" ") !== desired.join(" ")) {
+    const desiredKey = orderFingerprint(desired);
+    const blockedKey = figma.root.getPluginData(FILE_SEM_ORDER_STUCK_KEY);
+    const orderMatches = currentNames.length === 0 || currentNames.join(" ") === desired.join(" ");
+    if (!orderMatches && blockedKey !== desiredKey) {
       let dropped = 0;
       let stuck = 0;
       for (const v of currentVars) {
@@ -1527,8 +1542,25 @@
         }
       }
       semCache.clear();
+      if (stuck > 0) {
+        try {
+          figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, desiredKey);
+        } catch (e) {
+        }
+        log(`\u26A0 "${COLLECTIONS.semantics}": ${stuck} token${stuck === 1 ? "" : "s"} could not be recreated in the platform's order \u2014 Figma refuses to remove a variable another file still uses. Their VALUES keep syncing normally; only the grouping stays as it was. To fix the order, unpublish this file as a library (or run Reset this file) and import once more. This is not retried \u2014 retrying would rebuild the whole file on every sync.`);
+      } else {
+        try {
+          figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, "");
+        } catch (e) {
+        }
+        log(`\u21BB "${COLLECTIONS.semantics}" rebuilt in the platform's order (${dropped} token${dropped === 1 ? "" : "s"} recreated) \u2014 Figma has no reorder API, so recreating them is the only way the groups can follow the system`);
+      }
       semanticsRebuilt = true;
-      log(`\u21BB "${COLLECTIONS.semantics}" rebuilt in the platform's order (${dropped} token${dropped === 1 ? "" : "s"} recreated${stuck > 0 ? `, ${stuck} could not be removed and stay where they were` : ""}) \u2014 Figma has no reorder API, so recreating them is the only way the groups can follow the system`);
+    } else if (orderMatches && blockedKey) {
+      try {
+        figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, "");
+      } catch (e) {
+      }
     }
     for (const entry of plan) {
       const scopes = entry.type === "COLOR" ? scopesForSemantic(entry.name) : void 0;
@@ -5340,12 +5372,12 @@
               return n.type === "COMPONENT_SET" || n.type === "COMPONENT" && ((_a2 = n.parent) == null ? void 0 : _a2.type) !== "COMPONENT_SET";
             }
           )) {
-            if (inner.type === "COMPONENT_SET" && !existingSets.has(inner.name)) {
+            if (inner.type === "COMPONENT_SET") {
               pg.appendChild(inner);
-              existingSets.set(inner.name, inner);
-            } else if (inner.type === "COMPONENT" && !existingSingles.has(inner.name)) {
+              if (!existingSets.has(inner.name)) existingSets.set(inner.name, inner);
+            } else if (inner.type === "COMPONENT") {
               pg.appendChild(inner);
-              existingSingles.set(inner.name, inner);
+              if (!existingSingles.has(inner.name)) existingSingles.set(inner.name, inner);
             }
           }
           child.remove();
@@ -6031,6 +6063,61 @@
       band.y = boardY;
       boardY += Math.ceil(band.height) + HEAD_GAP;
     }
+    const ORPHAN_GAP = 40;
+    function sweepOrphans(pg) {
+      const orphans = pg.children.filter(
+        (n) => n.type === "COMPONENT_SET" || n.type === "COMPONENT"
+      );
+      if (orphans.length === 0) return;
+      let bottom = 0;
+      for (const n of pg.children) {
+        if (n.type === "COMPONENT_SET" || n.type === "COMPONENT") continue;
+        bottom = Math.max(bottom, n.y + n.height);
+      }
+      const cellW = Math.max(...orphans.map((n) => n.width)) + ORPHAN_GAP;
+      const cellH = Math.max(...orphans.map((n) => n.height)) + ORPHAN_GAP;
+      const cols = Math.max(1, Math.min(4, orphans.length));
+      const rows = Math.ceil(orphans.length / cols);
+      const PAD = 48;
+      const HEAD = 96;
+      const slab = figma.createFrame();
+      slab.name = `docs/retired \xB7 not in this import`;
+      slab.clipsContent = false;
+      slab.fills = [docSolid(DOC.board, 1, sampleChrome.board)];
+      slab.cornerRadius = 24;
+      slab.resize(cols * cellW - ORPHAN_GAP + PAD * 2, HEAD + rows * cellH - ORPHAN_GAP + PAD);
+      pg.appendChild(slab);
+      slab.x = 0;
+      slab.y = bottom + CATEGORY_GAP;
+      pinToLightMode(slab, sampleModePin);
+      try {
+        const title = docText("NOT IN THIS IMPORT", 10, "Medium", DOC.muted, 1, sampleChrome.muted);
+        title.letterSpacing = { value: 1.4, unit: "PIXELS" };
+        slab.appendChild(title);
+        title.x = PAD;
+        title.y = PAD;
+        const sub = docText(
+          `${orphans.length} element${orphans.length === 1 ? "" : "s"} built by an earlier import. Kept so existing instances stay linked \u2014 re-import them to bring them back into the sheet.`,
+          12,
+          "Regular",
+          DOC.muted,
+          1,
+          sampleChrome.muted
+        );
+        sub.textAutoResize = "HEIGHT";
+        sub.resize(Math.min(560, slab.width - PAD * 2), sub.height);
+        slab.appendChild(sub);
+        sub.x = PAD;
+        sub.y = PAD + 20;
+      } catch (e) {
+      }
+      orphans.forEach((n, i) => {
+        slab.appendChild(n);
+        n.x = PAD + i % cols * cellW;
+        n.y = HEAD + Math.floor(i / cols) * cellH;
+      });
+      log(`\u21B3 ${pg.name}: parked ${orphans.length} element${orphans.length === 1 ? "" : "s"} not part of this import`);
+    }
     const planned = includeFullCatalogue ? CATALOG.flatMap(({ category, entries }) => entries.map((entry) => ({
       entry,
       spec: representativeSpec(entry.spec),
@@ -6199,6 +6286,15 @@
       }
     }
     progress("Components", plannedTotal, plannedTotal);
+    for (const pg of figma.root.children) {
+      if (!harvested.has(pg.id) && !builtCatPages.includes(pg)) continue;
+      if (pg.name === "\u2B21 Icon Placeholders") continue;
+      try {
+        sweepOrphans(pg);
+      } catch (e) {
+        log(`\u26A0 ${pg.name}: could not park leftovers (${e instanceof Error ? e.message : String(e)})`);
+      }
+    }
     firstBuiltPage = firstCatPage;
     for (const legacyName of ["\u2B21 Sample", SAMPLE_PAGE, "\u2B21 Components"]) {
       const p2 = pageByName(legacyName);
@@ -6214,7 +6310,7 @@
     }
     if (firstBuiltPage) {
       await figma.setCurrentPageAsync(firstBuiltPage);
-      const placed = firstBuiltPage.children.filter((n) => n.type === "COMPONENT" || n.type === "COMPONENT_SET");
+      const placed = firstBuiltPage.children.filter((n) => /^\d{2} · /.test(n.name) || n.name.startsWith("docs/category \xB7 "));
       if (placed.length > 0) figma.viewport.scrollAndZoomIntoView(placed);
     }
     log(`\u2713 Components \u2014 ${builtAtoms} elements (${builtVariants} variants) across ${builtCatPages.length} categor${builtCatPages.length === 1 ? "y" : "ies"}, every fill, radius, spacing and text bound to your tokens`);
@@ -8596,6 +8692,9 @@
     figma.root.setPluginData(FILE_SYNC_KEY, "");
     figma.root.setPluginData(FILE_PROJECTS_KEY, "");
     figma.root.setPluginData(FILE_DOCS_REV_KEY, "");
+    figma.root.setPluginData(FILE_SEM_ORDER_STUCK_KEY, "");
+    figma.root.setPluginData(FILE_INHERITED_BLOCKED_KEY, "");
+    figma.root.setPluginData(FILE_PROJECT_NAME_KEY, "");
   }
   async function collectLocalEdits(baseline) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
@@ -8844,7 +8943,11 @@
           }
         } catch (e) {
         }
-        const inheritedPrefixes = await scanInheritedStylePrefixes();
+        const blockedPrefixes = new Set(
+          (figma.root.getPluginData(FILE_INHERITED_BLOCKED_KEY) || "").split("\n").filter(Boolean)
+        );
+        const presentPrefixes = await scanInheritedStylePrefixes();
+        const inheritedPrefixes = presentPrefixes.filter((p) => !blockedPrefixes.has(p));
         const staleDocs = readDocsRev() < DOCS_REV;
         let docsMustRebuild = inheritedPrefixes.length > 0 || staleDocs;
         if (docsMustRebuild) {
@@ -8903,6 +9006,11 @@
             });
             if (semanticsRebuilt || foundationsRebuilt || docsMustRebuild) {
               const added = [];
+              const wasFullCatalogue = options.importAllComponents === true;
+              if (wasFullCatalogue) {
+                options.importAllComponents = false;
+                log(`\u21BB Rebinding the core components only. The full catalogue (58 types) is not rebuilt automatically \u2014 re-run Import with "Full catalogue" ticked when you want those re-bound too.`);
+              }
               if ((semanticsRebuilt || docsMustRebuild) && !wantComponents) {
                 wantComponents = true;
                 added.push("Components");
@@ -8956,7 +9064,22 @@
           if (inheritedDropped > 0) {
             log(`\u2713 Removed ${inheritedDropped} inherited style${inheritedDropped === 1 ? "" : "s"} prefixed with a previous project name`);
           }
+          if (inheritedPrefixes.length > 0 && !hadError) {
+            try {
+              const survivors = (await scanInheritedStylePrefixes()).filter((p) => inheritedPrefixes.includes(p));
+              const keep = [.../* @__PURE__ */ new Set([...survivors, ...[...blockedPrefixes].filter((p) => presentPrefixes.includes(p))])];
+              figma.root.setPluginData(FILE_INHERITED_BLOCKED_KEY, keep.join("\n"));
+              if (survivors.length > 0) {
+                log(`\u26A0 Style folder${survivors.length > 1 ? "s" : ""} ${survivors.join(", ")} could not be removed \u2014 one of your own layers still uses ${survivors.length > 1 ? "them" : "it"}. Everything the plugin draws has been rebound; delete or re-style those layers to clear the folder. Not retried \u2014 retrying would rebuild the file on every sync.`);
+              }
+            } catch (e) {
+            }
+          }
           writeFileTokens(tokens);
+          try {
+            figma.root.setPluginData(FILE_PROJECT_NAME_KEY, tokens.project || "");
+          } catch (e) {
+          }
           const summary = [
             totalVars > 0 ? `${totalVars} variables` : null,
             totalStyles > 0 ? `${totalStyles} styles` : null,
