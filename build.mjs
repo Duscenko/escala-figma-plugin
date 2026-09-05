@@ -1,7 +1,11 @@
 import esbuild from 'esbuild'
-import { readFileSync, mkdirSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'fs'
+import { dirname, resolve } from 'path'
+import { fileURLToPath } from 'url'
 
 const watch = process.argv.includes('--watch')
+const root = dirname(fileURLToPath(import.meta.url))
+const agentEntry = resolve(root, '../escala-tokens/src/lib/agentBundle/fromJson.ts')
 
 mkdirSync('dist', { recursive: true })
 
@@ -19,14 +23,38 @@ const sandboxCtx = await esbuild.context({
   logLevel: 'info',
 })
 
-// Copy UI HTML (already self-contained)
-function copyUI() {
+/** Same Get code · Agent markdown the configurator ships — injected into ui.html. */
+async function bundleAgentMarkdown() {
+  if (!existsSync(agentEntry)) {
+    console.warn('Agent markdown source missing — plugin Copy falls back to the envelope + tokens.json')
+    return ''
+  }
+  const result = await esbuild.build({
+    entryPoints: [agentEntry],
+    bundle: true,
+    write: false,
+    format: 'iife',
+    globalName: 'EscalaAgent',
+    platform: 'browser',
+    target: 'es2017',
+    logLevel: 'warning',
+  })
+  return result.outputFiles[0]?.text ?? ''
+}
+
+// Copy UI HTML (already self-contained) and inject the shared agent markdown
+// builder so Copy / Download cannot drift from Get code on the web.
+async function copyUI() {
   const html = readFileSync('src/ui.html', 'utf8')
-  writeFileSync('dist/ui.html', html)
+  const agent = await bundleAgentMarkdown()
+  const injected = agent
+    ? html.replace('<!-- AGENT_MARKDOWN -->', `<script>\n${agent}\n</script>`)
+    : html.replace('<!-- AGENT_MARKDOWN -->', '')
+  writeFileSync('dist/ui.html', injected)
   console.log('UI copied → dist/ui.html')
 }
 
-copyUI()
+await copyUI()
 
 if (watch) {
   await sandboxCtx.watch()

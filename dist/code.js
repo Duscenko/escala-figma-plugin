@@ -58,6 +58,70 @@
     const first = trimmed.split(",")[0].trim().replace(/^['"]|['"]$/g, "");
     return first || "Inter";
   }
+  function collectSystemFontFamilies(tokens) {
+    var _a, _b, _c, _d, _e;
+    const out = [];
+    const add = (raw) => {
+      if (!raw) return;
+      const n = normalizeFontFamilyName(raw);
+      if (n && !out.includes(n)) out.push(n);
+    };
+    add((_a = tokens.typography) == null ? void 0 : _a.fontFamily);
+    add((_b = tokens.typography) == null ? void 0 : _b.headingFontFamily);
+    for (const entry of Object.values((_c = tokens.foundationsByTheme) != null ? _c : {})) {
+      add((_d = entry.typography) == null ? void 0 : _d.fontFamily);
+      add((_e = entry.typography) == null ? void 0 : _e.headingFontFamily);
+    }
+    return out;
+  }
+  function previewTypography(tokens) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    const root = tokens.typography;
+    const fb = tokens.foundationsByTheme;
+    if (!fb) return root;
+    const order = (_a = tokens.colors.themeOrder) != null ? _a : [];
+    const active = activeThemeKey(tokens);
+    const key = (_d = (_c = active && ((_b = fb[active]) == null ? void 0 : _b.typography) ? active : void 0) != null ? _c : order.find((k) => {
+      var _a2;
+      return (_a2 = fb[k]) == null ? void 0 : _a2.typography;
+    })) != null ? _d : Object.keys(fb).find((k) => {
+      var _a2;
+      return (_a2 = fb[k]) == null ? void 0 : _a2.typography;
+    });
+    const over = key ? (_e = fb[key]) == null ? void 0 : _e.typography : void 0;
+    if (!over) return root;
+    return __spreadProps(__spreadValues(__spreadValues({}, root), over), {
+      fontFamily: (_f = over.fontFamily) != null ? _f : root.fontFamily,
+      headingFontFamily: (_h = (_g = over.headingFontFamily) != null ? _g : over.fontFamily) != null ? _h : root.headingFontFamily,
+      sizes: (_i = over.sizes) != null ? _i : root.sizes,
+      lineHeights: (_j = over.lineHeights) != null ? _j : root.lineHeights,
+      weights: (_k = over.weights) != null ? _k : root.weights,
+      roles: (_l = over.roles) != null ? _l : root.roles
+    });
+  }
+  function previewRadius(tokens) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const root = (_a = tokens.radius) != null ? _a : {};
+    const rootRoles = tokens.radiusRoles;
+    const fb = tokens.foundationsByTheme;
+    if (!fb) return { radius: root, radiusRoles: rootRoles };
+    const order = (_b = tokens.colors.themeOrder) != null ? _b : [];
+    const keys = [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))];
+    const active = activeThemeKey(tokens);
+    const rootSig = JSON.stringify(rootRoles != null ? rootRoles : null);
+    const key = (_e = (_d = (_c = active && fb[active] && (fb[active].radius || fb[active].radiusRoles) ? active : void 0) != null ? _c : keys.find((k) => {
+      var _a2, _b2;
+      return JSON.stringify((_b2 = (_a2 = fb[k]) == null ? void 0 : _a2.radiusRoles) != null ? _b2 : null) !== rootSig;
+    })) != null ? _d : keys.find((k) => {
+      var _a2, _b2;
+      return ((_a2 = fb[k]) == null ? void 0 : _a2.radius) || ((_b2 = fb[k]) == null ? void 0 : _b2.radiusRoles);
+    })) != null ? _e : keys[0];
+    const over = key ? fb[key] : void 0;
+    return {
+      radius: (_f = over == null ? void 0 : over.radius) != null ? _f : root,
+      radiusRoles: (_g = over == null ? void 0 : over.radiusRoles) != null ? _g : rootRoles
+    };
+  }
   function varStringAt(v, modeId) {
     const val = v.valuesByMode[modeId];
     return typeof val === "string" ? val : void 0;
@@ -77,9 +141,10 @@
     legacyDisplay: "heading-family"
   };
   async function createFontResolver(tokens) {
-    var _a, _b, _c;
-    const bodyFamily = normalizeFontFamilyName((_a = tokens.typography) == null ? void 0 : _a.fontFamily);
-    const headingFamily = normalizeFontFamilyName((_c = (_b = tokens.typography) == null ? void 0 : _b.headingFontFamily) != null ? _c : bodyFamily);
+    var _a;
+    const preview = previewTypography(tokens);
+    const bodyFamily = normalizeFontFamilyName(preview.fontFamily);
+    const headingFamily = normalizeFontFamilyName((_a = preview.headingFontFamily) != null ? _a : bodyFamily);
     const stylesByFamily = /* @__PURE__ */ new Map();
     try {
       for (const f of await figma.listAvailableFontsAsync()) {
@@ -120,11 +185,12 @@
       }
       resolvedFont.set(key, { family: "Inter", style: interStyle });
     }
-    for (const family of /* @__PURE__ */ new Set([bodyFamily, headingFamily])) {
+    const families = collectSystemFontFamilies(tokens);
+    for (const family of families) {
       for (const logical of ["Regular", "Medium", "Semi Bold", "Bold"]) await loadLogical(family, logical);
     }
     const loadedFamilies = /* @__PURE__ */ new Set();
-    for (const family of /* @__PURE__ */ new Set([bodyFamily, headingFamily])) {
+    for (const family of families) {
       if ([...resolvedFont.entries()].some(([k, fn]) => k.startsWith(`${family}|`) && fn.family === family)) {
         loadedFamilies.add(family);
       }
@@ -140,9 +206,6 @@
     };
   }
   async function warnUnavailableSystemFonts(tokens) {
-    var _a, _b, _c;
-    const body = normalizeFontFamilyName((_a = tokens.typography) == null ? void 0 : _a.fontFamily);
-    const display = normalizeFontFamilyName((_c = (_b = tokens.typography) == null ? void 0 : _b.headingFontFamily) != null ? _c : body);
     const available = /* @__PURE__ */ new Set();
     try {
       for (const f of await figma.listAvailableFontsAsync()) available.add(f.fontName.family);
@@ -150,9 +213,9 @@
       log("\u26A0 Could not inspect fonts available in this Figma workspace; Typography values were still synced from the system.");
       return;
     }
-    for (const [role, family] of [["body", body], ["display", display]]) {
+    for (const family of collectSystemFontFamilies(tokens)) {
       if (!available.has(family)) {
-        log(`\u26A0 Font family "${family}" for ${role} is not available in this Figma workspace. The system value was kept in Typography; install or enable the font, then sync again to render generated text with it.`);
+        log(`\u26A0 Font family "${family}" is not available in this Figma workspace. The system value was kept in Typography; install or enable the font, then sync again to render generated text with it.`);
       }
     }
   }
@@ -355,74 +418,119 @@
     gray: "Neutral",
     "neutral-dark": "Neutral Dark",
     "gray-dark": "Neutral Dark",
-    error: "State/Error",
-    "error-dark": "State/Error Dark",
-    success: "State/Success",
-    "success-dark": "State/Success Dark",
-    warning: "State/Warning",
-    "warning-dark": "State/Warning Dark",
-    info: "State/Info",
-    "info-dark": "State/Info Dark"
+    error: "States/Error",
+    "error-dark": "States/Error Dark",
+    success: "States/Success",
+    "success-dark": "States/Success Dark",
+    warning: "States/Warning",
+    "warning-dark": "States/Warning Dark",
+    info: "States/Info",
+    "info-dark": "States/Info Dark"
   };
-  var FAMILY_ORDER = {
-    accent: 0,
-    brand: 0,
-    "accent-dark": 1,
-    "brand-dark": 1,
-    neutral: 2,
-    gray: 2,
-    "neutral-dark": 3,
-    "gray-dark": 3,
-    error: 4,
-    "error-dark": 5,
-    success: 6,
-    "success-dark": 7,
-    warning: 8,
-    "warning-dark": 9,
-    info: 10,
-    "info-dark": 11,
-    // The fixed black/white opacity ladder — sorts right after the state
-    // colors, ahead of any custom family (which defaults to 99).
-    "black-a": 12,
-    "white-a": 13
-  };
+  var namingCtx;
   var STATE_SLOT_SEGS = /* @__PURE__ */ new Set(["error", "warning", "success", "info"]);
-  function slotFolderFor(family) {
-    var _a;
+  var STATE_SLOT_RANK = { error: 0, warning: 1, success: 2, info: 3 };
+  var SLOT_FOLDER_RANK = {
+    Accents: 0,
+    Neutrals: 1,
+    States: 2
+  };
+  function familyBaseKey(family) {
     let base = family;
     if (base.endsWith("-dark")) base = base.slice(0, -5);
-    base = base.replace(/-\d+$/, "");
-    const seg = (_a = base.split("-").pop()) != null ? _a : "";
+    if (base.endsWith("-a") && base !== "black-a" && base !== "white-a") base = base.slice(0, -2);
+    return base;
+  }
+  function slotFolderFor(family) {
+    var _a;
+    const raw = familyBaseKey(family);
+    if (raw === "black-a" || raw === "white-a" || raw === "black" || raw === "white") return "Neutrals";
+    if (raw === "accent" || raw === "brand") return "Accents";
+    if (raw === "neutral" || raw === "gray") return "Neutrals";
+    if (STATE_SLOT_SEGS.has(raw)) return "States";
+    const stripped = raw.replace(/-\d+$/, "");
+    const seg = (_a = stripped.split("-").pop()) != null ? _a : "";
     if (seg === "gray") return "Neutrals";
     if (STATE_SLOT_SEGS.has(seg)) return "States";
     return "Accents";
   }
-  var SLOT_FOLDER_ORDER = { Accents: 100, Neutrals: 101, States: 102 };
-  function primitiveSortTriple(flatKey) {
+  function stateSlotLabel(family) {
     var _a;
+    const raw = familyBaseKey(family);
+    if (STATE_SLOT_SEGS.has(raw)) return raw.charAt(0).toUpperCase() + raw.slice(1);
+    const stripped = raw.replace(/-\d+$/, "");
+    const seg = (_a = stripped.split("-").pop()) != null ? _a : "";
+    if (STATE_SLOT_SEGS.has(seg)) return seg.charAt(0).toUpperCase() + seg.slice(1);
+    return void 0;
+  }
+  function themesUsingFamily(family, tokens = namingCtx) {
+    var _a, _b;
+    if (!tokens) return [];
+    const base = familyBaseKey(family);
+    const sources = (_a = tokens.colors.themeSources) != null ? _a : {};
+    const order = (_b = tokens.colors.themeOrder) != null ? _b : [];
+    return order.filter((t) => {
+      const src = sources[t];
+      if (!src) return false;
+      return Object.values(src).includes(base);
+    });
+  }
+  function uniqueThemeForFamily(family, tokens = namingCtx) {
+    const hits = themesUsingFamily(family, tokens);
+    return hits.length === 1 ? hits[0] : void 0;
+  }
+  function shippedThemeLabel(key, tokens = namingCtx) {
+    var _a, _b;
+    const labeled = (_b = (_a = tokens == null ? void 0 : tokens.colors.themeLabels) == null ? void 0 : _a[key]) == null ? void 0 : _b.trim();
+    if (labeled) return labeled;
+    if (key === "light") return "Light";
+    if (key === "dark") return "Dark";
+    return key.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  function primitiveSortTuple(flatKey, tokens = namingCtx) {
+    var _a, _b, _c, _d;
     const dash = flatKey.lastIndexOf("-");
     const fam = dash === -1 ? flatKey : flatKey.slice(0, dash);
     const tone = parseInt(flatKey.slice(dash + 1), 10) || 0;
-    if (fam === "black-a" || fam === "white-a") return [SLOT_FOLDER_ORDER.Neutrals - 0.5, fam, tone];
-    if (fam in FAMILY_ORDER) return [FAMILY_ORDER[fam], fam, tone];
-    return [(_a = SLOT_FOLDER_ORDER[slotFolderFor(fam)]) != null ? _a : 199, fam, tone];
+    const folder = SLOT_FOLDER_RANK[slotFolderFor(fam)];
+    const order = (_a = tokens == null ? void 0 : tokens.colors.themeOrder) != null ? _a : [];
+    const owners = themesUsingFamily(fam, tokens);
+    const themeIdx = owners.length === 1 ? order.indexOf(owners[0]) : -1;
+    const slot = (_c = (_b = stateSlotLabel(fam)) == null ? void 0 : _b.toLowerCase()) != null ? _c : "";
+    const slotRank = (_d = STATE_SLOT_RANK[slot]) != null ? _d : 0;
+    const dark = fam.endsWith("-dark") ? 1 : 0;
+    return [folder, themeIdx, slotRank, dark, fam, tone];
   }
   function comparePrimitiveKeys(a, b) {
-    const [ao, af, at] = primitiveSortTriple(a);
-    const [bo, bf, bt] = primitiveSortTriple(b);
-    if (ao !== bo) return ao - bo;
-    if (af !== bf) return af.localeCompare(bf);
-    return at - bt;
+    const A = primitiveSortTuple(a);
+    const B = primitiveSortTuple(b);
+    for (let i = 0; i < 4; i++) {
+      if (A[i] !== B[i]) return A[i] - B[i];
+    }
+    if (A[4] !== B[4]) return A[4].localeCompare(B[4]);
+    return A[5] - B[5];
   }
   function titleCaseFamily(family) {
     return family.replace(/-+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
   }
   function primitiveGroupFor(family) {
-    if (PRIMITIVE_GROUPS[family]) return PRIMITIVE_GROUPS[family];
+    var _a, _b;
+    const slot = stateSlotLabel(family);
+    if (slot) {
+      const dark = family.endsWith("-dark");
+      const folder = dark ? `${slot} Dark` : slot;
+      const theme = uniqueThemeForFamily(family);
+      if (theme && ((_b = (_a = namingCtx == null ? void 0 : namingCtx.colors.themeOrder) == null ? void 0 : _a.length) != null ? _b : 0) > 1) {
+        return `States/${shippedThemeLabel(theme)}/${folder}`;
+      }
+      if (PRIMITIVE_GROUPS[family]) return PRIMITIVE_GROUPS[family];
+      return `States/${folder}`;
+    }
+    if (PRIMITIVE_GROUPS[family]) return `${slotFolderFor(family)}/${PRIMITIVE_GROUPS[family]}`;
     if (family.includes("/")) {
       return family.split("/").map((seg) => {
-        var _a;
-        return (_a = PRIMITIVE_GROUPS[seg]) != null ? _a : seg.charAt(0).toUpperCase() + seg.slice(1);
+        var _a2;
+        return (_a2 = PRIMITIVE_GROUPS[seg]) != null ? _a2 : seg.charAt(0).toUpperCase() + seg.slice(1);
       }).join("/");
     }
     return `${slotFolderFor(family)}/${titleCaseFamily(family)}`;
@@ -447,6 +555,30 @@
     }).join("/");
     const paddedTone = /^\d$/.test(tone) ? `0${tone}` : tone;
     return `${group}/${paddedTone}`;
+  }
+  function previousPrimitiveVarNames(key) {
+    const dash = key.lastIndexOf("-");
+    if (dash === -1) return [];
+    const family = key.slice(0, dash);
+    const tone = key.slice(dash + 1);
+    const padded = /^\d$/.test(tone) ? `0${tone}` : tone;
+    const names = /* @__PURE__ */ new Set([legacyPrimitiveVarName(key)]);
+    names.add(`${slotFolderFor(family)}/${titleCaseFamily(family)}/${padded}`);
+    const slot = stateSlotLabel(family);
+    if (slot) {
+      const folder = family.endsWith("-dark") ? `${slot} Dark` : slot;
+      names.add(`States/${titleCaseFamily(family)}/${padded}`);
+      names.add(`States/${folder}/${padded}`);
+    }
+    return [...names];
+  }
+  function previousPrimitiveAlphaVarNames(key) {
+    const names = /* @__PURE__ */ new Set([legacyPrimitiveAlphaVarName(key)]);
+    for (const solid of previousPrimitiveVarNames(key)) {
+      const slash = solid.lastIndexOf("/");
+      names.add(slash === -1 ? `Alpha/${solid}` : `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`);
+    }
+    return [...names];
   }
   function primitiveAlphaVarName(key) {
     const neutralLadder = /^(black|white)-a-\d+$/.exec(key);
@@ -473,6 +605,98 @@
     const slash = solid.lastIndexOf("/");
     if (slash === -1) return `Alpha/${solid}`;
     return `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`;
+  }
+  function primitiveFamilies(prim) {
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const k of Object.keys(prim)) {
+      const m = /^(.+)-(\d+)$/.exec(k);
+      if (!m || seen.has(m[1])) continue;
+      seen.add(m[1]);
+      out.push(m[1]);
+    }
+    return out;
+  }
+  function familyToneHex(prim, family, tones) {
+    for (const t of tones) {
+      const hex = prim[`${family}-${t}`];
+      if (hex) return hex;
+    }
+    return void 0;
+  }
+  function pickThemeString(node, theme) {
+    if (typeof node === "string") return node;
+    if (!node || typeof node !== "object") return void 0;
+    const rec = node;
+    for (const key of [theme, "light", "dark"]) {
+      if (typeof rec[key] === "string") return rec[key];
+    }
+    for (const v of Object.values(rec)) {
+      if (typeof v === "string") return v;
+    }
+    return void 0;
+  }
+  function archLeafValue(tokens, group, key, theme) {
+    var _a;
+    const groups = (_a = tokens.colors.architecture) == null ? void 0 : _a.tokens;
+    if (!groups || typeof groups !== "object") return void 0;
+    const g = groups[group];
+    if (!g || typeof g !== "object") return void 0;
+    if (g[key] !== void 0) return pickThemeString(g[key], theme);
+    let cur = g;
+    for (const seg of key.split(".")) {
+      if (!cur || typeof cur !== "object") return void 0;
+      cur = cur[seg];
+    }
+    return pickThemeString(cur, theme);
+  }
+  function architectureSolidValue(tokens, theme) {
+    var _a, _b, _c;
+    const kind = (_a = tokens.colors.architecture) == null ? void 0 : _a.kind;
+    if (kind === "astryx") return archLeafValue(tokens, "accent", "solid", theme);
+    if (kind === "shadcn") return archLeafValue(tokens, "primary", "fill", theme);
+    return (_c = (_b = archLeafValue(tokens, "action", "primary.default", theme)) != null ? _b : archLeafValue(tokens, "accent", "solid", theme)) != null ? _c : archLeafValue(tokens, "primary", "fill", theme);
+  }
+  function isStatusOrNeutralFamily(fam) {
+    const base = fam.replace(/-dark$/, "").replace(/-a$/, "");
+    if (base === "black" || base === "white") return true;
+    if (/(?:^|-)(error|warning|success|info)$/.test(base)) return true;
+    if (/(?:^|-)(neutral|gray)$/.test(base)) return true;
+    return false;
+  }
+  function activeThemeKey(tokens) {
+    var _a, _b, _c, _d, _e;
+    const order = (_a = tokens.colors.themeOrder) != null ? _a : [];
+    const named = tokens.colors.activeTheme;
+    if (named && (order.includes(named) || Boolean((_b = tokens.foundationsByTheme) == null ? void 0 : _b[named]) || Boolean((_c = tokens.colors.themes) == null ? void 0 : _c[named]))) return named;
+    const own = order.filter((t) => t !== "light" && t !== "dark");
+    return (_e = (_d = own[own.length - 1]) != null ? _d : order[0]) != null ? _e : "light";
+  }
+  function familyMatchingSolid(prim, hex) {
+    const want = normHex(hex);
+    for (const fam of primitiveFamilies(prim)) {
+      if (fam.endsWith("-dark") || fam.endsWith("-a") || isStatusOrNeutralFamily(fam)) continue;
+      const t9 = familyToneHex(prim, fam, ["9", "09", "600"]);
+      if (t9 && normHex(t9) === want) return fam;
+    }
+    return void 0;
+  }
+  function brandFamilyFromTokens(tokens) {
+    var _a, _b, _c, _d, _e, _f, _g;
+    const prim = (_a = tokens.colors.primitive) != null ? _a : {};
+    const theme = activeThemeKey(tokens);
+    const leaf = (_f = (_d = architectureSolidValue(tokens, theme)) != null ? _d : (_c = (_b = tokens.colors.themes) == null ? void 0 : _b[theme]) == null ? void 0 : _c["background-brand-solid"]) != null ? _f : (_e = tokens.colors.semantic) == null ? void 0 : _e["background-brand-solid"];
+    if (leaf) {
+      const ref = /^\{([a-z0-9/-]+)\.(\d+)\}$/i.exec(leaf.trim());
+      if (ref && familyToneHex(prim, ref[1], ["1", "9", "01", "09"])) return ref[1];
+      if (leaf.startsWith("#")) {
+        const hit = familyMatchingSolid(prim, leaf);
+        if (hit) return hit;
+      }
+    }
+    if (familyToneHex(prim, "accent", ["1", "9", "01", "09"])) return "accent";
+    if (familyToneHex(prim, "brand", ["1", "9", "01", "09"])) return "brand";
+    return (_g = primitiveFamilies(prim).find((f) => !f.endsWith("-dark") && !f.endsWith("-a") && !isStatusOrNeutralFamily(f))) != null ? _g : "accent";
   }
   var ARCH_ROLE_MAP = {
     astryx: {
@@ -691,6 +915,8 @@
   function componentThemeKey(tokens) {
     var _a, _b, _c;
     const order = (_a = tokens.colors.themeOrder) != null ? _a : ["light"];
+    const active = tokens.colors.activeTheme;
+    if (active && order.includes(active)) return active;
     return order.length > 2 ? (_b = order[order.length - 1]) != null ? _b : "light" : (_c = order[0]) != null ? _c : "light";
   }
   function componentModePin(tokens, allCols) {
@@ -794,7 +1020,7 @@
     const extra = present.filter((k) => !seen.has(k)).map((k) => [k, k.charAt(0).toUpperCase() + k.slice(1)]);
     return [...known.filter(([k]) => present.includes(k)), ...extra];
   }
-  function normalizeArchitecture(arch, themeNames) {
+  function normalizeArchitecture(arch, themeNames, labels = {}) {
     const kind = arch.kind;
     if (kind === "tonal") {
       const scheme = arch.scheme;
@@ -845,9 +1071,12 @@
         for (const node of Object.values(group)) Object.keys(node).forEach((m) => present.add(m));
       }
       const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+      const labelOf = (m) => {
+        var _a;
+        return ((_a = labels[m]) == null ? void 0 : _a.trim()) || cap(m);
+      };
       const ordered = themeNames.filter((m) => present.has(m));
-      const extra = [...present].filter((m) => !ordered.includes(m));
-      modes = [...ordered, ...extra].map((m) => [m, cap(m)]);
+      modes = (ordered.length ? ordered : themeNames).map((m) => [m, labelOf(m)]);
     }
     if (modes.length === 0) return null;
     return {
@@ -893,7 +1122,8 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U;
+    namingCtx = tokens;
     let count = 0;
     semanticsRebuilt = false;
     foundationsRebuilt = false;
@@ -1048,7 +1278,6 @@
       const order = (_a2 = tokens.colors.themeOrder) != null ? _a2 : [];
       return [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))];
     })();
-    const capFoundationTheme = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     function themeMapsDiffer(pick, root) {
       var _a2;
       if (foundationThemes.length === 0) return false;
@@ -1067,7 +1296,7 @@
       });
     }
     function ensureNamedModes(col, keys) {
-      const labels = keys.map((k) => [k, capFoundationTheme(k)]);
+      const labels = keys.map((k) => [k, shippedThemeLabel(k)]);
       try {
         col.renameMode(col.defaultModeId, labels[0][1]);
       } catch (e) {
@@ -1105,21 +1334,23 @@
         if (mid && val !== void 0) v.setValueForMode(mid, val);
       }
     }
-    function emitCollection(collName, entries, type, transform, nameOf = (k) => k, themeMapOf) {
-      var _a2, _b2, _c2;
+    function emitCollection(collName, entries, type, transform, nameOf = (k) => k, themeMapOf, forceModes = false) {
+      var _a2, _b2, _c2, _d2;
       if (!entries || entries.length === 0) return;
       const col = findOrCreateCollection(collName);
       const cache = cacheFor(col);
       const root = Object.fromEntries(entries);
-      const useModes = !!(themeMapOf && themeMapsDiffer((t) => themeMapOf(t), root));
+      const hasThemeMaps = !!(themeMapOf && foundationThemes.length > 0);
+      const useModes = hasThemeMaps && (forceModes || themeMapsDiffer((t) => themeMapOf(t), root));
       const modeIdOf2 = useModes ? ensureNamedModes(col, foundationThemes) : void 0;
       const keys = new Set(Object.keys(root));
-      if (useModes && themeMapOf) {
+      if (hasThemeMaps && themeMapOf) {
         for (const t of foundationThemes) Object.keys((_a2 = themeMapOf(t)) != null ? _a2 : {}).forEach((k) => keys.add(k));
       }
+      const preferred = themeMapOf && foundationThemes[0] ? themeMapOf(foundationThemes[0]) : void 0;
       for (const key of keys) {
         const rawRoot = root[key];
-        if (rawRoot === void 0 && !(useModes && themeMapOf && foundationThemes.some((t) => {
+        if (rawRoot === void 0 && !(hasThemeMaps && themeMapOf && foundationThemes.some((t) => {
           var _a3;
           return (_a3 = themeMapOf(t)) == null ? void 0 : _a3[key];
         }))) continue;
@@ -1132,13 +1363,14 @@
             if (raw !== void 0) byTheme[t] = transform(raw);
           }
           writeByTheme(v, byTheme, modeIdOf2);
-        } else if (rawRoot !== void 0) {
-          setDefault(col, v, transform(rawRoot));
+        } else {
+          const raw = (_d2 = preferred == null ? void 0 : preferred[key]) != null ? _d2 : rawRoot;
+          if (raw !== void 0) setDefault(col, v, transform(raw));
         }
       }
     }
-    function emitRoleAliases(collName, roles, primitiveNameOf, themeRolesOf) {
-      var _a2, _b2, _c2;
+    function emitRoleAliases(collName, roles, primitiveNameOf, themeRolesOf, forceModes = false) {
+      var _a2, _b2, _c2, _d2;
       const rootRoles = roles != null ? roles : {};
       const allRoles = new Set(Object.keys(rootRoles));
       if (themeRolesOf) {
@@ -1147,8 +1379,10 @@
       if (allRoles.size === 0) return 0;
       const col = findOrCreateCollection(collName);
       const cache = cacheFor(col);
-      const useModes = !!(themeRolesOf && themeMapsDiffer((t) => themeRolesOf(t), rootRoles));
+      const hasThemeMaps = !!(themeRolesOf && foundationThemes.length > 0);
+      const useModes = hasThemeMaps && (forceModes || themeMapsDiffer((t) => themeRolesOf(t), rootRoles));
       const modeIdOf2 = useModes ? ensureNamedModes(col, foundationThemes) : void 0;
+      const preferred = themeRolesOf && foundationThemes[0] ? themeRolesOf(foundationThemes[0]) : void 0;
       let n = 0;
       for (const role of allRoles) {
         const v = upsertVarIn(col, cache, `role/${role}`, "FLOAT", scopesForCollection(collName, `role/${role}`));
@@ -1164,7 +1398,7 @@
           writeByTheme(v, byTheme, modeIdOf2);
           n++;
         } else {
-          const step = rootRoles[role];
+          const step = (_d2 = preferred == null ? void 0 : preferred[role]) != null ? _d2 : rootRoles[role];
           if (typeof step !== "string" || !step) continue;
           const prim = cache.get(figmaVarName(primitiveNameOf(step)));
           if (!prim) continue;
@@ -1243,23 +1477,51 @@
             const v = (_l = typoCache.get(figmaVarName(`weight/${key}`))) != null ? _l : upsertVarIn(typoCol, typoCache, `weight/${key}`, "FLOAT", scopesForCollection(COLLECTIONS.typography, `weight/${key}`));
             v.setValueForMode(mid, val);
           }
+          for (const [key, val] of Object.entries((_n = (_m = f == null ? void 0 : f.lineHeights) != null ? _m : tokens.typography.lineHeights) != null ? _n : {})) {
+            const v = (_o = typoCache.get(figmaVarName(`line-height/${key}`))) != null ? _o : upsertVarIn(typoCol, typoCache, `line-height/${key}`, "FLOAT", scopesForCollection(COLLECTIONS.typography, `line-height/${key}`));
+            v.setValueForMode(mid, pxToFloat(val));
+          }
+          for (const [key, val] of Object.entries((_q = (_p = f == null ? void 0 : f.letterSpacings) != null ? _p : tokens.typography.letterSpacings) != null ? _q : {})) {
+            const v = (_r = typoCache.get(figmaVarName(`letter-spacing/${key}`))) != null ? _r : upsertVarIn(typoCol, typoCache, `letter-spacing/${key}`, "FLOAT", scopesForCollection(COLLECTIONS.typography, `letter-spacing/${key}`));
+            v.setValueForMode(mid, pxToFloat(val));
+          }
+        }
+        for (const theme of foundationThemes) {
+          const mid = modeIdOf2[theme];
+          if (!mid) continue;
+          const f = (_t = (_s = tokens.foundationsByTheme) == null ? void 0 : _s[theme]) == null ? void 0 : _t.typography;
+          const body = normalizeFontFamilyName((_u = f == null ? void 0 : f.fontFamily) != null ? _u : tokens.typography.fontFamily);
+          const heading = normalizeFontFamilyName(
+            (_x = (_w = (_v = f == null ? void 0 : f.headingFontFamily) != null ? _v : f == null ? void 0 : f.fontFamily) != null ? _w : tokens.typography.headingFontFamily) != null ? _x : tokens.typography.fontFamily
+          );
+          const verifyMode = async (variable, expected, name) => {
+            const current = await figma.variables.getVariableByIdAsync(variable.id);
+            if ((current == null ? void 0 : current.valuesByMode[mid]) === expected) return;
+            variable.setValueForMode(mid, expected);
+            const again = await figma.variables.getVariableByIdAsync(variable.id);
+            if ((again == null ? void 0 : again.valuesByMode[mid]) !== expected) {
+              throw new Error(`Figma kept a stale value for Typography/${name} (${capFoundationTheme(theme)}); expected "${expected}"`);
+            }
+          };
+          await verifyMode(bodyVar, body, TYPOGRAPHY_FAMILY_VARS.body);
+          await verifyMode(displayVar, heading, TYPOGRAPHY_FAMILY_VARS.display);
         }
         if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
           const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody);
           for (const theme of foundationThemes) {
             const mid = modeIdOf2[theme];
-            const f = (_n = (_m = tokens.foundationsByTheme) == null ? void 0 : _m[theme]) == null ? void 0 : _n.typography;
-            if (mid) leg.setValueForMode(mid, normalizeFontFamilyName((_o = f == null ? void 0 : f.fontFamily) != null ? _o : bodyFamily));
+            const f = (_z = (_y = tokens.foundationsByTheme) == null ? void 0 : _y[theme]) == null ? void 0 : _z.typography;
+            if (mid) leg.setValueForMode(mid, normalizeFontFamilyName((_A = f == null ? void 0 : f.fontFamily) != null ? _A : bodyFamily));
           }
         }
         if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
           const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay);
           for (const theme of foundationThemes) {
             const mid = modeIdOf2[theme];
-            const f = (_q = (_p = tokens.foundationsByTheme) == null ? void 0 : _p[theme]) == null ? void 0 : _q.typography;
+            const f = (_C = (_B = tokens.foundationsByTheme) == null ? void 0 : _B[theme]) == null ? void 0 : _C.typography;
             if (mid) {
               leg.setValueForMode(mid, normalizeFontFamilyName(
-                (_s = (_r = f == null ? void 0 : f.headingFontFamily) != null ? _r : f == null ? void 0 : f.fontFamily) != null ? _s : headingFamily
+                (_E = (_D = f == null ? void 0 : f.headingFontFamily) != null ? _D : f == null ? void 0 : f.fontFamily) != null ? _E : headingFamily
               ));
             }
           }
@@ -1271,7 +1533,7 @@
         }).join(", ");
         log(`\u2713 Typography per theme (${foundationThemes.length} columns) \u2014 ${shown}`);
         if (prevFamily && prevFamily !== normalizeFontFamilyName(
-          (_w = (_v = (_u = (_t = tokens.foundationsByTheme) == null ? void 0 : _t[foundationThemes[0]]) == null ? void 0 : _u.typography) == null ? void 0 : _v.fontFamily) != null ? _w : bodyFamily
+          (_I = (_H = (_G = (_F = tokens.foundationsByTheme) == null ? void 0 : _F[foundationThemes[0]]) == null ? void 0 : _G.typography) == null ? void 0 : _H.fontFamily) != null ? _I : bodyFamily
         )) {
           log(`\u21BB Typography family "${prevFamily}" \u2192 theme columns updated from foundationsByTheme`);
         }
@@ -1307,11 +1569,13 @@
           log(`\u2717 Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow != null ? displayNow : "?"}" \u2014 wanted "${headingFamily}" from the payload`);
         }
       }
-      if (tokens.typography.lineHeights) {
-        Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar2(`line-height/${key}`, "FLOAT", pxToFloat(val)));
-      }
-      if (tokens.typography.letterSpacings) {
-        Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar2(`letter-spacing/${key}`, "FLOAT", pxToFloat(val)));
+      if (!typoByTheme) {
+        if (tokens.typography.lineHeights) {
+          Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar2(`line-height/${key}`, "FLOAT", pxToFloat(val)));
+        }
+        if (tokens.typography.letterSpacings) {
+          Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar2(`letter-spacing/${key}`, "FLOAT", pxToFloat(val)));
+        }
       }
       const typeRoles = tokens.typography.roles;
       if (typeRoles) {
@@ -1370,17 +1634,24 @@
       }
     };
     for (const key of Object.keys(tokens.colors.primitive)) {
-      renamePrimitive(legacyPrimitiveVarName(key), primitiveVarName(key));
+      const to = primitiveVarName(key);
+      for (const from of previousPrimitiveVarNames(key)) renamePrimitive(from, to);
     }
-    for (const key of Object.keys((_x = tokens.colors.primitiveAlpha) != null ? _x : {})) {
-      renamePrimitive(legacyPrimitiveAlphaVarName(key), primitiveAlphaVarName(key));
+    for (const key of Object.keys((_J = tokens.colors.primitiveAlpha) != null ? _J : {})) {
+      const to = primitiveAlphaVarName(key);
+      for (const from of previousPrimitiveAlphaVarNames(key)) renamePrimitive(from, to);
+    }
+    for (const [name] of Array.from(primCache.entries())) {
+      if (name.startsWith("State/") && !name.startsWith("States/")) {
+        renamePrimitive(name, `States/${name.slice("State/".length)}`);
+      }
     }
     Object.entries(tokens.colors.primitive).sort(([a], [b]) => comparePrimitiveKeys(a, b)).forEach(([key, hex]) => {
       if (!hex) return;
       const name = primitiveVarName(key);
       setDefault(primCol, upsertVarIn(primCol, primCache, name, "COLOR", scopesForCollection(COLLECTIONS.primitives, name)), __spreadProps(__spreadValues({}, hexToRgb(hex)), { a: 1 }));
     });
-    log(`\u2713 Primitive scale (${Object.keys(tokens.colors.primitive).length} tones)`);
+    log(`\u2713 Primitive scale (${Object.keys(tokens.colors.primitive).length} tones) \u2014 preview "${activeThemeKey(tokens)}" \xB7 brand "${brandFamilyFromTokens(tokens)}"`);
     if (tokens.colors.primitiveAlpha && Object.keys(tokens.colors.primitiveAlpha).length > 0) {
       Object.entries(tokens.colors.primitiveAlpha).sort(([a], [b]) => comparePrimitiveKeys(a, b)).forEach(([key, hex]) => {
         if (!hex) return;
@@ -1392,6 +1663,15 @@
     if (tokens.colors.background) {
       setDefault(primCol, upsertVarIn(primCol, primCache, "Background", "COLOR", scopesForCollection(COLLECTIONS.primitives, "Background")), __spreadProps(__spreadValues({}, hexToRgb(tokens.colors.background)), { a: 1 }));
     }
+    const writtenPrim = /* @__PURE__ */ new Set();
+    for (const [key, hex] of Object.entries(tokens.colors.primitive)) {
+      if (hex) writtenPrim.add(primitiveVarName(key));
+    }
+    for (const [key, hex] of Object.entries((_K = tokens.colors.primitiveAlpha) != null ? _K : {})) {
+      if (hex) writtenPrim.add(primitiveAlphaVarName(key));
+    }
+    if (tokens.colors.background) writtenPrim.add("Background");
+    pruneVars(primCache, writtenPrim, COLLECTIONS.primitives);
     if (figma.root.getPluginData(FILE_PRIMITIVES_HIDDEN_KEY) !== "1") {
       let hidden = 0;
       for (const v of primCache.values()) {
@@ -1417,7 +1697,7 @@
       if (v && !primByHex.has(norm2)) primByHex.set(norm2, v);
     }
     const primAlphaByHex = /* @__PURE__ */ new Map();
-    for (const [key, hex] of Object.entries((_y = tokens.colors.primitiveAlpha) != null ? _y : {})) {
+    for (const [key, hex] of Object.entries((_L = tokens.colors.primitiveAlpha) != null ? _L : {})) {
       if (!hex) continue;
       const v = primCache.get(primitiveAlphaVarName(key));
       const norm2 = rgbaToHex8(hexToRgba(hex));
@@ -1428,15 +1708,19 @@
     const themes = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({
       light: tokens.colors.semantic || {}
     }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const ordered = ((_z = tokens.colors.themeOrder) != null ? _z : []).filter((t) => themes[t]);
+    const ordered = ((_M = tokens.colors.themeOrder) != null ? _M : []).filter((t) => themes[t]);
     const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))];
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const arch = tokens.colors.architecture;
-    const norm = arch ? normalizeArchitecture(arch, themeNames) : null;
+    const themeLabels = tokens.colors.themeLabels && typeof tokens.colors.themeLabels === "object" ? tokens.colors.themeLabels : {};
+    const norm = arch ? normalizeArchitecture(arch, themeNames, themeLabels) : null;
     if (arch && !norm) {
       log(`\u26A0 "${arch.kind}" architecture present but its token payload couldn't be read \u2014 falling back to the flat role catalogue`);
     }
-    const modeSpec = norm ? norm.modes : themeNames.map((t) => [t, cap(t)]);
+    const modeSpec = norm ? norm.modes : themeNames.map((t) => {
+      var _a2;
+      return [t, ((_a2 = themeLabels[t]) == null ? void 0 : _a2.trim()) || cap(t)];
+    });
     const modeIdOf = {};
     const skippedModes = [];
     try {
@@ -1487,7 +1771,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_A = tok.byMode[modeKey]) != null ? _A : "", lookup);
+            const rgba = archValueRgba((_N = tok.byMode[modeKey]) != null ? _N : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -1568,7 +1852,7 @@
       for (const [mid, value] of entry.values) v.setValueForMode(mid, value);
     }
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_B = ARCH_LABEL[arch.kind]) != null ? _B : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_O = ARCH_LABEL[arch.kind]) != null ? _O : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -1626,7 +1910,8 @@
       (t) => {
         var _a2, _b2;
         return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.radius;
-      }
+      },
+      true
     );
     const radiusRoleCount = emitRoleAliases(
       COLLECTIONS.radius,
@@ -1635,11 +1920,18 @@
       (t) => {
         var _a2, _b2;
         return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.radiusRoles;
-      }
+      },
+      true
     );
-    log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""}`);
+    const previewRad = previewRadius(tokens);
+    const shownRoles = foundationThemes.length ? foundationThemes.map((theme) => {
+      var _a2, _b2, _c2, _d2, _e2;
+      const roles = (_c2 = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[theme]) == null ? void 0 : _b2.radiusRoles) != null ? _c2 : tokens.radiusRoles;
+      return `${capFoundationTheme(theme)} boxes=${(_d2 = roles == null ? void 0 : roles.container) != null ? _d2 : "?"} fields=${(_e2 = roles == null ? void 0 : roles.action) != null ? _e2 : "?"}`;
+    }).join(", ") : `boxes=${(_Q = (_P = previewRad.radiusRoles) == null ? void 0 : _P.container) != null ? _Q : "?"} fields=${(_S = (_R = previewRad.radiusRoles) == null ? void 0 : _R.action) != null ? _S : "?"}`;
+    log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""} \u2014 ${shownRoles}`);
     const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_C = tokens.borders) == null ? void 0 : _C.width;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_T = tokens.borders) == null ? void 0 : _T.width;
     if (strokeMap) {
       const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
       emitCollection(
@@ -1737,7 +2029,7 @@
       );
       log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_D = tokens.icons) == null ? void 0 : _D.library) {
+    if ((_U = tokens.icons) == null ? void 0 : _U.library) {
       emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
     }
     if (tokens.copy) {
@@ -1862,8 +2154,9 @@
   async function importStyles(tokens) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w;
     let count = 0;
-    const fontFamily = normalizeFontFamilyName(tokens.typography.fontFamily);
-    const headingFamily = normalizeFontFamilyName((_a = tokens.typography.headingFontFamily) != null ? _a : fontFamily);
+    const previewType = previewTypography(tokens);
+    const fontFamily = normalizeFontFamilyName(previewType.fontFamily);
+    const headingFamily = normalizeFontFamilyName((_a = previewType.headingFontFamily) != null ? _a : fontFamily);
     const textByName = new Map(
       (await figma.getLocalTextStylesAsync()).map((s) => [s.name, s])
     );
@@ -2222,7 +2515,7 @@
   var PLACEHOLDER_CIRCLE_NAME = "icon/circle-dashed";
   var PLACEHOLDER_SQUARE_NAME = "icon/square-dashed";
   async function importSample(tokens, includeFullCatalogue = false) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
     const colNameById = new Map(allCols.map((c) => [c.id, c.name]));
@@ -2368,24 +2661,33 @@
     const wMedium = bestVar(T, "weight/medium");
     const wSemibold = bestVar(T, "weight/semibold", "weight/semi-bold");
     const familyVar = bestVar(T, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody);
+    const previewRad = previewRadius(tokens);
+    const radScale = previewRad.radius;
+    const radRoles = previewRad.radiusRoles;
     const radXs = bestVar(COLLECTIONS.radius, "xs");
     const radSm = bestVar(COLLECTIONS.radius, "sm");
     const radMd = bestVar(COLLECTIONS.radius, "md");
     const radLg = bestVar(COLLECTIONS.radius, "lg");
-    const radiusXs = pxToFloat((_b = (_a = tokens.radius) == null ? void 0 : _a.xs) != null ? _b : "4px");
-    const radiusSm = pxToFloat((_d = (_c = tokens.radius) == null ? void 0 : _c.sm) != null ? _d : "4px");
-    const radiusMd = pxToFloat((_f = (_e = tokens.radius) == null ? void 0 : _e.md) != null ? _f : "8px");
-    const radiusLg = pxToFloat((_h = (_g = tokens.radius) == null ? void 0 : _g.lg) != null ? _h : "12px");
-    const radiusXl = pxToFloat((_j = (_i = tokens.radius) == null ? void 0 : _i.xl) != null ? _j : "16px");
-    const radControl = (_k = findVar(COLLECTIONS.radius, "role/control")) != null ? _k : radXs;
-    const radAction = (_l = findVar(COLLECTIONS.radius, "role/action")) != null ? _l : radSm;
-    const radContainer = (_m = findVar(COLLECTIONS.radius, "role/container")) != null ? _m : radLg;
-    const radOverlay = (_n = findVar(COLLECTIONS.radius, "role/overlay")) != null ? _n : radLg;
+    const radiusXs = pxToFloat((_c = (_b = radScale.xs) != null ? _b : (_a = tokens.radius) == null ? void 0 : _a.xs) != null ? _c : "4px");
+    const radiusSm = pxToFloat((_f = (_e = radScale.sm) != null ? _e : (_d = tokens.radius) == null ? void 0 : _d.sm) != null ? _f : "4px");
+    const radiusMd = pxToFloat((_i = (_h = radScale.md) != null ? _h : (_g = tokens.radius) == null ? void 0 : _g.md) != null ? _i : "8px");
+    const radiusLg = pxToFloat((_l = (_k = radScale.lg) != null ? _k : (_j = tokens.radius) == null ? void 0 : _j.lg) != null ? _l : "12px");
+    const radiusXl = pxToFloat((_o = (_n = radScale.xl) != null ? _n : (_m = tokens.radius) == null ? void 0 : _m.xl) != null ? _o : "16px");
+    const rolePx = (role, fallbackStep, fallbackPx) => {
+      var _a2, _b2, _c2;
+      const step = (_a2 = radRoles == null ? void 0 : radRoles[role]) != null ? _a2 : fallbackStep;
+      const raw = (_c2 = radScale[step]) != null ? _c2 : (_b2 = tokens.radius) == null ? void 0 : _b2[step];
+      return raw !== void 0 ? pxToFloat(raw) : fallbackPx;
+    };
+    const radControl = (_p = findVar(COLLECTIONS.radius, "role/control")) != null ? _p : radXs;
+    const radAction = (_q = findVar(COLLECTIONS.radius, "role/action")) != null ? _q : radSm;
+    const radContainer = (_r = findVar(COLLECTIONS.radius, "role/container")) != null ? _r : radLg;
+    const radOverlay = (_s = findVar(COLLECTIONS.radius, "role/overlay")) != null ? _s : radLg;
     const radPill = findVar(COLLECTIONS.radius, "role/pill");
-    const radiusControl = radiusXs;
-    const radiusAction = radiusSm;
-    const radiusContainer = radiusLg;
-    const radiusOverlay = radiusLg;
+    const radiusControl = rolePx("control", "xs", radiusXs);
+    const radiusAction = rolePx("action", "sm", radiusSm);
+    const radiusContainer = rolePx("container", "lg", radiusLg);
+    const radiusOverlay = rolePx("overlay", "lg", radiusLg);
     function fillOf(v, hex, opacity = 1) {
       const { r, g, b, a } = hexToRgba(hex);
       let paint = { type: "SOLID", color: { r, g, b }, opacity: opacity * a };
@@ -2967,12 +3269,12 @@
       ch.name = "chevron";
       c.appendChild(ch);
     }
-    const selControl = (_o = findVar(COLLECTIONS.selector, "role/control")) != null ? _o : findVar(COLLECTIONS.selector, "md");
-    const selCompact = (_p = findVar(COLLECTIONS.selector, "role/compact")) != null ? _p : findVar(COLLECTIONS.selector, "sm");
-    const selIndicator = (_q = findVar(COLLECTIONS.selector, "role/indicator")) != null ? _q : findVar(COLLECTIONS.selector, "xs");
-    const selectorMd = pxToFloat((_s = (_r = tokens.selector) == null ? void 0 : _r.md) != null ? _s : "18px");
-    const selectorSm = pxToFloat((_u = (_t = tokens.selector) == null ? void 0 : _t.sm) != null ? _u : "15px");
-    const selectorXs = pxToFloat((_w = (_v = tokens.selector) == null ? void 0 : _v.xs) != null ? _w : "12px");
+    const selControl = (_t = findVar(COLLECTIONS.selector, "role/control")) != null ? _t : findVar(COLLECTIONS.selector, "md");
+    const selCompact = (_u = findVar(COLLECTIONS.selector, "role/compact")) != null ? _u : findVar(COLLECTIONS.selector, "sm");
+    const selIndicator = (_v = findVar(COLLECTIONS.selector, "role/indicator")) != null ? _v : findVar(COLLECTIONS.selector, "xs");
+    const selectorMd = pxToFloat((_x = (_w = tokens.selector) == null ? void 0 : _w.md) != null ? _x : "18px");
+    const selectorSm = pxToFloat((_z = (_y = tokens.selector) == null ? void 0 : _y.sm) != null ? _z : "15px");
+    const selectorXs = pxToFloat((_B = (_A = tokens.selector) == null ? void 0 : _A.xs) != null ? _B : "12px");
     function bindBoxSize(node, v, fallback) {
       node.resize(fallback, fallback);
       tryBind(node, "width", v);
@@ -6181,37 +6483,46 @@
         if (ch.type === "FRAME" && ch.name === "placeholder-library") ch.remove();
         else if (ch.type === "TEXT" && ch.name.startsWith("label/placeholder")) ch.remove();
       }
-      host.appendChild(circleMaster);
-      host.appendChild(squareMaster);
-      circleMaster.x = 80;
-      circleMaster.y = 140;
-      squareMaster.x = 200;
-      squareMaster.y = 140;
       try {
-        const title = figma.createText();
-        title.name = "label/placeholder-title";
-        title.fontName = { family: "Inter", style: "Semi Bold" };
-        title.fontSize = 18;
-        title.characters = "Icon placeholders";
-        title.fills = [{ type: "SOLID", color: { r: 0.1, g: 0.1, b: 0.12 } }];
-        host.appendChild(title);
-        title.x = 80;
-        title.y = 80;
-        const sub = figma.createText();
-        sub.name = "label/placeholder-sub";
-        sub.fontName = { family: "Inter", style: "Regular" };
-        sub.fontSize = 12;
-        sub.characters = "Reference marks (circle-dashed \xB7 square-dashed). Component slots draw the same paths inline \u2014 swap in a real glyph from Assets when you need one.";
-        sub.fills = [{ type: "SOLID", color: { r: 0.4, g: 0.4, b: 0.45 } }];
-        host.appendChild(sub);
-        sub.x = 80;
-        sub.y = 108;
+        host.backgrounds = [docSolid(DOC.page)];
       } catch (e) {
       }
-      try {
-        host.backgrounds = [{ type: "SOLID", color: { r: 0.96, g: 0.96, b: 0.97 } }];
-      } catch (e) {
-      }
+      pinToLightMode(host, sampleModePin);
+      const project = tokens.project || "Design System";
+      const SLOT = 160;
+      const board = docBoard("docs/icon-placeholders", "Icon placeholders", project, SLOT * 2 + 32);
+      host.appendChild(board);
+      board.x = MARGIN;
+      board.y = MARGIN;
+      board.appendChild(wrapText(
+        docText(
+          "Reference marks (circle-dashed \xB7 square-dashed). Component slots draw the same paths inline \u2014 swap in a real glyph from Assets when you need one.",
+          12,
+          "Regular",
+          DOC.muted,
+          1,
+          sampleChrome.muted
+        ),
+        SLOT * 2 + 32
+      ));
+      const row2 = docFrame("placeholder-slots", "HORIZONTAL", 32);
+      board.appendChild(row2);
+      const placeSlot = (master, label) => {
+        const well = docFrame(`slot/${label}`, "VERTICAL", 12);
+        well.fills = [docSolid(DOC.card, 1, sampleChrome.card)];
+        well.cornerRadius = 16;
+        well.paddingTop = 24;
+        well.paddingBottom = 20;
+        well.paddingLeft = 24;
+        well.paddingRight = 24;
+        well.primaryAxisAlignItems = "CENTER";
+        well.counterAxisAlignItems = "CENTER";
+        well.appendChild(master);
+        well.appendChild(docText(label, 11, "Medium", DOC.text, 1, sampleChrome.text));
+        row2.appendChild(well);
+      };
+      placeSlot(circleMaster, "circle-dashed");
+      placeSlot(squareMaster, "square-dashed");
       log("\u2713 Icon placeholders: circle-dashed \xB7 square-dashed (Assets reference)");
     } catch (e) {
       log(`\u26A0 Icon placeholders page skipped: ${e instanceof Error ? e.message : String(e)}`);
@@ -6235,7 +6546,7 @@
     for (const category of categoryList) {
       const entries = byCategory.get(category);
       const made = makePage(catPageName(category));
-      const pg = (_y = (_x = made != null ? made : capFallbackPage) != null ? _x : oldPage) != null ? _y : figma.currentPage;
+      const pg = (_D = (_C = made != null ? made : capFallbackPage) != null ? _C : oldPage) != null ? _D : figma.currentPage;
       if (made) capFallbackPage = made;
       firstCatPage = firstCatPage != null ? firstCatPage : pg;
       if (!builtCatPages.includes(pg)) builtCatPages.push(pg);
@@ -6318,6 +6629,7 @@
   }
   async function importDocumentation(tokens) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
+    namingCtx = tokens;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
     const colNameById = new Map(allCols.map((c) => [c.id, c.name]));
@@ -8223,9 +8535,11 @@
   }
   async function importCover(tokens) {
     var _a, _b, _c, _d, _e, _f;
+    namingCtx = tokens;
     const project = tokens.project || "Design System";
-    const headingFamily = tokens.typography.headingFontFamily || tokens.typography.fontFamily || "Inter";
-    const bodyFamily = tokens.typography.fontFamily || "Inter";
+    const coverType = previewTypography(tokens);
+    const headingFamily = coverType.headingFontFamily || coverType.fontFamily || "Inter";
+    const bodyFamily = coverType.fontFamily || "Inter";
     const loaded = /* @__PURE__ */ new Set();
     async function loadFont(family, style) {
       const key = `${family}:${style}`;
@@ -8253,8 +8567,9 @@
       }
       return void 0;
     };
-    const deep = (_a = tone("accent", ["12", "1000", "11", "900"])) != null ? _a : "#111114";
-    const solidTone = (_b = tone("accent", ["9", "600", "8", "500"])) != null ? _b : "#3B82F6";
+    const brandFam = brandFamilyFromTokens(tokens);
+    const deep = (_a = tone(brandFam, ["12", "1000", "11", "900"])) != null ? _a : "#111114";
+    const solidTone = (_b = tone(brandFam, ["9", "600", "8", "500"])) != null ? _b : "#3B82F6";
     const fallback = {
       type: "GRADIENT_LINEAR",
       gradientStops: [
@@ -8513,13 +8828,14 @@
     };
     const byName = (name) => figma.root.children.find((p) => p.name === name);
     place(byName("\u2B21 Cover"));
-    place(byName("\u2B21 Getting started"));
     place(byName("\u2B21 Documentation"));
+    place(byName("\u2B21 Getting started"));
     place(byName("\u2B21 Components Overview"));
     for (const cat of COMPONENT_CATEGORY_ORDER) place(byName(`\u2B21 Components \xB7 ${cat}`));
     for (const p of figma.root.children.filter(
       (p2) => p2.name.startsWith("\u2B21 Components \xB7 ") && !COMPONENT_CATEGORY_ORDER.some((c) => p2.name === `\u2B21 Components \xB7 ${c}`)
     )) place(p);
+    place(byName("\u2B21 Icon Placeholders"));
     place(byName("\u2B21 Icons"));
   }
   ensureFoundationPageOrder();
@@ -8698,6 +9014,7 @@
   }
   async function collectLocalEdits(baseline) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+    namingCtx = baseline;
     const rejected = [];
     const supported = {};
     let supportedCount = 0;

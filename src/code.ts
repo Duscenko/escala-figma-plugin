@@ -18,6 +18,14 @@ interface DesignTokens {
     semanticDark?: Record<string, string>   // dark-mode values, same keys as semantic
     themes?: Record<string, Record<string, string>>  // full multi-theme map (light/dark/custom)
     themeOrder?: string[]                    // column (mode) order for the themes above
+    // Library theme the configurator is previewing. Overview / Cover read
+    // this theme's brand family as the identity ramp. Additive — absent on
+    // older payloads, which keep falling back to themeOrder[0] / last own.
+    activeTheme?: string
+    // Shipped My-themes only: slot → primitive family. Plugin groups
+    // Color Primitives (Accents / Neutrals / States/<theme>) from this.
+    themeSources?: Record<string, { brand?: string; gray?: string; error?: string; warning?: string; success?: string; info?: string; [slot: string]: string | undefined }>
+    themeLabels?: Record<string, string>
     themeModes?: Record<string, { light: Record<string, string>; dark: Record<string, string> }>
     // Radix-style panel treatment for surface-1 (cards, panels, sections).
     panelBackground?: 'solid' | 'translucent' | 'page'
@@ -137,6 +145,9 @@ interface DesignTokens {
   style: string | null
   atoms: string[]
   components?: string[]                      // alias for atoms (forward compat)
+  // Additive workspace handshake. App URL is /?project=<slug>&section=<id>.
+  // Not an /api/tokens query — GET stays project-only. Older payloads omit it.
+  editor?: { section?: string }
 }
 
 interface ImportOptions {
@@ -223,6 +234,77 @@ function normalizeFontFamilyName(raw: string | undefined | null): string {
   return first || 'Inter'
 }
 
+function collectSystemFontFamilies(tokens: DesignTokens): string[] {
+  const out: string[] = []
+  const add = (raw?: string | null) => {
+    if (!raw) return
+    const n = normalizeFontFamilyName(raw)
+    if (n && !out.includes(n)) out.push(n)
+  }
+  add(tokens.typography?.fontFamily)
+  add(tokens.typography?.headingFontFamily)
+  for (const entry of Object.values(tokens.foundationsByTheme ?? {})) {
+    add(entry.typography?.fontFamily)
+    add(entry.typography?.headingFontFamily)
+  }
+  return out
+}
+
+// Theme Preview writes the typeface into `themeFoundations[theme]` — the
+// payload's root `typography` stays on the last Variables · Type value.
+// Overview, text styles and `createFontResolver` have to read the first
+// theme's override or a font change looks like a no-op after sync.
+function previewTypography(tokens: DesignTokens): DesignTokens['typography'] {
+  const root = tokens.typography
+  const fb = tokens.foundationsByTheme
+  if (!fb) return root
+  const order = tokens.colors.themeOrder ?? []
+  const active = activeThemeKey(tokens)
+  const key = (active && fb[active]?.typography ? active : undefined)
+    ?? order.find((k) => fb[k]?.typography)
+    ?? Object.keys(fb).find((k) => fb[k]?.typography)
+  const over = key ? fb[key]?.typography : undefined
+  if (!over) return root
+  return {
+    ...root,
+    ...over,
+    fontFamily: over.fontFamily ?? root.fontFamily,
+    headingFontFamily: over.headingFontFamily ?? over.fontFamily ?? root.headingFontFamily,
+    sizes: over.sizes ?? root.sizes,
+    lineHeights: over.lineHeights ?? root.lineHeights,
+    weights: over.weights ?? root.weights,
+    roles: over.roles ?? root.roles,
+  }
+}
+
+// Theme Preview writes Boxes / Fields / Selectors into
+// `themeFoundations[theme].radiusRoles`. Root `radius` / `radiusRoles` stay on
+// the last Variables · Radius value — the same split as the typeface. Cover
+// fallbacks, component bind fallbacks and the sync log have to read the theme
+// that actually moved or a corner change looks like a no-op after sync.
+function previewRadius(tokens: DesignTokens): {
+  radius: Record<string, string>
+  radiusRoles: Record<string, string> | undefined
+} {
+  const root = tokens.radius ?? {}
+  const rootRoles = tokens.radiusRoles
+  const fb = tokens.foundationsByTheme
+  if (!fb) return { radius: root, radiusRoles: rootRoles }
+  const order = tokens.colors.themeOrder ?? []
+  const keys = [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))]
+  const active = activeThemeKey(tokens)
+  const rootSig = JSON.stringify(rootRoles ?? null)
+  const key = (active && fb[active] && (fb[active].radius || fb[active].radiusRoles) ? active : undefined)
+    ?? keys.find((k) => JSON.stringify(fb[k]?.radiusRoles ?? null) !== rootSig)
+    ?? keys.find((k) => fb[k]?.radius || fb[k]?.radiusRoles)
+    ?? keys[0]
+  const over = key ? fb[key] : undefined
+  return {
+    radius: over?.radius ?? root,
+    radiusRoles: over?.radiusRoles ?? rootRoles,
+  }
+}
+
 function varStringAt(v: Variable, modeId: string): string | undefined {
   const val = v.valuesByMode[modeId]
   return typeof val === 'string' ? val : undefined
@@ -263,8 +345,9 @@ const TYPOGRAPHY_FAMILY_VARS = {
 async function createFontResolver(
   tokens: DesignTokens,
 ): Promise<FontResolver> {
-  const bodyFamily = normalizeFontFamilyName(tokens.typography?.fontFamily)
-  const headingFamily = normalizeFontFamilyName(tokens.typography?.headingFontFamily ?? bodyFamily)
+  const preview = previewTypography(tokens)
+  const bodyFamily = normalizeFontFamilyName(preview.fontFamily)
+  const headingFamily = normalizeFontFamilyName(preview.headingFontFamily ?? bodyFamily)
   const stylesByFamily = new Map<string, Set<string>>()
   try {
     for (const f of await figma.listAvailableFontsAsync()) {
@@ -296,11 +379,12 @@ async function createFontResolver(
     try { await figma.loadFontAsync({ family: 'Inter', style: interStyle }) } catch { /* Inter is always present */ }
     resolvedFont.set(key, { family: 'Inter', style: interStyle })
   }
-  for (const family of new Set([bodyFamily, headingFamily])) {
+  const families = collectSystemFontFamilies(tokens)
+  for (const family of families) {
     for (const logical of ['Regular', 'Medium', 'Semi Bold', 'Bold'] as const) await loadLogical(family, logical)
   }
   const loadedFamilies = new Set<string>()
-  for (const family of new Set([bodyFamily, headingFamily])) {
+  for (const family of families) {
     if ([...resolvedFont.entries()].some(([k, fn]) => k.startsWith(`${family}|`) && fn.family === family)) {
       loadedFamilies.add(family)
     }
@@ -319,8 +403,6 @@ async function createFontResolver(
  *  into Typography. Warn once per import for every distinct role/family that
  *  the system requests but this Figma workspace does not provide. */
 async function warnUnavailableSystemFonts(tokens: DesignTokens): Promise<void> {
-  const body = normalizeFontFamilyName(tokens.typography?.fontFamily)
-  const display = normalizeFontFamilyName(tokens.typography?.headingFontFamily ?? body)
   const available = new Set<string>()
   try {
     for (const f of await figma.listAvailableFontsAsync()) available.add(f.fontName.family)
@@ -328,9 +410,9 @@ async function warnUnavailableSystemFonts(tokens: DesignTokens): Promise<void> {
     log('⚠ Could not inspect fonts available in this Figma workspace; Typography values were still synced from the system.')
     return
   }
-  for (const [role, family] of [['body', body], ['display', display]] as const) {
+  for (const family of collectSystemFontFamilies(tokens)) {
     if (!available.has(family)) {
-      log(`⚠ Font family "${family}" for ${role} is not available in this Figma workspace. The system value was kept in Typography; install or enable the font, then sync again to render generated text with it.`)
+      log(`⚠ Font family "${family}" is not available in this Figma workspace. The system value was kept in Typography; install or enable the font, then sync again to render generated text with it.`)
     }
   }
 }
@@ -636,7 +718,11 @@ function scopesForCollection(collName: string, varName: string): VariableScope[]
 
 // Map a primitive color family to its Figma group path. Accepts the current
 // vocabulary (accent/neutral) and the legacy one (brand/gray); the four state
-// roles nest under "State/*"; any other family (custom colors) is Title-cased.
+// roles nest under "States/*" — same folder name the platform's Primitives
+// nav and `slotFolderFor` use for theme-minted status families. The old
+// singular "State/*" path is migrated in place on import (see the
+// `State/` → `States/` rename in importVariables) so a file never shows
+// both groups at once.
 // Every family's dark twin (schema v4: accent-dark, error-dark, warning-dark,
 // success-dark, info-dark — neutral-dark predates v4) sits alongside its light
 // sibling with a " Dark" suffix, same pattern as Neutral/Neutral Dark.
@@ -645,69 +731,100 @@ const PRIMITIVE_GROUPS: Record<string, string> = {
   'accent-dark': 'Accent Dark', 'brand-dark': 'Accent Dark',
   neutral: 'Neutral', gray: 'Neutral',
   'neutral-dark': 'Neutral Dark', 'gray-dark': 'Neutral Dark',
-  error: 'State/Error', 'error-dark': 'State/Error Dark',
-  success: 'State/Success', 'success-dark': 'State/Success Dark',
-  warning: 'State/Warning', 'warning-dark': 'State/Warning Dark',
-  info: 'State/Info', 'info-dark': 'State/Info Dark',
+  error: 'States/Error', 'error-dark': 'States/Error Dark',
+  success: 'States/Success', 'success-dark': 'States/Success Dark',
+  warning: 'States/Warning', 'warning-dark': 'States/Warning Dark',
+  info: 'States/Info', 'info-dark': 'States/Info Dark',
 }
 
-// Variable creation priority — lower = appears first in Figma's groups panel.
-// Custom families (any key not listed) default to 99 and are sorted last,
-// alphabetically among themselves. Each dark twin sorts immediately after its
-// light counterpart.
-const FAMILY_ORDER: Record<string, number> = {
-  accent: 0, brand: 0,
-  'accent-dark': 1, 'brand-dark': 1,
-  neutral: 2, gray: 2,
-  'neutral-dark': 3, 'gray-dark': 3,
-  error: 4, 'error-dark': 5,
-  success: 6, 'success-dark': 7,
-  warning: 8, 'warning-dark': 9,
-  info: 10, 'info-dark': 11,
-  // The fixed black/white opacity ladder — sorts right after the state
-  // colors, ahead of any custom family (which defaults to 99).
-  'black-a': 12, 'white-a': 13,
-}
+// Payload in scope while an import writes Color Primitives — group paths
+// and sort read `themeSources` / `themeOrder` without threading tokens
+// through every helper.
+let namingCtx: DesignTokens | undefined
 
-// A THEME-MINTED family's key encodes the slot it serves (ThemePanel's
-// `slotsFromAccent`): "<theme>" is the accent, "<theme>-gray" the neutral,
-// "<theme>-error" / "-warning" / "-success" / "-info" a status. `uniqueKey` may
-// append "-2" for a second adoption, and the payload adds "-dark" for the twin.
-// Mapping that back to the platform's Accents / Neutrals / States folders makes
-// a custom theme's primitives read the same in Figma's Variables panel as in
-// the configurator's Primitives nav (see the reference the user attached).
-// Global built-ins keep their PRIMITIVE_GROUPS names untouched.
 const STATE_SLOT_SEGS = new Set(['error', 'warning', 'success', 'info'])
-function slotFolderFor(family: string): 'Accents' | 'Neutrals' | 'States' {
+const STATE_SLOT_RANK: Record<string, number> = { error: 0, warning: 1, success: 2, info: 3 }
+const SLOT_FOLDER_RANK: Record<'Accents' | 'Neutrals' | 'States', number> = {
+  Accents: 0, Neutrals: 1, States: 2,
+}
+
+function familyBaseKey(family: string): string {
   let base = family
   if (base.endsWith('-dark')) base = base.slice(0, -5)
-  base = base.replace(/-\d+$/, '')
-  const seg = base.split('-').pop() ?? ''
+  if (base.endsWith('-a') && base !== 'black-a' && base !== 'white-a') base = base.slice(0, -2)
+  return base
+}
+
+function slotFolderFor(family: string): 'Accents' | 'Neutrals' | 'States' {
+  const raw = familyBaseKey(family)
+  if (raw === 'black-a' || raw === 'white-a' || raw === 'black' || raw === 'white') return 'Neutrals'
+  if (raw === 'accent' || raw === 'brand') return 'Accents'
+  if (raw === 'neutral' || raw === 'gray') return 'Neutrals'
+  if (STATE_SLOT_SEGS.has(raw)) return 'States'
+  const stripped = raw.replace(/-\d+$/, '')
+  const seg = stripped.split('-').pop() ?? ''
   if (seg === 'gray') return 'Neutrals'
   if (STATE_SLOT_SEGS.has(seg)) return 'States'
   return 'Accents'
 }
-const SLOT_FOLDER_ORDER: Record<string, number> = { Accents: 100, Neutrals: 101, States: 102 }
 
-// Sort a flat primitive/alpha key: global built-ins by FAMILY_ORDER, then custom
-// families grouped by slot folder (Accents → Neutrals → States) and name, then
-// tone. Keeps Figma's group-creation order matching the platform's Primitives nav.
-function primitiveSortTriple(flatKey: string): [number, string, number] {
+function stateSlotLabel(family: string): string | undefined {
+  const raw = familyBaseKey(family)
+  if (STATE_SLOT_SEGS.has(raw)) return raw.charAt(0).toUpperCase() + raw.slice(1)
+  const stripped = raw.replace(/-\d+$/, '')
+  const seg = stripped.split('-').pop() ?? ''
+  if (STATE_SLOT_SEGS.has(seg)) return seg.charAt(0).toUpperCase() + seg.slice(1)
+  return undefined
+}
+
+function themesUsingFamily(family: string, tokens = namingCtx): string[] {
+  if (!tokens) return []
+  const base = familyBaseKey(family)
+  const sources = tokens.colors.themeSources ?? {}
+  const order = tokens.colors.themeOrder ?? []
+  return order.filter((t) => {
+    const src = sources[t]
+    if (!src) return false
+    return Object.values(src).includes(base)
+  })
+}
+
+function uniqueThemeForFamily(family: string, tokens = namingCtx): string | undefined {
+  const hits = themesUsingFamily(family, tokens)
+  return hits.length === 1 ? hits[0] : undefined
+}
+
+function shippedThemeLabel(key: string, tokens = namingCtx): string {
+  const labeled = tokens?.colors.themeLabels?.[key]?.trim()
+  if (labeled) return labeled
+  if (key === 'light') return 'Light'
+  if (key === 'dark') return 'Dark'
+  return key.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+// Accents → Neutrals → States (the platform Primitives nav). Inside each
+// folder, the My-themes order, then status slot, then light before dark.
+function primitiveSortTuple(flatKey: string, tokens = namingCtx): [number, number, number, number, string, number] {
   const dash = flatKey.lastIndexOf('-')
   const fam = dash === -1 ? flatKey : flatKey.slice(0, dash)
   const tone = parseInt(flatKey.slice(dash + 1), 10) || 0
-  // `black-a` / `white-a` are in FAMILY_ORDER but render under `Neutrals/` now —
-  // sort them with that folder, not at their old 12/13, so Accents comes first.
-  if (fam === 'black-a' || fam === 'white-a') return [SLOT_FOLDER_ORDER.Neutrals - 0.5, fam, tone]
-  if (fam in FAMILY_ORDER) return [FAMILY_ORDER[fam], fam, tone]
-  return [SLOT_FOLDER_ORDER[slotFolderFor(fam)] ?? 199, fam, tone]
+  const folder = SLOT_FOLDER_RANK[slotFolderFor(fam)]
+  const order = tokens?.colors.themeOrder ?? []
+  const owners = themesUsingFamily(fam, tokens)
+  const themeIdx = owners.length === 1 ? order.indexOf(owners[0]) : -1
+  const slot = stateSlotLabel(fam)?.toLowerCase() ?? ''
+  const slotRank = STATE_SLOT_RANK[slot] ?? 0
+  const dark = fam.endsWith('-dark') ? 1 : 0
+  return [folder, themeIdx, slotRank, dark, fam, tone]
 }
 function comparePrimitiveKeys(a: string, b: string): number {
-  const [ao, af, at] = primitiveSortTriple(a)
-  const [bo, bf, bt] = primitiveSortTriple(b)
-  if (ao !== bo) return ao - bo
-  if (af !== bf) return af.localeCompare(bf)
-  return at - bt
+  const A = primitiveSortTuple(a)
+  const B = primitiveSortTuple(b)
+  for (let i = 0; i < 4; i++) {
+    if (A[i] !== B[i]) return (A[i] as number) - (B[i] as number)
+  }
+  if (A[4] !== B[4]) return (A[4] as string).localeCompare(B[4] as string)
+  return (A[5] as number) - (B[5] as number)
 }
 // "core--minimalist-gray-2-dark" → "Core Minimalist Gray 2 Dark".
 function titleCaseFamily(family: string): string {
@@ -718,22 +835,32 @@ function titleCaseFamily(family: string): string {
 }
 
 // Turn a flat primitive key into a grouped Figma variable name:
-// "accent-1" → "Accent/01", "error-500" → "State/Error/500", "teal-3" → "Teal/03".
+// "accent-1" → "Accent/01", "error-500" → "States/Error/500", "teal-3" → "Teal/03".
 // Splits on the LAST "-" so hundreds-based tone labels (accent-500) are preserved.
 // Single-digit tones are zero-padded (1→01…9→09) so Figma's alphabetical panel
 // sort matches numeric order instead of lexicographic (1, 10, 11, 12, 2…).
 function primitiveGroupFor(family: string): string {
-  // Global built-ins — exact map, unchanged so no existing file's variables
-  // are renamed.
-  if (PRIMITIVE_GROUPS[family]) return PRIMITIVE_GROUPS[family]
-  // Legacy theme-namespaced families ("ocean/accent") — kept for old payloads.
+  const slot = stateSlotLabel(family)
+  if (slot) {
+    const dark = family.endsWith('-dark')
+    const folder = dark ? `${slot} Dark` : slot
+    const theme = uniqueThemeForFamily(family)
+    if (theme && (namingCtx?.colors.themeOrder?.length ?? 0) > 1) {
+      return `States/${shippedThemeLabel(theme)}/${folder}`
+    }
+    if (PRIMITIVE_GROUPS[family]) return PRIMITIVE_GROUPS[family]
+    return `States/${folder}`
+  }
+  // Built-in Accent / Neutral sit under the same top-level folders as minted
+  // families (Accents → Neutrals → States), not as sibling "Accent" / "Neutral"
+  // groups that Figma would interleave with custom ramps.
+  if (PRIMITIVE_GROUPS[family]) return `${slotFolderFor(family)}/${PRIMITIVE_GROUPS[family]}`
   if (family.includes('/')) {
     return family
       .split('/')
       .map((seg) => PRIMITIVE_GROUPS[seg] ?? (seg.charAt(0).toUpperCase() + seg.slice(1)))
       .join('/')
   }
-  // Theme-minted / custom family → Accents|Neutrals|States / <Name>.
   return `${slotFolderFor(family)}/${titleCaseFamily(family)}`
 }
 
@@ -763,9 +890,26 @@ function legacyPrimitiveVarName(key: string): string {
   return `${group}/${paddedTone}`
 }
 
+function previousPrimitiveVarNames(key: string): string[] {
+  const dash = key.lastIndexOf('-')
+  if (dash === -1) return []
+  const family = key.slice(0, dash)
+  const tone = key.slice(dash + 1)
+  const padded = /^\d$/.test(tone) ? `0${tone}` : tone
+  const names = new Set<string>([legacyPrimitiveVarName(key)])
+  names.add(`${slotFolderFor(family)}/${titleCaseFamily(family)}/${padded}`)
+  const slot = stateSlotLabel(family)
+  if (slot) {
+    const folder = family.endsWith('-dark') ? `${slot} Dark` : slot
+    names.add(`States/${titleCaseFamily(family)}/${padded}`)
+    names.add(`States/${folder}/${padded}`)
+  }
+  return [...names]
+}
+
 // Alpha-twin variable name — same grouping as the solid primitive with an
 // "Alpha" segment before the tone: "accent-1" → "Accent/Alpha/01",
-// "error-500" → "State/Error/Alpha/500".
+// "error-500" → "States/Error/Alpha/500".
 //
 // `black-a`/`white-a` (the fixed opacity ladder — CLAUDE.md's "THE ALPHA
 // LAYER") are a DIFFERENT kind of key and must not fall through to the same
@@ -773,6 +917,15 @@ function legacyPrimitiveVarName(key: string): string {
 // them through `primitiveVarName` + an inserted "/Alpha/" segment produced
 // "Black-a/Alpha/05" — the marker duplicated, once in the family name and
 // once in the folder. Named explicitly instead: "Black Alpha/05".
+function previousPrimitiveAlphaVarNames(key: string): string[] {
+  const names = new Set<string>([legacyPrimitiveAlphaVarName(key)])
+  for (const solid of previousPrimitiveVarNames(key)) {
+    const slash = solid.lastIndexOf('/')
+    names.add(slash === -1 ? `Alpha/${solid}` : `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`)
+  }
+  return [...names]
+}
+
 function primitiveAlphaVarName(key: string): string {
   const neutralLadder = /^(black|white)-a-\d+$/.exec(key)
   if (neutralLadder) {
@@ -801,6 +954,118 @@ function legacyPrimitiveAlphaVarName(key: string): string {
   const slash = solid.lastIndexOf('/')
   if (slash === -1) return `Alpha/${solid}`
   return `${solid.slice(0, slash)}/Alpha/${solid.slice(slash + 1)}`
+}
+
+function primitiveFamilies(prim: ColorScale): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const k of Object.keys(prim)) {
+    const m = /^(.+)-(\d+)$/.exec(k)
+    if (!m || seen.has(m[1])) continue
+    seen.add(m[1])
+    out.push(m[1])
+  }
+  return out
+}
+
+function familyToneHex(prim: ColorScale, family: string, tones: string[]): string | undefined {
+  for (const t of tones) {
+    const hex = prim[`${family}-${t}`]
+    if (hex) return hex
+  }
+  return undefined
+}
+
+function pickThemeString(node: unknown, theme: string): string | undefined {
+  if (typeof node === 'string') return node
+  if (!node || typeof node !== 'object') return undefined
+  const rec = node as Record<string, unknown>
+  for (const key of [theme, 'light', 'dark']) {
+    if (typeof rec[key] === 'string') return rec[key]
+  }
+  for (const v of Object.values(rec)) {
+    if (typeof v === 'string') return v
+  }
+  return undefined
+}
+
+function archLeafValue(tokens: DesignTokens, group: string, key: string, theme: string): string | undefined {
+  const groups = tokens.colors.architecture?.tokens
+  if (!groups || typeof groups !== 'object') return undefined
+  const g = (groups as Record<string, Record<string, unknown>>)[group]
+  if (!g || typeof g !== 'object') return undefined
+  if (g[key] !== undefined) return pickThemeString(g[key], theme)
+  let cur: unknown = g
+  for (const seg of key.split('.')) {
+    if (!cur || typeof cur !== 'object') return undefined
+    cur = (cur as Record<string, unknown>)[seg]
+  }
+  return pickThemeString(cur, theme)
+}
+
+function architectureSolidValue(tokens: DesignTokens, theme: string): string | undefined {
+  const kind = tokens.colors.architecture?.kind
+  if (kind === 'astryx') return archLeafValue(tokens, 'accent', 'solid', theme)
+  if (kind === 'shadcn') return archLeafValue(tokens, 'primary', 'fill', theme)
+  return archLeafValue(tokens, 'action', 'primary.default', theme)
+    ?? archLeafValue(tokens, 'accent', 'solid', theme)
+    ?? archLeafValue(tokens, 'primary', 'fill', theme)
+}
+
+function isStatusOrNeutralFamily(fam: string): boolean {
+  const base = fam.replace(/-dark$/, '').replace(/-a$/, '')
+  if (base === 'black' || base === 'white') return true
+  if (/(?:^|-)(error|warning|success|info)$/.test(base)) return true
+  if (/(?:^|-)(neutral|gray)$/.test(base)) return true
+  return false
+}
+
+function activeThemeKey(tokens: DesignTokens): string {
+  const order = tokens.colors.themeOrder ?? []
+  const named = tokens.colors.activeTheme
+  if (named && (
+    order.includes(named)
+    || Boolean(tokens.foundationsByTheme?.[named])
+    || Boolean(tokens.colors.themes?.[named])
+  )) return named
+  const own = order.filter((t) => t !== 'light' && t !== 'dark')
+  return own[own.length - 1] ?? order[0] ?? 'light'
+}
+
+function familyMatchingSolid(prim: ColorScale, hex: string): string | undefined {
+  const want = normHex(hex)
+  for (const fam of primitiveFamilies(prim)) {
+    if (fam.endsWith('-dark') || fam.endsWith('-a') || isStatusOrNeutralFamily(fam)) continue
+    const t9 = familyToneHex(prim, fam, ['9', '09', '600'])
+    if (t9 && normHex(t9) === want) return fam
+  }
+  return undefined
+}
+
+// The payload's brand family for the PREVIEWED theme. After a System Style
+// is adopted the payload can still carry leftover `accent-*` keys, and
+// Overview used to prefer those — so switching theme left the cyan/gold/…
+// ramp on "accent". Resolve `action.primary.default` for `colors.activeTheme`
+// first (Categorical keys stay dotted: `action['primary.default']`), match
+// that hex to a family's tone 9, and only then fall back to `accent`/`brand`.
+function brandFamilyFromTokens(tokens: DesignTokens): string {
+  const prim = tokens.colors.primitive ?? {}
+  const theme = activeThemeKey(tokens)
+  const leaf = architectureSolidValue(tokens, theme)
+    ?? tokens.colors.themes?.[theme]?.['background-brand-solid']
+    ?? tokens.colors.semantic?.['background-brand-solid']
+  if (leaf) {
+    const ref = /^\{([a-z0-9/-]+)\.(\d+)\}$/i.exec(leaf.trim())
+    if (ref && familyToneHex(prim, ref[1], ['1', '9', '01', '09'])) return ref[1]
+    if (leaf.startsWith('#')) {
+      const hit = familyMatchingSolid(prim, leaf)
+      if (hit) return hit
+    }
+  }
+  if (familyToneHex(prim, 'accent', ['1', '9', '01', '09'])) return 'accent'
+  if (familyToneHex(prim, 'brand', ['1', '9', '01', '09'])) return 'brand'
+  return primitiveFamilies(prim).find((f) => !f.endsWith('-dark') && !f.endsWith('-a') && !isStatusOrNeutralFamily(f))
+    ?? 'accent'
 }
 
 // ── Architecture-aware semantic resolution ──────────────────────────────────
@@ -1181,6 +1446,8 @@ function docModePin(tokens: DesignTokens, allCols: VariableCollection[]): { coll
 // opened file shows without anyone touching a mode toggle.
 function componentThemeKey(tokens: DesignTokens): string {
   const order = tokens.colors.themeOrder ?? ['light']
+  const active = tokens.colors.activeTheme
+  if (active && order.includes(active)) return active
   return order.length > 2 ? (order[order.length - 1] ?? 'light') : (order[0] ?? 'light')
 }
 function componentModePin(tokens: DesignTokens, allCols: VariableCollection[]): { collection: VariableCollection; modeId: string } | undefined {
@@ -1319,6 +1586,7 @@ function archGroupOrder(kind: string, present: string[]): [string, string][] {
 function normalizeArchitecture(
   arch: { kind: string; tokens?: unknown; [key: string]: unknown },
   themeNames: string[],
+  labels: Record<string, string> = {},
 ): ArchNorm | null {
   const kind = arch.kind
 
@@ -1372,9 +1640,12 @@ function normalizeArchitecture(
       for (const node of Object.values(group)) Object.keys(node).forEach((m) => present.add(m))
     }
     const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+    const labelOf = (m: string) => labels[m]?.trim() || cap(m)
+    // Only modes the payload's themeOrder asked for. Architecture leftovers
+    // (`dark` from scaffolding overrides) used to become a phantom Figma
+    // column beside the real My-theme.
     const ordered = themeNames.filter((m) => present.has(m))
-    const extra = [...present].filter((m) => !ordered.includes(m))
-    modes = [...ordered, ...extra].map((m) => [m, cap(m)] as [string, string])
+    modes = (ordered.length ? ordered : themeNames).map((m) => [m, labelOf(m)] as [string, string])
   }
   if (modes.length === 0) return null
 
@@ -1467,6 +1738,7 @@ let semanticsRebuilt = false
 let foundationsRebuilt = false
 
 async function importVariables(tokens: DesignTokens): Promise<number> {
+  namingCtx = tokens
   let count = 0
   semanticsRebuilt = false
   foundationsRebuilt = false
@@ -1671,7 +1943,9 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     const order = tokens.colors.themeOrder ?? []
     return [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))]
   })()
-  const capFoundationTheme = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+  // Same labels Color Semantics uses — Sync flattens to `theme::light`
+  // keys, and `cap()` of that string is not a column name anyone can read.
+
   // Modes are needed when ANY theme's resolved foundation map differs from the
   // ROOT export — not only when themes differ from each other. Theme Preview
   // writes font/spacing/… into `themeFoundations[theme]`; root `typography`
@@ -1690,7 +1964,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     return foundationThemes.slice(1).some((t) => JSON.stringify(pick(t) ?? null) !== first)
   }
   function ensureNamedModes(col: VariableCollection, keys: string[]): Record<string, string> {
-    const labels: [string, string][] = keys.map((k) => [k, capFoundationTheme(k)])
+    const labels: [string, string][] = keys.map((k) => [k, shippedThemeLabel(k)])
     try { col.renameMode(col.defaultModeId, labels[0][1]) } catch { /* not allowed */ }
     pruneModes(col, new Set(labels.map(([, l]) => l)), col.name)
     const modeIdOf: Record<string, string> = { [labels[0][0]]: col.defaultModeId }
@@ -1729,20 +2003,23 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     transform: (val: string) => VariableValue,
     nameOf: (key: string) => string = (k) => k,
     themeMapOf?: (theme: string) => Record<string, string> | undefined,
+    forceModes = false,
   ) {
     if (!entries || entries.length === 0) return
     const col = findOrCreateCollection(collName)
     const cache = cacheFor(col)
     const root = Object.fromEntries(entries)
-    const useModes = !!(themeMapOf && themeMapsDiffer((t) => themeMapOf(t), root))
+    const hasThemeMaps = !!(themeMapOf && foundationThemes.length > 0)
+    const useModes = hasThemeMaps && (forceModes || themeMapsDiffer((t) => themeMapOf!(t), root))
     const modeIdOf = useModes ? ensureNamedModes(col, foundationThemes) : undefined
     const keys = new Set(Object.keys(root))
-    if (useModes && themeMapOf) {
+    if (hasThemeMaps && themeMapOf) {
       for (const t of foundationThemes) Object.keys(themeMapOf(t) ?? {}).forEach((k) => keys.add(k))
     }
+    const preferred = (themeMapOf && foundationThemes[0]) ? themeMapOf(foundationThemes[0]) : undefined
     for (const key of keys) {
       const rawRoot = root[key]
-      if (rawRoot === undefined && !(useModes && themeMapOf && foundationThemes.some((t) => themeMapOf(t)?.[key]))) continue
+      if (rawRoot === undefined && !(hasThemeMaps && themeMapOf && foundationThemes.some((t) => themeMapOf(t)?.[key]))) continue
       const varName = nameOf(key)
       const v = upsertVarIn(col, cache, varName, type, scopesForCollection(collName, figmaVarName(varName)))
       if (modeIdOf && themeMapOf) {
@@ -1752,8 +2029,9 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
           if (raw !== undefined) byTheme[t] = transform(raw)
         }
         writeByTheme(v, byTheme, modeIdOf)
-      } else if (rawRoot !== undefined) {
-        setDefault(col, v, transform(rawRoot))
+      } else {
+        const raw = preferred?.[key] ?? rawRoot
+        if (raw !== undefined) setDefault(col, v, transform(raw))
       }
     }
   }
@@ -1765,6 +2043,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     roles: Record<string, string> | undefined,
     primitiveNameOf: (step: string) => string,
     themeRolesOf?: (theme: string) => Record<string, string> | undefined,
+    forceModes = false,
   ): number {
     const rootRoles = roles ?? {}
     const allRoles = new Set(Object.keys(rootRoles))
@@ -1774,8 +2053,10 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     if (allRoles.size === 0) return 0
     const col = findOrCreateCollection(collName)
     const cache = cacheFor(col)
-    const useModes = !!(themeRolesOf && themeMapsDiffer((t) => themeRolesOf(t), rootRoles))
+    const hasThemeMaps = !!(themeRolesOf && foundationThemes.length > 0)
+    const useModes = hasThemeMaps && (forceModes || themeMapsDiffer((t) => themeRolesOf!(t), rootRoles))
     const modeIdOf = useModes ? ensureNamedModes(col, foundationThemes) : undefined
+    const preferred = (themeRolesOf && foundationThemes[0]) ? themeRolesOf(foundationThemes[0]) : undefined
     let n = 0
     for (const role of allRoles) {
       const v = upsertVarIn(col, cache, `role/${role}`, 'FLOAT', scopesForCollection(collName, `role/${role}`))
@@ -1791,7 +2072,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         writeByTheme(v, byTheme, modeIdOf)
         n++
       } else {
-        const step = rootRoles[role]
+        const step = preferred?.[role] ?? rootRoles[role]
         if (typeof step !== 'string' || !step) continue
         const prim = cache.get(figmaVarName(primitiveNameOf(step)))
         if (!prim) continue
@@ -1893,6 +2174,36 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
             ?? upsertVarIn(typoCol, typoCache, `weight/${key}`, 'FLOAT', scopesForCollection(COLLECTIONS.typography, `weight/${key}`))
           v.setValueForMode(mid, val)
         }
+        for (const [key, val] of Object.entries(f?.lineHeights ?? tokens.typography.lineHeights ?? {})) {
+          const v = typoCache.get(figmaVarName(`line-height/${key}`))
+            ?? upsertVarIn(typoCol, typoCache, `line-height/${key}`, 'FLOAT', scopesForCollection(COLLECTIONS.typography, `line-height/${key}`))
+          v.setValueForMode(mid, pxToFloat(val))
+        }
+        for (const [key, val] of Object.entries(f?.letterSpacings ?? tokens.typography.letterSpacings ?? {})) {
+          const v = typoCache.get(figmaVarName(`letter-spacing/${key}`))
+            ?? upsertVarIn(typoCol, typoCache, `letter-spacing/${key}`, 'FLOAT', scopesForCollection(COLLECTIONS.typography, `letter-spacing/${key}`))
+          v.setValueForMode(mid, pxToFloat(val))
+        }
+      }
+      for (const theme of foundationThemes) {
+        const mid = modeIdOf[theme]
+        if (!mid) continue
+        const f = tokens.foundationsByTheme?.[theme]?.typography
+        const body = normalizeFontFamilyName(f?.fontFamily ?? tokens.typography.fontFamily)
+        const heading = normalizeFontFamilyName(
+          f?.headingFontFamily ?? f?.fontFamily ?? tokens.typography.headingFontFamily ?? tokens.typography.fontFamily,
+        )
+        const verifyMode = async (variable: Variable, expected: string, name: string) => {
+          const current = await figma.variables.getVariableByIdAsync(variable.id)
+          if (current?.valuesByMode[mid] === expected) return
+          variable.setValueForMode(mid, expected)
+          const again = await figma.variables.getVariableByIdAsync(variable.id)
+          if (again?.valuesByMode[mid] !== expected) {
+            throw new Error(`Figma kept a stale value for Typography/${name} (${capFoundationTheme(theme)}); expected "${expected}"`)
+          }
+        }
+        await verifyMode(bodyVar, body, TYPOGRAPHY_FAMILY_VARS.body)
+        await verifyMode(displayVar, heading, TYPOGRAPHY_FAMILY_VARS.display)
       }
       if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
         const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)!
@@ -1956,11 +2267,13 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         log(`✗ Typography "${TYPOGRAPHY_FAMILY_VARS.display}" is still "${displayNow ?? '?'}" — wanted "${headingFamily}" from the payload`)
       }
     }
-    if (tokens.typography.lineHeights) {
-      Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar(`line-height/${key}`, 'FLOAT', pxToFloat(val)))
-    }
-    if (tokens.typography.letterSpacings) {
-      Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar(`letter-spacing/${key}`, 'FLOAT', pxToFloat(val)))
+    if (!typoByTheme) {
+      if (tokens.typography.lineHeights) {
+        Object.entries(tokens.typography.lineHeights).forEach(([key, val]) => typoVar(`line-height/${key}`, 'FLOAT', pxToFloat(val)))
+      }
+      if (tokens.typography.letterSpacings) {
+        Object.entries(tokens.typography.letterSpacings).forEach(([key, val]) => typoVar(`letter-spacing/${key}`, 'FLOAT', pxToFloat(val)))
+      }
     }
     const typeRoles = tokens.typography.roles
     if (typeRoles) {
@@ -2033,15 +2346,25 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     } catch { /* permission / collision — the new var is created below anyway */ }
   }
   for (const key of Object.keys(tokens.colors.primitive)) {
-    renamePrimitive(legacyPrimitiveVarName(key), primitiveVarName(key))
+    const to = primitiveVarName(key)
+    for (const from of previousPrimitiveVarNames(key)) renamePrimitive(from, to)
   }
   for (const key of Object.keys(tokens.colors.primitiveAlpha ?? {})) {
-    renamePrimitive(legacyPrimitiveAlphaVarName(key), primitiveAlphaVarName(key))
+    const to = primitiveAlphaVarName(key)
+    for (const from of previousPrimitiveAlphaVarNames(key)) renamePrimitive(from, to)
+  }
+  // Fold the pre-unification singular "State/" group into "States/" so the
+  // Variables panel never lists both (192 under State + 384 under States).
+  // Bindings survive — same variable id, new name. `legacyPrimitiveVarName`
+  // already returns `States/` after the map change, so it cannot catch these.
+  for (const [name] of Array.from(primCache.entries())) {
+    if (name.startsWith('State/') && !name.startsWith('States/')) {
+      renamePrimitive(name, `States/${name.slice('State/'.length)}`)
+    }
   }
 
-  // Sort so Figma creates groups in the platform's order: built-ins by
-  // FAMILY_ORDER, then custom families by slot folder (Accents → Neutrals →
-  // States) and name, then tone.
+  // Sort so Figma creates groups in the platform's order: Accents, then
+  // Neutrals, then States (per My-theme when two or more ship), then tone.
   Object.entries(tokens.colors.primitive)
     .sort(([a], [b]) => comparePrimitiveKeys(a, b))
     .forEach(([key, hex]) => {
@@ -2049,7 +2372,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       const name = primitiveVarName(key)
       setDefault(primCol, upsertVarIn(primCol, primCache, name, 'COLOR', scopesForCollection(COLLECTIONS.primitives, name)), { ...hexToRgb(hex), a: 1 })
     })
-  log(`✓ Primitive scale (${Object.keys(tokens.colors.primitive).length} tones)`)
+  log(`✓ Primitive scale (${Object.keys(tokens.colors.primitive).length} tones) — preview "${activeThemeKey(tokens)}" · brand "${brandFamilyFromTokens(tokens)}"`)
 
   // ── Alpha twins — overlay colors (#rrggbbaa) that reproduce each solid step
   // when composited over the page background. Grouped under "<Family>/Alpha/*"
@@ -2069,6 +2392,21 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   if (tokens.colors.background) {
     setDefault(primCol, upsertVarIn(primCol, primCache, 'Background', 'COLOR', scopesForCollection(COLLECTIONS.primitives, 'Background')), { ...hexToRgb(tokens.colors.background), a: 1 })
   }
+
+  // Drop primitives the payload no longer ships. After a System Style is
+  // adopted, `shipsFamily` omits the global `error`/`success`/… ramps and
+  // only the minted `States/<theme>-error` families remain — without this,
+  // the leftover `States/Error/*` (or the old `State/Error/*`) sit beside
+  // them as a second group.
+  const writtenPrim = new Set<string>()
+  for (const [key, hex] of Object.entries(tokens.colors.primitive)) {
+    if (hex) writtenPrim.add(primitiveVarName(key))
+  }
+  for (const [key, hex] of Object.entries(tokens.colors.primitiveAlpha ?? {})) {
+    if (hex) writtenPrim.add(primitiveAlphaVarName(key))
+  }
+  if (tokens.colors.background) writtenPrim.add('Background')
+  pruneVars(primCache, writtenPrim, COLLECTIONS.primitives)
 
   // One-time forced sweep for files imported before primitives defaulted to
   // hidden — see FILE_PRIMITIVES_HIDDEN_KEY. `primCache` holds every variable
@@ -2139,11 +2477,12 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   // exactly as before.
   const semCol = findOrCreateCollection(COLLECTIONS.semantics)
   const semCache = cacheFor(semCol)
-  // Color Semantics columns follow library themes (`colors.themes` +
-  // `themeOrder`), not the light/dark appearances of a single theme.
-  // `themeModes` is the canonical per-theme appearance map for other
-  // consumers; using it here as `{ light, dark }` of themeOrder[0] dropped
-  // every extra library theme from Figma (and pruned their columns).
+  // Color Semantics columns follow `colors.themes` + `themeOrder`.
+  // Sync may flatten those keys to `theme::light` / `theme::dark` so a
+  // selected theme ships both appearances as Figma modes. `themeModes`
+  // stays the canonical per-theme map for other consumers — do not rebuild
+  // columns from `{ light, dark }` of themeOrder[0] (that dropped every
+  // extra library theme).
   const themes: Record<string, Record<string, string>> =
     tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0
       ? tokens.colors.themes
@@ -2156,7 +2495,10 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
   const arch = tokens.colors.architecture
-  const norm = arch ? normalizeArchitecture(arch, themeNames) : null
+  const themeLabels = (tokens.colors.themeLabels && typeof tokens.colors.themeLabels === 'object')
+    ? tokens.colors.themeLabels as Record<string, string>
+    : {}
+  const norm = arch ? normalizeArchitecture(arch, themeNames, themeLabels) : null
   if (arch && !norm) {
     // A payload shape this build doesn't know. Say so rather than shipping a
     // file that silently claims to be on an architecture it never wrote.
@@ -2164,7 +2506,11 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   }
 
   // Modes: the architecture's own when there is one, else one per user theme.
-  const modeSpec: [string, string][] = norm ? norm.modes : themeNames.map((t) => [t, cap(t)] as [string, string])
+  // `themeLabels` carries the display name — including "Theme Light" /
+  // "Theme Dark" when Sync flattened appearances into columns.
+  const modeSpec: [string, string][] = norm
+    ? norm.modes
+    : themeNames.map((t) => [t, themeLabels[t]?.trim() || cap(t)] as [string, string])
   const modeIdOf: Record<string, string> = {}
   const skippedModes: string[] = []
   try { semCol.renameMode(semCol.defaultModeId, modeSpec[0][1]) } catch (e) { /* not allowed */ }
@@ -2422,12 +2768,21 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   emitCollection(
     COLLECTIONS.radius, Object.entries(tokens.radius), 'FLOAT', pxToFloat, (k) => k,
     (t) => tokens.foundationsByTheme?.[t]?.radius,
+    true,
   )
   const radiusRoleCount = emitRoleAliases(
     COLLECTIONS.radius, tokens.radiusRoles, (s) => s,
     (t) => tokens.foundationsByTheme?.[t]?.radiusRoles,
+    true,
   )
-  log(`✓ Radius tokens${radiusRoleCount ? ` · ${radiusRoleCount} roles` : ''}`)
+  const previewRad = previewRadius(tokens)
+  const shownRoles = foundationThemes.length
+    ? foundationThemes.map((theme) => {
+        const roles = tokens.foundationsByTheme?.[theme]?.radiusRoles ?? tokens.radiusRoles
+        return `${capFoundationTheme(theme)} boxes=${roles?.container ?? '?'} fields=${roles?.action ?? '?'}`
+      }).join(', ')
+    : `boxes=${previewRad.radiusRoles?.container ?? '?'} fields=${previewRad.radiusRoles?.action ?? '?'}`
+  log(`✓ Radius tokens${radiusRoleCount ? ` · ${radiusRoleCount} roles` : ''} — ${shownRoles}`)
 
   const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0
   const strokeMap = strokeFromV6 ? tokens.stroke : tokens.borders?.width
@@ -2629,8 +2984,9 @@ function assignedGradient(tokens: DesignTokens, surface: 'cover' | 'avatar'): Gr
 
 async function importStyles(tokens: DesignTokens): Promise<number> {
   let count = 0
-  const fontFamily = normalizeFontFamilyName(tokens.typography.fontFamily)
-  const headingFamily = normalizeFontFamilyName(tokens.typography.headingFontFamily ?? fontFamily)
+  const previewType = previewTypography(tokens)
+  const fontFamily = normalizeFontFamilyName(previewType.fontFamily)
+  const headingFamily = normalizeFontFamilyName(previewType.headingFontFamily ?? fontFamily)
 
   const textByName = new Map(
     (await figma.getLocalTextStylesAsync()).map((s) => [s.name, s] as const),
@@ -3259,15 +3615,23 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const wMedium  = bestVar(T, 'weight/medium')
   const wSemibold= bestVar(T, 'weight/semibold', 'weight/semi-bold')
   const familyVar= bestVar(T, TYPOGRAPHY_FAMILY_VARS.body, TYPOGRAPHY_FAMILY_VARS.legacyBody)
+  const previewRad = previewRadius(tokens)
+  const radScale = previewRad.radius
+  const radRoles = previewRad.radiusRoles
   const radXs    = bestVar(COLLECTIONS.radius, 'xs')
   const radSm    = bestVar(COLLECTIONS.radius, 'sm')
   const radMd    = bestVar(COLLECTIONS.radius, 'md')
   const radLg    = bestVar(COLLECTIONS.radius, 'lg')
-  const radiusXs = pxToFloat(tokens.radius?.xs ?? '4px')
-  const radiusSm = pxToFloat(tokens.radius?.sm ?? '4px')
-  const radiusMd = pxToFloat(tokens.radius?.md ?? '8px')
-  const radiusLg = pxToFloat(tokens.radius?.lg ?? '12px')
-  const radiusXl = pxToFloat(tokens.radius?.xl ?? '16px')
+  const radiusXs = pxToFloat(radScale.xs ?? tokens.radius?.xs ?? '4px')
+  const radiusSm = pxToFloat(radScale.sm ?? tokens.radius?.sm ?? '4px')
+  const radiusMd = pxToFloat(radScale.md ?? tokens.radius?.md ?? '8px')
+  const radiusLg = pxToFloat(radScale.lg ?? tokens.radius?.lg ?? '12px')
+  const radiusXl = pxToFloat(radScale.xl ?? tokens.radius?.xl ?? '16px')
+  const rolePx = (role: string, fallbackStep: string, fallbackPx: number) => {
+    const step = radRoles?.[role] ?? fallbackStep
+    const raw = radScale[step] ?? tokens.radius?.[step]
+    return raw !== undefined ? pxToFloat(raw) : fallbackPx
+  }
 
   // Semantic radius roles (Radius Semantics — RADIUS_ROLES). Components bind to
   // the ROLE the design system assigns them, not a raw primitive step, so
@@ -3280,10 +3644,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const radContainer = findVar(COLLECTIONS.radius, 'role/container') ?? radLg
   const radOverlay   = findVar(COLLECTIONS.radius, 'role/overlay')   ?? radLg
   const radPill      = findVar(COLLECTIONS.radius, 'role/pill')
-  const radiusControl   = radiusXs
-  const radiusAction    = radiusSm
-  const radiusContainer = radiusLg
-  const radiusOverlay   = radiusLg
+  const radiusControl   = rolePx('control', 'xs', radiusXs)
+  const radiusAction    = rolePx('action', 'sm', radiusSm)
+  const radiusContainer = rolePx('container', 'lg', radiusLg)
+  const radiusOverlay   = rolePx('overlay', 'lg', radiusLg)
 
   // ── Generic helpers ────────────────────────────────────────────────────────
   // An 8-digit fallback hex carries its own alpha, and it has to reach the
@@ -7723,41 +8087,49 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       existingSingles.set(PLACEHOLDER_SQUARE_NAME, squareMaster)
     }
 
-    // Drop prior chrome frames; keep the two masters.
+    // Drop prior chrome; harvest already lifted the two masters out of any
+    // previous `docs/` board. Keep the masters themselves.
     for (const ch of [...host.children]) {
       if (ch.type === 'FRAME' && ch.name === 'placeholder-library') ch.remove()
       else if (ch.type === 'TEXT' && ch.name.startsWith('label/placeholder')) ch.remove()
     }
 
-    host.appendChild(circleMaster)
-    host.appendChild(squareMaster)
-    circleMaster.x = 80
-    circleMaster.y = 140
-    squareMaster.x = 200
-    squareMaster.y = 140
+    try { host.backgrounds = [docSolid(DOC.page)] } catch {}
+    pinToLightMode(host, sampleModePin)
 
-    try {
-      const title = figma.createText()
-      title.name = 'label/placeholder-title'
-      title.fontName = { family: 'Inter', style: 'Semi Bold' }
-      title.fontSize = 18
-      title.characters = 'Icon placeholders'
-      title.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]
-      host.appendChild(title)
-      title.x = 80
-      title.y = 80
-      const sub = figma.createText()
-      sub.name = 'label/placeholder-sub'
-      sub.fontName = { family: 'Inter', style: 'Regular' }
-      sub.fontSize = 12
-      sub.characters = 'Reference marks (circle-dashed · square-dashed). Component slots draw the same paths inline — swap in a real glyph from Assets when you need one.'
-      sub.fills = [{ type: 'SOLID', color: { r: 0.4, g: 0.4, b: 0.45 } }]
-      host.appendChild(sub)
-      sub.x = 80
-      sub.y = 108
-    } catch { /* fonts may still be loading — masters alone are enough */ }
+    const project = tokens.project || 'Design System'
+    const SLOT = 160
+    const board = docBoard('docs/icon-placeholders', 'Icon placeholders', project, SLOT * 2 + 32)
+    host.appendChild(board)
+    board.x = MARGIN
+    board.y = MARGIN
+    board.appendChild(wrapText(
+      docText(
+        'Reference marks (circle-dashed · square-dashed). Component slots draw the same paths inline — swap in a real glyph from Assets when you need one.',
+        12, 'Regular', DOC.muted, 1, sampleChrome.muted,
+      ),
+      SLOT * 2 + 32,
+    ))
 
-    try { host.backgrounds = [{ type: 'SOLID', color: { r: 0.96, g: 0.96, b: 0.97 } }] } catch {}
+    const row = docFrame('placeholder-slots', 'HORIZONTAL', 32)
+    board.appendChild(row)
+
+    const placeSlot = (master: ComponentNode, label: string) => {
+      const well = docFrame(`slot/${label}`, 'VERTICAL', 12)
+      well.fills = [docSolid(DOC.card, 1, sampleChrome.card)]
+      well.cornerRadius = 16
+      well.paddingTop = 24
+      well.paddingBottom = 20
+      well.paddingLeft = 24
+      well.paddingRight = 24
+      well.primaryAxisAlignItems = 'CENTER'
+      well.counterAxisAlignItems = 'CENTER'
+      well.appendChild(master)
+      well.appendChild(docText(label, 11, 'Medium', DOC.text, 1, sampleChrome.text))
+      row.appendChild(well)
+    }
+    placeSlot(circleMaster, 'circle-dashed')
+    placeSlot(squareMaster, 'square-dashed')
     log('✓ Icon placeholders: circle-dashed · square-dashed (Assets reference)')
   } catch (e) {
     log(`⚠ Icon placeholders page skipped: ${e instanceof Error ? e.message : String(e)}`)
@@ -7902,6 +8274,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
 // so the docs stay live — switch the page's variable mode to preview themes.
 
 async function importDocumentation(tokens: DesignTokens): Promise<number> {
+  namingCtx = tokens
   // ── Variable lookup (same pattern as importComponents) ────────────────────
   const allVars = await figma.variables.getLocalVariablesAsync()
   const allCols = await figma.variables.getLocalVariableCollectionsAsync()
@@ -10020,11 +10393,13 @@ async function importGettingStarted(tokens: DesignTokens): Promise<boolean> {
 // the file thumbnail so the design system is recognizable from the file browser.
 
 async function importCover(tokens: DesignTokens): Promise<boolean> {
+  namingCtx = tokens
   const project = tokens.project || 'Design System'
 
   // ── Fonts — heading family first, Inter as fallback ────────────────────────
-  const headingFamily = tokens.typography.headingFontFamily || tokens.typography.fontFamily || 'Inter'
-  const bodyFamily = tokens.typography.fontFamily || 'Inter'
+  const coverType = previewTypography(tokens)
+  const headingFamily = coverType.headingFontFamily || coverType.fontFamily || 'Inter'
+  const bodyFamily = coverType.fontFamily || 'Inter'
   const loaded = new Set<string>()
   async function loadFont(family: string, style: string): Promise<FontName> {
     const key = `${family}:${style}`
@@ -10049,8 +10424,9 @@ async function importCover(tokens: DesignTokens): Promise<boolean> {
     for (const t of tones) { const hex = prim[`${fam}-${t}`]; if (hex) return hex }
     return undefined
   }
-  const deep = tone('accent', ['12', '1000', '11', '900']) ?? '#111114'
-  const solidTone = tone('accent', ['9', '600', '8', '500']) ?? '#3B82F6'
+  const brandFam = brandFamilyFromTokens(tokens)
+  const deep = tone(brandFam, ['12', '1000', '11', '900']) ?? '#111114'
+  const solidTone = tone(brandFam, ['9', '600', '8', '500']) ?? '#3B82F6'
   const fallback: GradientPaint = {
     type: 'GRADIENT_LINEAR',
     gradientStops: [
@@ -10342,8 +10718,9 @@ async function exportVariablesJson() {
 figma.showUI(__html__, { width: 880, height: 620, themeColors: true })
 
 // Foundation pages always lead the page list — ⬡ Cover opens the file, then
-// ⬡ Getting started, ⬡ Documentation, the six '⬡ Components · <category>'
-// pages (in catalogue order), then ⬡ Icons. Runs when the plugin opens and
+// ⬡ Documentation, ⬡ Getting started, the six '⬡ Components · <category>'
+// pages (in catalogue order), then ⬡ Icon Placeholders, then ⬡ Icons.
+// Runs when the plugin opens and
 // after every import,
 // even a failed one, so the order holds no matter how the file got
 // rearranged. The category order mirrors CATALOG in importSample — kept in
@@ -10358,8 +10735,8 @@ function ensureFoundationPageOrder() {
   const byName = (name: string) => figma.root.children.find((p) => p.name === name)
 
   place(byName('⬡ Cover'))
-  place(byName('⬡ Getting started'))
   place(byName('⬡ Documentation'))
+  place(byName('⬡ Getting started'))
   // Legacy single page — only present until its next import splits it.
   place(byName('⬡ Components Overview'))
   for (const cat of COMPONENT_CATEGORY_ORDER) place(byName(`⬡ Components · ${cat}`))
@@ -10369,6 +10746,7 @@ function ensureFoundationPageOrder() {
     (p) => p.name.startsWith('⬡ Components · ') &&
       !COMPONENT_CATEGORY_ORDER.some((c) => p.name === `⬡ Components · ${c}`),
   )) place(p)
+  place(byName('⬡ Icon Placeholders'))
   place(byName('⬡ Icons'))
 }
 ensureFoundationPageOrder()
@@ -10626,6 +11004,7 @@ type FigmaEditsReport = {
 }
 
 async function collectLocalEdits(baseline: DesignTokens): Promise<FigmaEditsReport> {
+  namingCtx = baseline
   const rejected: FigmaEditRejection[] = []
   const supported: FigmaEditsReport['supported'] = {}
   let supportedCount = 0

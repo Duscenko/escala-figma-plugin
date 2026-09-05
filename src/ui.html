@@ -306,6 +306,7 @@
   .header-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
   .header-sub { font-size: 11px; color: var(--text-sub); }
   .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .aside-head-actions { display: flex; align-items: center; gap: 8px; }
 
   .close-btn {
     background: none; border: none; cursor: pointer;
@@ -534,6 +535,23 @@
   .row-label span { font-size: 12px; font-weight: 500; }
   .row-label small { font-size: 11px; color: var(--text-sub); line-height: 1.45; }
 
+  /* Export destinations are a radio list: the selected row is what the
+     aside previews. Hairline `.row` separators would fight the selected
+     fill, so these are bordered cards instead. */
+  .export-opt {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; width: 100%; padding: 10px 12px; margin: 0;
+    border: 1px solid var(--border2); border-radius: var(--radius);
+    background: var(--bg); cursor: pointer; text-align: left;
+    transition: border-color 140ms var(--ease), background 140ms var(--ease);
+  }
+  .export-opt + .export-opt { margin-top: 8px; }
+  .export-opt:hover { border-color: var(--text-dim); }
+  .export-opt.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .export-opt.selected .row-label span,
+  .export-opt.selected .row-label small { color: var(--text-on-tint); }
+  .export-opt:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+
   .toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
   .toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
   .toggle-track {
@@ -603,6 +621,34 @@
   .progress-note { font-size: 11px; color: var(--warning-fg, var(--text-sub)); line-height: 1.5; }
   .progress-note.warn { color: var(--error); }
 
+  /* One notification system: Activity log is the record; toasts surface the
+     same success/error lines so a designer doesn't have to open the log. */
+  .toast-host {
+    position: fixed; left: var(--rail-w); right: 0; bottom: 58px;
+    z-index: 80; display: flex; flex-direction: column; align-items: center;
+    gap: 8px; padding: 0 16px; pointer-events: none;
+  }
+  .toast {
+    display: flex; align-items: center; gap: 8px; max-width: 420px;
+    padding: 8px 14px; border-radius: 10px;
+    background: var(--text); color: var(--bg);
+    font-size: 12px; font-weight: 500; line-height: 1.35;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    animation: toast-in 180ms var(--ease);
+  }
+  .toast.error { background: var(--error); color: var(--on-accent); }
+  .toast-mark { flex-shrink: 0; font-size: 13px; }
+  .toast.success .toast-mark { color: var(--success); }
+  .toast.out { animation: toast-out 160ms var(--ease) forwards; }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes toast-out {
+    from { opacity: 1; transform: translateY(0); }
+    to   { opacity: 0; transform: translateY(6px); }
+  }
+
   /* ── Overview (home) ── */
   /* The connected system at a glance. Everything here is read from the last
      imported payload in clientStorage — no network, no second source. */
@@ -646,6 +692,9 @@
   .ov-states .color-dot { width: 14px; height: 14px; border-radius: 4px; }
 
   .ov-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+  /* Edit / Create on the web is the payoff — full row, then the local action. */
+  .ov-actions .btn-primary { flex: 1 1 100%; }
+  .export-actions { display: flex; gap: 6px; flex-shrink: 0; }
   .ov-empty { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
   .ov-empty p { font-size: 12px; color: var(--text-sub); line-height: 1.6; }
 
@@ -725,6 +774,10 @@
      of right padding — it used to hug its content and clip the label. */
   .sync-interval { min-width: 132px; }
   .sync-now { margin-left: auto; flex-shrink: 0; }
+  .sync-field-label {
+    font-size: 10px; font-weight: 600;
+    color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em;
+  }
   .sync-hint { font-size: 10px; color: var(--text-sub); line-height: 1.5; }
 
   /* The sync contract. Deliberately quiet type — it is a standing fact about
@@ -1005,8 +1058,8 @@
   <button class="rail-btn active" id="railHome"   data-view="home"   data-label="Overview"     aria-label="Overview">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M3 9.5L12 3L21 9.5V20C21 20.5523 20.5523 21 20 21H15V14H9V21H4C3.44772 21 3 20.5523 3 20V9.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </button>
-  <button class="rail-btn"        id="railGuide"  data-view="guide"  data-label="Guided setup" aria-label="Guided setup">
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M11.223 2.43177C11.5066 2.27421 11.6484 2.19543 11.7985 2.16454C11.9315 2.13721 12.0685 2.13721 12.2015 2.16454C12.3516 2.19543 12.4934 2.27421 12.777 2.43177L20.177 6.54288C20.4766 6.70928 20.6263 6.79248 20.7354 6.91082C20.8318 7.01551 20.9049 7.13959 20.9495 7.27477C21 7.42756 21 7.59889 21 7.94153V16.0586C21 16.4013 21 16.5726 20.9495 16.7254C20.9049 16.8606 20.8318 16.9847 20.7354 17.0893C20.6263 17.2077 20.4766 17.2909 20.177 17.4573L12.777 21.5684C12.4934 21.726 12.3516 21.8047 12.2015 21.8356C12.0685 21.863 11.9315 21.863 11.7985 21.8356C11.6484 21.8047 11.5066 21.726 11.223 21.5684L3.82297 17.4573C3.52345 17.2909 3.37369 17.2077 3.26463 17.0893C3.16816 16.9847 3.09515 16.8606 3.05048 16.7254C3 16.5726 3 16.4013 3 16.0586V7.94153C3 7.59889 3 7.42756 3.05048 7.27477C3.09515 7.13959 3.16816 7.01551 3.26463 6.91082C3.37369 6.79248 3.52345 6.70928 3.82297 6.54288L11.223 2.43177Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <button class="rail-btn"        id="railGuide"  data-view="guide"  data-label="Import" aria-label="Import">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 15h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="m9 18 3-3-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </button>
   <button class="rail-btn"        id="railExport" data-view="export" data-label="Export"       aria-label="Export">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12 3V15M12 15L7 10M12 15L17 10M4 17V19C4 20.1046 4.89543 21 6 21H18C19.1046 21 20 20.1046 20 19V17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1024,12 +1077,12 @@
   <!-- Header -->
   <div class="header">
     <div class="header-text">
-      <div class="header-title" id="viewTitle">Set up your design system</div>
-      <div class="header-sub"   id="viewSub">Four steps — source, scope, review, import.</div>
+      <div class="header-title" id="viewTitle">Import</div>
+      <div class="header-sub"   id="viewSub">Bring a tokens.json into this file.</div>
     </div>
     <div class="header-actions">
       <button class="link-btn hidden" id="skipBtn">Skip to expert mode →</button>
-      <button class="link-btn hidden" id="guideBtn">← Back to guided setup</button>
+      <button class="link-btn hidden" id="guideBtn">← Import steps</button>
     </div>
   </div>
 
@@ -1071,7 +1124,7 @@
               </div>
             </div>
             <div class="ramp" id="ovRamp"></div>
-            <div class="ramp-label"><span>1</span><span>accent</span><span>12</span></div>
+            <div class="ramp-label"><span>1</span><span id="ovRampFamily">accent</span><span>12</span></div>
 
             <!-- The two ways forward sit directly under the ramp, inside the
                  identity card. They used to live at the very bottom of the
@@ -1080,7 +1133,7 @@
                  merely informative, and off-screen entirely on a short plugin
                  window. -->
             <div class="ov-actions">
-              <button class="btn btn-secondary btn-sm" id="ovEditBtn">Edit on the web ↗</button>
+              <button class="btn btn-primary" id="ovEditBtn">This page ↗</button>
               <button class="btn btn-secondary btn-sm" id="ovImportBtn">Import into this file</button>
             </div>
 
@@ -1172,8 +1225,9 @@
           </div>
 
           <div class="sync-config">
+            <p class="sync-field-label" id="syncUrlLabel">ID to plugin</p>
             <div class="input-row">
-              <input type="text" id="syncUrl" value="" placeholder="https://www.escalatokens.com/api/tokens?project=your-system" aria-label="Sync URL" />
+              <input type="text" id="syncUrl" value="" placeholder="https://www.escalatokens.com/api/tokens?project=your-system" aria-labelledby="syncUrlLabel" />
               <button class="btn btn-sm btn-secondary" id="syncToggleBtn">Start sync</button>
             </div>
             <div class="sync-meta">
@@ -1190,9 +1244,9 @@
                    queue anyone should have to wait in: publish on the web, press
                    this, see it now. Works whether or not sync is running. -->
               <button class="btn btn-sm btn-secondary sync-now" id="syncNowBtn" type="button"
-                      title="Check the publish URL right now instead of waiting for the next check">Update now</button>
+                      title="Check ID to plugin right now instead of waiting for the next check">Update now</button>
             </div>
-            <span class="sync-hint">Scope to one system with <code>?project=name</code></span>
+            <span class="sync-hint">Code the plugin uses to sync.</span>
           </div>
           <!-- What a sync actually covers, stated where it is claimed.
                fetchAndSync posts importComponents/importIcons/importDocs
@@ -1205,7 +1259,6 @@
                options if they ever change. -->
           <div class="sync-scope">
             <div class="sync-scope-row"><span class="sync-scope-yes">✓</span> Variables and styles — updated automatically</div>
-            <div class="sync-scope-row"><span class="sync-scope-no">—</span> Components, cover and boards — re-run Import to refresh them<br /><span class="sync-scope-why">They're bound to the variables, so your colours, type and spacing already follow along. Import is only needed for new or renamed elements.</span></div>
           </div>
           <div class="ov-divide"></div>
           <!-- Disconnects THIS file only: clears its imported system and its
@@ -1214,37 +1267,20 @@
                even when the file has no system yet but Live Sync is running. -->
           <div class="reset-row">
             <button class="link-btn" id="resetFileBtn" type="button">Reset this file</button>
-            <span class="reset-hint">Disconnects the system and sync URL from this file only.</span>
+            <span class="reset-hint">Disconnects the system and ID to plugin from this file only.</span>
           </div>
         </div>
 
         <details class="ov-help">
           <summary>How Live Sync works</summary>
           <ol class="help-list">
-            <li>In the configurator, open <strong>Bring to Figma</strong> and publish your tokens <em>(required — editing on localhost does not publish)</em></li>
-            <li>Paste the URL above, then press <strong>Start sync</strong></li>
+            <li>In the configurator, copy <strong>ID to plugin</strong> and press <strong>Sync now</strong> <em>(required — editing on localhost does not publish)</em></li>
+            <li>Paste <strong>ID to plugin</strong>, then press <strong>Start sync</strong></li>
             <li>Re-publish on the web → this file updates on its own</li>
             <li>No login needed — the endpoint is public and read-only. Tokens living in a Git repo aren't covered: download <code>tokens.json</code> and use Import instead.</li>
           </ol>
         </details>
 
-        <div class="card" style="margin-top:12px">
-          <div class="card-title">Read from Figma</div>
-          <p class="muted" style="margin:0 0 8px;font-size:12px;line-height:1.45">
-            Compares this file to the last imported system. <strong>Value</strong> edits —
-            font family, and a family's anchor colour (<code>Accent/09</code>,
-            <code>Error/09</code>…, the tone every other step in that ramp is built from) —
-            can go back to Escala. <strong>Structural</strong> edits — new variables,
-            renames, new components, and any OTHER ramp tone (those are derived, not
-            stored on their own) — are rejected with a warning; those aren't system
-            settings.
-          </p>
-          <div class="card-row">
-            <button class="btn btn-secondary btn-sm" id="checkLocalEditsBtn" type="button">Check local edits</button>
-            <button class="btn btn-secondary btn-sm" id="downloadLocalEditsBtn" type="button" disabled>Download patch</button>
-          </div>
-          <div id="localEditsReport" class="muted" style="margin-top:8px;font-size:11px;line-height:1.4;white-space:pre-wrap"></div>
-        </div>
        </div>
       </div>
 
@@ -1375,23 +1411,35 @@
         </div>
       </div>
 
-      <!-- Panel: Export (expert only) -->
+      <!-- Panel: Export (expert only). First destination is selected on open
+           so the aside loads the agent markdown instead of sitting empty
+           beside three equally-weighted rows. -->
       <div class="panel hidden" id="panel-export">
-        <div class="card">
+        <div class="card" role="radiogroup" aria-label="Export from this file">
           <div class="card-title">Export from this file</div>
-          <div class="row">
+          <div class="export-opt selected" role="radio" aria-checked="true" tabindex="0" data-export="agent">
             <div class="row-label">
-              <span>Figma variables</span>
-              <small>Every local collection, mode and value — works in any file</small>
+              <span>Get code · Agent</span>
+              <small>Agent-context markdown — same catalog as Get code on the web. Copy or download.</small>
             </div>
-            <button class="btn btn-secondary btn-sm" id="exportVarsBtn">Export</button>
+            <div class="export-actions">
+              <button class="btn btn-primary btn-sm" id="copyAgentBtn" disabled>Copy</button>
+              <button class="btn btn-secondary btn-sm" id="downloadAgentBtn" disabled>Download</button>
+            </div>
           </div>
-          <div class="row">
+          <div class="export-opt" role="radio" aria-checked="false" tabindex="0" data-export="json">
             <div class="row-label">
-              <span>tokens.json</span>
-              <small>Last synced payload — re-import it in the configurator</small>
+              <span>Escala JSON</span>
+              <small>Last synced payload — same <code>tokens.json</code> the configurator publishes (<code>atoms</code>, not components)</small>
             </div>
             <button class="btn btn-secondary btn-sm" id="exportTokensBtn" disabled>Export</button>
+          </div>
+          <div class="export-opt" role="radio" aria-checked="false" tabindex="0" data-export="variables">
+            <div class="row-label">
+              <span>Figma variables</span>
+              <small>This file’s local collections — a Figma snapshot, not W3C. For DTCG <code>$value</code>/<code>$type</code>, export from the web wizard.</small>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="exportVarsBtn">Export</button>
           </div>
         </div>
       </div>
@@ -1413,7 +1461,8 @@
     <aside class="aside" id="aside">
       <div class="aside-head">
         <div class="card-title" id="asideTitle">Token preview</div>
-        <div style="display:flex;gap:6px;">
+        <div class="aside-head-actions">
+          <button class="btn btn-primary btn-sm hidden" id="asideCopyBtn" type="button">Copy</button>
           <button class="link-btn" id="asideTabTokens">Tokens</button>
           <button class="link-btn" id="asideTabLog" style="color:var(--text-dim)">Activity</button>
         </div>
@@ -1422,8 +1471,8 @@
       <div class="aside-body" id="asidePaneTokens">
         <div class="empty" id="previewEmpty">
           <div class="empty-icon" aria-hidden="true">◇</div>
-          <div class="empty-main">No tokens loaded yet</div>
-          <div class="empty-sub">Drop or paste a tokens.json to see it here</div>
+          <div class="empty-main" id="previewEmptyMain">No tokens loaded yet</div>
+          <div class="empty-sub" id="previewEmptySub">Drop or paste a tokens.json to see it here</div>
         </div>
         <div class="hidden" id="previewLoaded" style="display:flex;flex-direction:column;gap:12px;flex:1;min-height:0;">
           <div class="token-meta" id="tokenMeta"></div>
@@ -1456,13 +1505,18 @@
     <button class="btn btn-primary" id="primaryBtn" disabled>Continue</button>
   </div>
 
+  <div class="toast-host" id="toastHost" aria-live="polite"></div>
+
 </div>
+
+<!-- AGENT_MARKDOWN -->
 
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let parsedTokens   = null
 let syncTimer      = null
 let syncRunning    = false
+let userRequestedSync = false  // Update now — toast "up to date" only for this press
 let lastHash       = null   // hash of the last imported token payload (persisted)
 let pendingHash    = null   // hash of a fetch/import in flight — committed only on 'done'
 let importInFlight = false  // an import is running in the sandbox — don't overlap
@@ -1514,8 +1568,36 @@ let fileAssets   = null
 let autoBuildAttempted = false
 let asidePane = 'tokens'
 let guideDone = false  // completed the walkthrough at least once → open in expert
+// Export aside: Agent is selected on open so the preview loads the markdown
+// instead of sitting on the empty "drop a tokens.json" state next to a
+// connected system. Object identity of the last tokens we rendered is how we
+// skip rebuilding the (large) markdown on every shell render.
+let exportKind = 'agent'  // agent | json | variables
+let lastExportPreview = { kind: null, tokens: null }
 
 const $ = (id) => document.getElementById(id)
+
+// The plugin's one door to the configurator. Never a Vercel preview host.
+const CONFIGURATOR_URL = 'https://www.escalatokens.com'
+
+function projectFromSyncUrl(sync) {
+  try {
+    const u = new URL(sync)
+    return u.searchParams.get('project') || ''
+  } catch {
+    return ''
+  }
+}
+
+function configuratorUrl() {
+  const u = new URL(CONFIGURATOR_URL)
+  const sync = $('syncUrl').value.trim()
+  const project = projectFromSyncUrl(sync)
+  const section = storedTokens && storedTokens.editor && storedTokens.editor.section
+  if (project) u.searchParams.set('project', project)
+  if (typeof section === 'string' && section) u.searchParams.set('section', section)
+  return u.toString()
+}
 
 // djb2 string hash — cheap change detection for token payloads
 function hashStr(s) {
@@ -1573,13 +1655,13 @@ const STEP_PANEL = ['source', 'scope', 'review', 'run']
 
 const VIEW_COPY = {
   home:   ['Your design system', 'What this file is connected to.'],
-  guide:  ['Set up your design system', 'Four steps — source, scope, review, import.'],
+  guide:  ['Import', 'Bring a tokens.json into this file.'],
   // 'import' has no rail button of its own — it's the consolidated screen
   // returning users land on (source + scope + export together), reached via
   // "Skip to expert mode" or automatically once the wizard's been completed
-  // once. The Guided setup rail icon covers both that screen and the wizard.
+  // once. The Import rail icon covers both that screen and the wizard.
   import: ['Import', 'Everything in one place: source, scope and export.'],
-  export: ['Export', 'Send this file’s variables or the last synced tokens back out.'],
+  export: ['Export', 'Get code for an agent, or send this file’s tokens back out.'],
   log:    ['Activity log', 'Every import and export phase, newest last.'],
 }
 
@@ -1589,8 +1671,8 @@ function showPanels(names) {
 
 function render() {
   // Rail highlight. 'import' (the consolidated expert screen) has no button
-  // of its own — it's still part of the "Guided setup" journey, just its
-  // fast-forwarded form — so the Guide icon stays lit while it's showing.
+  // of its own — it's still the Import journey, just its fast-forwarded
+  // form — so the Import icon stays lit while it's showing.
   document.querySelectorAll('.rail-btn[data-view]').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === view || (b.dataset.view === 'guide' && view === 'import')))
 
@@ -1623,6 +1705,7 @@ function render() {
     else if (view === 'log')    showPanels(['log'])
   }
 
+  syncExportPreview()
   renderFooter()
 }
 
@@ -1661,7 +1744,7 @@ function renderFooter() {
     // inside a card, so the footer would only duplicate one of them.
     primary.classList.add('hidden')
     hint.textContent = storedTokens
-      ? 'Edit on the web, then sync or re-import to update this file.'
+      ? 'This page to edit. ID to plugin to sync.'
       : 'Build your system on escalatokens.com, then bring it here.'
     return
   }
@@ -1675,7 +1758,7 @@ function renderFooter() {
     // Each row in the Export panel has its own button — no single global
     // action applies to both, so the footer just hints instead of duplicating.
     primary.classList.add('hidden')
-    hint.textContent = 'Pick what to export above — each button downloads its own file.'
+    hint.textContent = 'Copy agent markdown, or export Escala JSON / Figma variables.'
     return
   }
   if (view === 'import') {
@@ -1718,6 +1801,10 @@ function goView(v) {
   // the step-by-step wizard.
   if (v === 'import') guided = false
   if (v === 'guide')  guided = true
+  if (v === 'export') {
+    exportKind = 'agent'
+    lastExportPreview = { kind: null, tokens: null }
+  }
   view = v
   render()
 }
@@ -1769,6 +1856,7 @@ function setAside(pane) {
   $('asideTabTokens').style.color = isTokens ? 'var(--accent)' : 'var(--text-dim)'
   $('asideTabLog').style.color    = isTokens ? 'var(--text-dim)' : 'var(--accent)'
   if (!isTokens) $('logDot').classList.add('hidden')
+  syncAsideCopyBtn()
 }
 $('asideTabTokens').addEventListener('click', () => setAside('tokens'))
 $('asideTabLog').addEventListener('click', () => setAside('log'))
@@ -1815,11 +1903,11 @@ function loadFile(file) {
   if (!file) return
   const ok = file.name.endsWith('.json') || file.type === 'application/json'
   if (!ok) {
-    addLog(`✗ Only .json files are accepted (got "${file.name}")`, 'error')
+    notify(`Only .json files are accepted (got "${file.name}")`, 'error')
     return
   }
   const reader = new FileReader()
-  reader.onerror = () => addLog('✗ Could not read the file', 'error')
+  reader.onerror = () => notify('Could not read the file', 'error')
   reader.onload  = (e) => {
     const text = e.target.result
     $('jsonInput').value = text
@@ -2053,14 +2141,16 @@ function tryParse(raw) {
     err.classList.add('hidden')
     showPreview(t)
     $('exportTokensBtn').disabled = false
+    setAgentExportEnabled(true)
     render()
     return true
   } catch(e) {
     err.textContent = '✗ ' + e.message
     err.classList.remove('hidden')
     parsedTokens = null
-    $('previewLoaded').classList.add('hidden')
-    $('previewEmpty').classList.remove('hidden')
+    lastExportPreview = { kind: null, tokens: null }
+    showPreviewEmpty()
+    notify(`Couldn’t parse tokens.json: ${e.message}`, 'error')
     render()
     return false
   }
@@ -2075,25 +2165,78 @@ function escapeHtml(s) {
 /** Brand solid hex from `colors.architecture` — the contract the platform
  *  published and Color Semantics will hold. Nested Categorical keys stay dotted
  *  (`action['primary.default']`), never a rebuilt tree. */
-function architectureSolidHex(t) {
+function activeThemeKey(t) {
   const c = t && t.colors
-  const arch = c && c.architecture
-  const groups = arch && arch.tokens
-  if (!groups) return null
-  const theme = (c.themeOrder && c.themeOrder[0]) || 'light'
-  const pick = (group, key) => {
-    const node = groups[group] && groups[group][key]
-    if (!node || typeof node !== 'object') return null
-    const v = node[theme] || node.light || Object.values(node)[0]
-    return typeof v === 'string' && v.charAt(0) === '#' ? v : null
+  const order = (c && c.themeOrder) || []
+  const named = c && c.activeTheme
+  if (named && (order.indexOf(named) !== -1
+    || (c.themes && c.themes[named])
+    || (t.foundationsByTheme && t.foundationsByTheme[named]))) {
+    return named
   }
-  if (arch.kind === 'categorical') return pick('action', 'primary.default')
-  if (arch.kind === 'astryx') return pick('accent', 'solid')
-  if (arch.kind === 'shadcn') return pick('primary', 'fill')
+  const own = order.filter(function (k) { return k !== 'light' && k !== 'dark' })
+  return own[own.length - 1] || order[0] || 'light'
+}
+
+function pickThemeString(node, theme) {
+  if (typeof node === 'string') return node
+  if (!node || typeof node !== 'object') return null
+  if (typeof node[theme] === 'string') return node[theme]
+  if (typeof node.light === 'string') return node.light
+  if (typeof node.dark === 'string') return node.dark
+  const keys = Object.keys(node)
+  for (let i = 0; i < keys.length; i++) {
+    if (typeof keys[i] === 'string' && typeof node[keys[i]] === 'string') return node[keys[i]]
+  }
   return null
 }
 
-function showPreview(t) {
+function archLeafValue(t, group, key, theme) {
+  const groups = t && t.colors && t.colors.architecture && t.colors.architecture.tokens
+  if (!groups) return null
+  const g = groups[group]
+  if (!g) return null
+  if (g[key] !== undefined) return pickThemeString(g[key], theme)
+  const segs = String(key).split('.')
+  let cur = g
+  for (let i = 0; i < segs.length; i++) {
+    if (!cur || typeof cur !== 'object') return null
+    cur = cur[segs[i]]
+  }
+  return pickThemeString(cur, theme)
+}
+
+function architectureSolidHex(t) {
+  const theme = activeThemeKey(t)
+  const kind = t && t.colors && t.colors.architecture && t.colors.architecture.kind
+  const leaf = kind === 'astryx' ? archLeafValue(t, 'accent', 'solid', theme)
+    : kind === 'shadcn' ? archLeafValue(t, 'primary', 'fill', theme)
+    : (archLeafValue(t, 'action', 'primary.default', theme)
+      || archLeafValue(t, 'accent', 'solid', theme)
+      || archLeafValue(t, 'primary', 'fill', theme))
+  return typeof leaf === 'string' && leaf.charAt(0) === '#' ? leaf : null
+}
+
+function fillCodeView(text) {
+  const lines = String(text).split('\n')
+  const shown = lines.slice(0, JSON_MAX_LINES)
+  let html = shown.map((l, i) =>
+    `<div class="json-line"><span class="json-n">${i + 1}</span><span class="json-t">${escapeHtml(l)}</span></div>`
+  ).join('')
+  if (lines.length > shown.length) {
+    html += `<div class="json-more">… ${lines.length - shown.length} more lines — Copy / Download ship the full file</div>`
+  }
+  $('jsonView').innerHTML = html
+}
+
+function showPreviewEmpty(main, sub) {
+  $('previewLoaded').classList.add('hidden')
+  $('previewEmpty').classList.remove('hidden')
+  $('previewEmptyMain').textContent = main || 'No tokens loaded yet'
+  $('previewEmptySub').textContent = sub || 'Drop or paste a tokens.json to see it here'
+}
+
+function showTokenPreview(t) {
   const meta = $('tokenMeta')
   const sem = (t.colors && t.colors.semantic) || {}
   // Brand chip: the architecture the platform published (Categorical
@@ -2106,9 +2249,10 @@ function showPreview(t) {
   // excluding the 'accent-dark-*' twin family. Prefix-based on purpose: tone
   // labels vary by the project's naming scheme (1…12 / 25…950 / 10…120), the
   // 'accent-' prefix doesn't.
-  const primitive = (t.colors && t.colors.primitive) || {}
-  const scaleLen = Object.keys(primitive).filter((k) => /^accent-(?!dark)/.test(k)).length
+  const brand = brandFamily(t)
+  const scaleLen = famRamp(t, brand).length
   const atomCount = (t.atoms || []).length
+  meta.classList.remove('hidden')
   meta.innerHTML = `
     <div class="meta-pill">
       <div class="mk">Project</div>
@@ -2133,18 +2277,75 @@ function showPreview(t) {
 
   // Pretty-printed payload with a line gutter, capped so a huge tokens.json
   // can't stall the iframe.
-  const lines = JSON.stringify(t, null, 2).split('\n')
-  const shown = lines.slice(0, JSON_MAX_LINES)
-  let html = shown.map((l, i) =>
-    `<div class="json-line"><span class="json-n">${i + 1}</span><span class="json-t">${escapeHtml(l)}</span></div>`
-  ).join('')
-  if (lines.length > shown.length) {
-    html += `<div class="json-more">… ${lines.length - shown.length} more lines</div>`
-  }
-  $('jsonView').innerHTML = html
+  fillCodeView(JSON.stringify(t, null, 2))
 
   $('previewEmpty').classList.add('hidden')
   $('previewLoaded').classList.remove('hidden')
+}
+
+function showAgentPreview(t) {
+  $('tokenMeta').classList.add('hidden')
+  $('tokenMeta').innerHTML = ''
+  fillCodeView(agentMarkdownFor(t))
+  $('previewEmpty').classList.add('hidden')
+  $('previewLoaded').classList.remove('hidden')
+}
+
+function syncAsideCopyBtn() {
+  const show = view === 'export'
+    && asidePane === 'tokens'
+    && exportKind !== 'variables'
+    && !!currentExportTokens()
+  $('asideCopyBtn').classList.toggle('hidden', !show)
+}
+
+function syncExportPreview() {
+  document.querySelectorAll('.export-opt').forEach((el) => {
+    const on = view === 'export' && el.dataset.export === exportKind
+    el.classList.toggle('selected', on)
+    el.setAttribute('aria-checked', String(on))
+  })
+  syncAsideCopyBtn()
+  if (view !== 'export') {
+    if (lastExportPreview.kind !== null) {
+      lastExportPreview = { kind: null, tokens: null }
+      if (parsedTokens) showTokenPreview(parsedTokens)
+      else showPreviewEmpty()
+    }
+    return
+  }
+  const t = currentExportTokens()
+  if (lastExportPreview.kind === exportKind && lastExportPreview.tokens === t) return
+  lastExportPreview = { kind: exportKind, tokens: t }
+
+  if (exportKind === 'variables') {
+    showPreviewEmpty(
+      'Figma variables',
+      'Export writes this file’s local collections — a Figma snapshot, not a preview.',
+    )
+    return
+  }
+  if (!t) {
+    showPreviewEmpty(
+      'No tokens loaded yet',
+      exportKind === 'agent'
+        ? 'Import or sync this file to preview the agent markdown.'
+        : 'Import or sync this file to preview tokens.json.',
+    )
+    return
+  }
+  if (exportKind === 'agent') showAgentPreview(t)
+  else showTokenPreview(t)
+}
+
+function showPreview(t) {
+  if (view === 'export') {
+    lastExportPreview = { kind: null, tokens: null }
+    syncExportPreview()
+    setAside('tokens')
+    return
+  }
+  showTokenPreview(t)
   setAside('tokens')
 }
 
@@ -2203,6 +2404,120 @@ function familySolid(tokens, family) {
   return r.length ? r[Math.min(8, r.length - 1)] : null
 }
 
+// After a System Style is adopted the payload drops global `accent-*` and
+// ships the minted family instead. Overview / Cover used to hardcode
+// `accent` and painted an empty ramp even though the sync had landed.
+function primitiveFamilies(tokens) {
+  const prim = (tokens && tokens.colors && tokens.colors.primitive) || {}
+  const seen = {}
+  const out = []
+  Object.keys(prim).forEach((k) => {
+    const m = k.match(/^(.+)-(\d+)$/)
+    if (!m || seen[m[1]]) return
+    seen[m[1]] = true
+    out.push(m[1])
+  })
+  return out
+}
+
+function familyToneHex(tokens, family, tones) {
+  const prim = (tokens && tokens.colors && tokens.colors.primitive) || {}
+  for (let i = 0; i < tones.length; i++) {
+    const hex = prim[family + '-' + tones[i]]
+    if (hex) return hex
+  }
+  return null
+}
+
+function isStatusOrNeutralFamily(fam) {
+  const base = fam.replace(/-dark$/, '').replace(/-a$/, '')
+  if (base === 'black' || base === 'white') return true
+  if (/(?:^|-)(error|warning|success|info)$/.test(base)) return true
+  if (/(?:^|-)(neutral|gray)$/.test(base)) return true
+  return false
+}
+
+function familyMatchingSolid(tokens, hex) {
+  const want = String(hex).replace('#', '').toLowerCase().slice(0, 6)
+  const fams = primitiveFamilies(tokens)
+  for (let i = 0; i < fams.length; i++) {
+    const f = fams[i]
+    if (f.endsWith('-dark') || f.endsWith('-a') || isStatusOrNeutralFamily(f)) continue
+    const t9 = familyToneHex(tokens, f, ['9', '09', '600'])
+    if (t9 && t9.replace('#', '').toLowerCase().slice(0, 6) === want) return f
+  }
+  return null
+}
+
+function brandFamily(tokens) {
+  const theme = activeThemeKey(tokens)
+  const themes = tokens && tokens.colors && tokens.colors.themes
+  const leaf = architectureSolidHex(tokens)
+    || (themes && themes[theme] && themes[theme]['background-brand-solid'])
+    || (tokens.colors && tokens.colors.semantic && tokens.colors.semantic['background-brand-solid'])
+  if (leaf) {
+    const ref = /^\{([a-z0-9/-]+)\.(\d+)\}$/i.exec(String(leaf).trim())
+    if (ref && familyToneHex(tokens, ref[1], ['1', '9', '01', '09'])) return ref[1]
+    if (String(leaf).charAt(0) === '#') {
+      const hit = familyMatchingSolid(tokens, leaf)
+      if (hit) return hit
+    }
+  }
+  if (familyToneHex(tokens, 'accent', ['1', '9', '01', '09'])) return 'accent'
+  if (familyToneHex(tokens, 'brand', ['1', '9', '01', '09'])) return 'brand'
+  const hit = primitiveFamilies(tokens).find((f) =>
+    !f.endsWith('-dark') && !f.endsWith('-a') && !isStatusOrNeutralFamily(f))
+  return hit || 'accent'
+}
+
+function statusFamily(tokens, slot) {
+  if (famRamp(tokens, slot).length) return slot
+  const suffix = '-' + slot
+  const hit = primitiveFamilies(tokens).find((f) =>
+    f.endsWith(suffix) && !f.endsWith('-dark') && !f.endsWith('-a'))
+  return hit || slot
+}
+
+// Theme Preview writes the typeface into foundationsByTheme[theme]. Root
+// typography stays on the last Variables · Type value — Overview used to
+// keep showing Inter after a font change.
+function previewTypography(t) {
+  const root = (t && t.typography) || {}
+  const fb = t && t.foundationsByTheme
+  if (!fb) return root
+  const order = (t.colors && t.colors.themeOrder) || []
+  const active = activeThemeKey(t)
+  const key = (active && fb[active] && fb[active].typography && active)
+    || order.find((k) => fb[k] && fb[k].typography)
+    || Object.keys(fb).find((k) => fb[k] && fb[k].typography)
+  const over = key && fb[key] && fb[key].typography
+  if (!over) return root
+  return {
+    fontFamily: over.fontFamily || root.fontFamily,
+    headingFontFamily: over.headingFontFamily || over.fontFamily || root.headingFontFamily,
+  }
+}
+
+function previewRadius(t) {
+  const root = (t && t.radius) || {}
+  const rootRoles = t && t.radiusRoles
+  const fb = t && t.foundationsByTheme
+  if (!fb) return { radius: root, roles: rootRoles }
+  const order = (t.colors && t.colors.themeOrder) || []
+  const keys = order.filter((k) => fb[k]).concat(Object.keys(fb).filter((k) => order.indexOf(k) === -1))
+  const active = activeThemeKey(t)
+  const rootSig = JSON.stringify(rootRoles || null)
+  const key = (active && fb[active] && (fb[active].radius || fb[active].radiusRoles) && active)
+    || keys.find((k) => JSON.stringify((fb[k] && fb[k].radiusRoles) || null) !== rootSig)
+    || keys.find((k) => fb[k] && (fb[k].radius || fb[k].radiusRoles))
+    || keys[0]
+  const over = key && fb[key]
+  return {
+    radius: (over && over.radius) || root,
+    roles: (over && over.radiusRoles) || rootRoles,
+  }
+}
+
 // Mirrors ARCHITECTURE_OPTIONS in the configurator's semanticArchitectures.ts.
 // Unknown values pass through verbatim: a new architecture on the web should
 // show its raw key here, not be silently mislabelled as Flat.
@@ -2239,17 +2554,20 @@ function renderHome() {
   if (!t) return
 
   const c = t.colors || {}
-  const accent = familySolid(t, 'accent')
+  const brand = brandFamily(t)
+  const accent = familySolid(t, brand)
 
   $('ovProject').textContent = t.project || 'Untitled system'
   $('ovAccentHex').textContent = accent ? accent.toUpperCase() : '—'
   $('ovAccentChip').style.background = accent || 'var(--border2)'
 
-  const ramp = famRamp(t, 'accent')
+  const ramp = famRamp(t, brand)
   $('ovRamp').innerHTML = ramp.map((hex) =>
     `<i style="background:${escapeHtml(hex)}"></i>`).join('')
+  const rampFamily = $('ovRampFamily')
+  if (rampFamily) rampFamily.textContent = brand
 
-  const typo = t.typography || {}
+  const typo = previewTypography(t)
   const body = typo.fontFamily || '—'
   const display = typo.headingFontFamily
   $('ovFont').textContent = display && display !== body ? `${display} · ${body}` : body
@@ -2262,12 +2580,15 @@ function renderHome() {
   const themes = (c.themeOrder && c.themeOrder.length)
     ? c.themeOrder
     : Object.keys(c.themes || {})
-  $('ovThemes').textContent = themes.length ? themes.join(', ') : 'light'
+  const labels = (c.themeLabels && typeof c.themeLabels === 'object') ? c.themeLabels : {}
+  $('ovThemes').textContent = themes.length
+    ? themes.map((key) => (typeof labels[key] === 'string' && labels[key].trim()) || key).join(', ')
+    : 'light'
 
   $('ovLastImport').textContent = relTime(lastImportAt)
 
   $('ovStates').innerHTML = ['error', 'warning', 'success', 'info']
-    .map((f) => ({ f, hex: familySolid(t, f) }))
+    .map((f) => ({ f, hex: familySolid(t, statusFamily(t, f)) }))
     .filter((e) => e.hex)
     .map((e) => `<span class="color-dot" title="${e.f}" style="background:${escapeHtml(e.hex)}"></span>`)
     .join('') || '<span style="font-size:11px;color:var(--text-dim)">—</span>'
@@ -2348,8 +2669,12 @@ function openWeb(url) {
   parent.postMessage({ pluginMessage: { type: 'open-external', url } }, '*')
 }
 
-$('ovCreateBtn').addEventListener('click', () => openWeb('https://www.escalatokens.com'))
-  $('ovEditBtn').addEventListener('click', () => openWeb('https://www.escalatokens.com'))
+function openConfigurator() {
+  openWeb(configuratorUrl())
+}
+
+$('ovCreateBtn').addEventListener('click', openConfigurator)
+$('ovEditBtn').addEventListener('click', openConfigurator)
 $('ovHaveBtn').addEventListener('click', () => goView('guide'))
 $('ovImportBtn').addEventListener('click', () => goView(guideDone ? 'import' : 'guide'))
 
@@ -2380,9 +2705,9 @@ $('fetchUrlBtn').addEventListener('click', async () => {
   try {
     const text = await fetchJson(url)
     jsonInput.value = text
-    if (tryParse(text)) addLog(`✓ Fetched tokens from ${url}`, 'success')
+    if (tryParse(text)) notify(`Fetched tokens from ${url}`, 'success')
   } catch (e) {
-    addLog(`✗ Fetch failed: ${e.message}`, 'error')
+    notify(`Fetch failed: ${e.message}`, 'error')
   } finally {
     btn.disabled = false
     btn.textContent = 'Fetch from publish URL'
@@ -2432,7 +2757,7 @@ function resetExportVarsBtn() {
 function downloadTokens(t) {
   const name = (slugify(t.project) || 'escala') + '.tokens.json'
   downloadJson(name, t)
-  addLog(`✓ Exported ${name} — import it in the configurator to sync manually`, 'success')
+  notify(`Exported ${name} — Escala JSON, same payload the configurator publishes`, 'success')
 }
 
 $('exportTokensBtn').addEventListener('click', () => {
@@ -2440,7 +2765,140 @@ $('exportTokensBtn').addEventListener('click', () => {
   parent.postMessage({ pluginMessage: { type: 'export-tokens' } }, '*')
 })
 
+function currentExportTokens() {
+  return parsedTokens || storedTokens
+}
+
+function setAgentExportEnabled(on) {
+  $('copyAgentBtn').disabled = !on
+  $('downloadAgentBtn').disabled = !on
+}
+
+function agentMarkdownFor(t) {
+  if (typeof EscalaAgent !== 'undefined' && EscalaAgent.agentMarkdownFromJSON) {
+    return EscalaAgent.agentMarkdownFromJSON(t)
+  }
+  const title = (t && t.project) || 'Design system'
+  return [
+    '---',
+    'scope: global',
+    'title: ' + title,
+    'source: escala-tokens',
+    'format: agent-context/v1',
+    '---',
+    '',
+    '# Agent context — ' + title,
+    '',
+    'Use this markdown as the source of truth for the whole product. Prefer these token names over exploring the repo. Do not invent parallel names, hex, or px when a token exists.',
+    '',
+    '```json',
+    JSON.stringify(t, null, 2),
+    '```',
+    '',
+  ].join('\n')
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove()
+    return ok
+  }
+}
+
+function downloadText(name, text, type) {
+  const blob = new Blob([text], { type: type || 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function copyAgentMarkdown() {
+  const t = currentExportTokens()
+  if (!t) { notify('Nothing to copy yet — import or sync tokens first', 'error'); return }
+  const md = agentMarkdownFor(t)
+  const ok = await copyText(md)
+  notify(ok ? 'Copied. Paste into any LLM or design agent.' : 'Couldn’t copy — try Download instead', ok ? 'success' : 'error')
+}
+
+function downloadAgentMarkdown() {
+  const t = currentExportTokens()
+  if (!t) { notify('Nothing to export yet — import or sync tokens first', 'error'); return }
+  const name = (slugify(t.project) || 'escala') + '.agent.md'
+  downloadText(name, agentMarkdownFor(t), 'text/markdown')
+  notify('Downloaded ' + name, 'success')
+}
+
+$('copyAgentBtn').addEventListener('click', () => { void copyAgentMarkdown() })
+$('downloadAgentBtn').addEventListener('click', downloadAgentMarkdown)
+
+function selectExportKind(kind) {
+  if (kind !== 'agent' && kind !== 'json' && kind !== 'variables') return
+  if (exportKind === kind) return
+  exportKind = kind
+  lastExportPreview = { kind: null, tokens: null }
+  syncExportPreview()
+  if (view === 'export') setAside('tokens')
+}
+
+document.querySelectorAll('.export-opt').forEach((el) => {
+  el.addEventListener('click', () => selectExportKind(el.dataset.export))
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    selectExportKind(el.dataset.export)
+  })
+})
+
+async function copyTokensJson() {
+  const t = currentExportTokens()
+  if (!t) { notify('Nothing to copy yet — import or sync tokens first', 'error'); return }
+  const ok = await copyText(JSON.stringify(t, null, 2))
+  notify(ok ? 'Copied tokens.json' : 'Couldn’t copy — try Export instead', ok ? 'success' : 'error')
+}
+
+$('asideCopyBtn').addEventListener('click', () => {
+  if (exportKind === 'json') { void copyTokensJson(); return }
+  void copyAgentMarkdown()
+})
+
 // ─── Log ──────────────────────────────────────────────────────────────────────
+function showToast(msg, type) {
+  const host = $('toastHost')
+  if (!host) return
+  const el = document.createElement('div')
+  el.className = 'toast' + (type ? ' ' + type : '')
+  el.setAttribute('role', 'status')
+  const mark = type === 'error' ? '✕' : '✓'
+  el.innerHTML = `<span class="toast-mark" aria-hidden="true">${mark}</span><span></span>`
+  el.lastChild.textContent = msg
+  host.appendChild(el)
+  setTimeout(() => {
+    el.classList.add('out')
+    setTimeout(() => el.remove(), 180)
+  }, type === 'error' ? 4200 : 2600)
+}
+
+function notify(msg, type) {
+  addLog(msg, type || '')
+  if (type === 'success' || type === 'error') showToast(msg, type)
+}
+
 function addLog(msg, type = '') {
   const ts = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const text = `[${ts}] ${msg}`
@@ -2644,9 +3102,16 @@ async function fetchAndSync(url) {
     if (hash === lastHash) {
       if (noChangeSince == null) noChangeSince = Date.now()
       const quiet = Date.now() - noChangeSince
-      updateSyncStatus('active', quiet > SYNC_STALE_MS
+      const stale = quiet > SYNC_STALE_MS
+      updateSyncStatus('active', stale
         ? `Up to date — no changes for ${Math.round(quiet / 60000)}m. If you're editing on the platform, check that Keep Figma in sync is on there.`
         : 'Variables up to date — no changes')
+      if (userRequestedSync) {
+        notify(stale
+          ? 'Still up to date — if you just edited on the web, publish first'
+          : 'Variables up to date — no changes', 'success')
+        userRequestedSync = false
+      }
       return
     }
     // A payload we already failed on, repeatedly. Retrying it a fourth time
@@ -2663,9 +3128,13 @@ async function fetchAndSync(url) {
     parsedTokens = tokens
     showPreview(tokens)
     $('exportTokensBtn').disabled = false
+    setAgentExportEnabled(true)
 
-    const payloadFamily = (tokens.typography && tokens.typography.fontFamily) || '?'
-    addLog(`Sync: fetched "${tokens.project}" — payload family "${payloadFamily}"`)
+    const payloadFamily = previewTypography(tokens).fontFamily || '?'
+    const payloadRadius = previewRadius(tokens)
+    const payloadBoxes = (payloadRadius.roles && payloadRadius.roles.container) || '?'
+    const payloadFields = (payloadRadius.roles && payloadRadius.roles.action) || '?'
+    addLog(`Sync: fetched "${tokens.project}" — payload family "${payloadFamily}", radius boxes "${payloadBoxes}" / fields "${payloadFields}"`)
     // Neutral on purpose: this is set before the sandbox reports its first
     // phase, and a rare escalation (see semanticsRebuilt in code.ts) makes a
     // sync do more than variables. The standing scope card states the rule;
@@ -2723,7 +3192,8 @@ async function fetchAndSync(url) {
   } catch (e) {
     failCount++
     updateSyncStatus('error', `Fetch failed${failCount > 1 ? ` ×${failCount}` : ''}: ${e.message}`)
-    addLog(`Sync error: ${e.message}`, 'error')
+    notify(`Sync error: ${e.message}`, 'error')
+    userRequestedSync = false
     // Timer keeps running — sync recovers on the next successful check
   }
 }
@@ -2782,29 +3252,6 @@ $('syncToggleBtn').addEventListener('click', () => {
   else startSync()
 })
 
-$('checkLocalEditsBtn').addEventListener('click', () => {
-  const box = $('localEditsReport')
-  if (box) box.textContent = 'Checking…'
-  $('downloadLocalEditsBtn').disabled = true
-  parent.postMessage({
-    pluginMessage: {
-      type: 'check-local-edits',
-      tokens: parsedTokens || storedTokens || undefined,
-    },
-  }, '*')
-})
-
-$('downloadLocalEditsBtn').addEventListener('click', () => {
-  if (!lastLocalEdits || !lastLocalEdits.summary || lastLocalEdits.summary.supported === 0) return
-  const blob = new Blob([JSON.stringify(lastLocalEdits, null, 2)], { type: 'application/json' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = (lastLocalEdits.project || 'escala') + '-figma-edits.json'
-  a.click()
-  URL.revokeObjectURL(a.href)
-  addLog('Downloaded Figma→Escala patch — paste or import it in the configurator (Variables · Type / Import)')
-})
-
 // ─── Update now ──────────────────────────────────────────────────────────────
 // The same check the timer runs, on demand. Two reasons it exists: someone who
 // just published shouldn't sit through the rest of the interval, and someone
@@ -2816,8 +3263,9 @@ $('downloadLocalEditsBtn').addEventListener('click', () => {
 // since the last check it says "Up to date" instead of rewriting the file.
 $('syncNowBtn').addEventListener('click', async () => {
   const url = $('syncUrl').value.trim()
-  if (!url) { addLog('Enter a sync URL first', 'error'); return }
-  if (importInFlight) { addLog('An import is already running — the check will follow it', 'error'); return }
+  if (!url) { addLog('Enter ID to plugin first', 'error'); return }
+  if (importInFlight) { notify('An import is already running — the check will follow it', 'error'); return }
+  userRequestedSync = true
   // Explicit user action clears a retry pause — that is what the paused
   // status tells them to press.
   failedHash = null
@@ -2912,6 +3360,7 @@ window.onmessage = (event) => {
       }
       pendingHash = null
       if (syncRunning) updateSyncStatus('error', `Sync incomplete (${failedTries}/${SYNC_MAX_RETRIES}) — see Activity`)
+      notify(`Update incomplete (${failedTries}/${SYNC_MAX_RETRIES}) — see Activity`, 'error')
     } else {
       failedHash = null
       failedTries = 0
@@ -2922,8 +3371,15 @@ window.onmessage = (event) => {
         lastHash = hashStr(JSON.stringify(parsedTokens))
       }
       if (syncRunning) updateSyncStatus('active', 'Synced ✓')
+      const project = (parsedTokens && parsedTokens.project) || 'system'
+      const summary = msg.summary ? msg.summary : 'variables updated'
+      notify(syncRunning || userRequestedSync
+        ? `Synced “${project}” — ${summary}`
+        : `Imported “${project}” — ${summary}`, 'success')
     }
+    userRequestedSync = false
     $('exportTokensBtn').disabled = false
+    setAgentExportEnabled(true)
     // What just landed in the file IS the connected system now — the sandbox
     // persisted the same payload to THIS file (figma.root.pluginData), so
     // Overview and storage agree without a re-read. Sync preferences already
@@ -2994,6 +3450,8 @@ window.onmessage = (event) => {
     pendingHash = null
     hideProgress()
     if (syncRunning) updateSyncStatus('error', 'Import failed — see log')
+    notify(msg.message ? `Import failed: ${msg.message}` : 'Import failed — see Activity', 'error')
+    userRequestedSync = false
     $('runTitle').textContent = 'Import failed'
     $('runSub').textContent = 'Check the log for the failing phase, then try again.'
     render()
@@ -3009,19 +3467,19 @@ window.onmessage = (event) => {
   if (msg.type === 'export-variables-data') {
     resetExportVarsBtn()
     if (!msg.data || !msg.total) {
-      addLog('This file has no local variables to export', 'error')
+      notify('This file has no local variables to export', 'error')
       setAside('log')
       return
     }
     const name = (slugify(msg.data.file) || 'figma') + '.variables.json'
     downloadJson(name, msg.data)
-    addLog(`✓ Exported ${msg.total} variables → ${name}`, 'success')
+    notify(`Exported ${msg.total} variables → ${name}`, 'success')
   }
 
   // Last imported payload from clientStorage, requested by the Export button
   if (msg.type === 'export-tokens-data') {
     if (msg.tokens) downloadTokens(msg.tokens)
-    else addLog('Nothing to export yet — import or sync tokens first', 'error')
+    else notify('Nothing to export yet — import or sync tokens first', 'error')
   }
 
   // Saved settings from figma.clientStorage — restore tool prefs; the sync
@@ -3034,7 +3492,10 @@ window.onmessage = (event) => {
     booted = true
     if (msg.assets) fileAssets = msg.assets
     guideDone = !!(s.guideDone || s.onboardingDismissed)
-    if (msg.hasTokens) $('exportTokensBtn').disabled = false
+    if (msg.hasTokens) {
+      $('exportTokensBtn').disabled = false
+      setAgentExportEnabled(true)
+    }
     // Both derived from THIS FILE's own record (msg.tokens), never from the
     // user-scoped settings blob — see saveSettings' comment for why that used
     // to leak another file's state in here.
@@ -3089,7 +3550,8 @@ window.onmessage = (event) => {
     pendingHash = null
     $('syncUrl').value = ''
     $('exportTokensBtn').disabled = true
-    addLog('File reset — no system or sync connected to this file', 'success')
+    setAgentExportEnabled(false)
+    notify('File reset — no system or sync connected to this file', 'success')
     goView('home')
     render()
   }
