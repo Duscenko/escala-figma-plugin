@@ -7,177 +7,269 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* Register chrome colors so a theme switch interpolates the tokens
-     themselves — unregistered custom properties snap, which is why light ↔
-     dark used to flash. Syntax is <color> so the engine interpolates in a
-     perceptually even space instead of through raw RGB. */
-  @property --bg           { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
-  @property --surface      { syntax: '<color>'; inherits: true; initial-value: #f6f6f7; }
-  @property --surface2     { syntax: '<color>'; inherits: true; initial-value: #e8e8ea; }
-  @property --border       { syntax: '<color>'; inherits: true; initial-value: #e5e5e5; }
-  @property --border2      { syntax: '<color>'; inherits: true; initial-value: #d4d4d4; }
-  @property --text         { syntax: '<color>'; inherits: true; initial-value: #18181b; }
-  @property --text-sub     { syntax: '<color>'; inherits: true; initial-value: #52525b; }
-  @property --text-dim     { syntax: '<color>'; inherits: true; initial-value: #737373; }
-  @property --text-on-tint { syntax: '<color>'; inherits: true; initial-value: #39393d; }
-  @property --success      { syntax: '<color>'; inherits: true; initial-value: #68ca9e; }
-  @property --error        { syntax: '<color>'; inherits: true; initial-value: #f97969; }
-  @property --success-tint { syntax: '<color>'; inherits: true; initial-value: #edfcf4; }
-  @property --accent        { syntax: '<color>'; inherits: true; initial-value: #7f56d9; }
-  @property --accent-strong { syntax: '<color>'; inherits: true; initial-value: #6941c6; }
-  @property --accent-soft   { syntax: '<color>'; inherits: true; initial-value: #f7f1ff; }
-  @property --accent-ring   { syntax: '<color>'; inherits: true; initial-value: #b594fe; }
-  @property --on-accent     { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+  /* ══════════════════════════════════════════════════════════════════════
+     ESCALA CHROME — mirrored from the configurator, not re-invented.
 
-  /* Full Escala semantic palette (light + dark), wired 1:1 to the plugin's
-     chrome — this REPLACES the earlier approach of reading Figma's own
-     --figma-color-* vars for background/border/text; those are now used
-     ONLY by the theme-detection script below (to know which of the two
-     blocks to apply), not by any rendered color. Every value here traces to
-     a named role in Escala's token set (color.<family>.<step>, and its
-     semantic.<light|dark>.<role> alias) — see the mapping table in each
-     declaration's comment.
+     Page / surface / elevated / ink / hairlines are copied VERBATIM from
+     escala-tokens/src/lib/chromeTheme.generated.css, which is itself
+     generated from the Categorical projection of the default system. So the
+     plugin's chrome and the web app's chrome are the same four surfaces and
+     the same two hairlines, by construction — if that file is regenerated,
+     these six values are the ones to re-copy.
 
-     Dark-mode overrides are gated on [data-theme="dark"], set by a tiny
-     script (see <head>, right after this block) that reads the ACTUAL
-     injected --figma-color-bg and picks a theme from its luminance —
-     prefers-color-scheme reflects the OS/browser instead, which can disagree
-     with Figma's own light/dark setting (e.g. Figma set to light on a
-     dark-OS machine) and made brand colors render in the wrong palette while
-     chrome sourced straight from Figma stayed correct. The media query below
-     is kept only as a same-tab fallback for the narrow window before that
-     script runs (or outside Figma entirely); the explicit attribute always
-     wins once set. */
+     Names match the app's too (`--app`/`--surface`/`--elevated`,
+     `--fg`/`--fg-muted`/`--fg-faint`, `--line`/`--line-strong`) so the two
+     codebases describe the same thing with the same word. They used to be
+     `--bg`/`--surface2`/`--border2`/`--text-sub`, which is how the values
+     silently drifted a generation behind.
+
+     THE ELEVATION LADDER — four rungs, always climbed in the same order:
+       --nav       shell frame: icon rail, header, step bar, footer, progress
+       --app       working canvas + the aside
+       --surface   a card on that canvas
+       --elevated  a tile nested inside a card, and every hover fill
+     The direction flips between themes (light runs lightest→darkest, dark
+     runs darkest→lightest) but "one rung up" always means "one step further
+     from the page", which is what keeps the two readings of the ladder the
+     same shape. Never skip a rung to get more separation — the tightness is
+     deliberate (dark measures ΔL 0.083 page→card, 0.030 card→tile).
+
+     THE ACCENT IS THE ONE THING THAT STAYS THE PLUGIN'S OWN — violet. It is
+     split the way the app splits it, because ink and fill are different
+     derivations of it:
+       --accent-ui     INK. Read against the page, so it must clear 4.5:1
+                       there. Light #7f56d9 = 4.88:1; dark walks up the ramp
+                       to #9e77ed = 5.76:1 (the anchor itself is only
+                       3.86:1 on the dark page — this is the bug that split
+                       the token). Links, active glyphs, focus rings, the
+                       boundary of a selected card.
+       --accent-solid  FILL. The brand hex itself, both themes, so a filled
+                       chrome control is the same violet the configurator's
+                       Primary button renders.
+       --accent-ink    Label ON that fill. White measures 4.96:1 on it.
+     A tinted "selected" surface is a 10% wash of the solid rather than a
+     hardcoded pale pair, so it tracks the accent and, at 10%, the ordinary
+     page inks still clear AA on it (--fg 10.58 light / 13.93 dark,
+     --fg-muted 4.53 / 11.00). That measurement is why the old
+     --text-on-tint escape hatch is gone: there is nothing left to escape.
+     ══════════════════════════════════════════════════════════════════════ */
+
+  /* Registered so a theme switch interpolates the tokens themselves —
+     unregistered custom properties snap, which is why light ↔ dark used to
+     flash. Only the ones that actually DIFFER between themes are here; the
+     derived washes follow whatever they are mixed from. */
+  @property --app          { syntax: '<color>'; inherits: true; initial-value: #fdfdff; }
+  @property --nav          { syntax: '<color>'; inherits: true; initial-value: #f5f5f5; }
+  @property --surface      { syntax: '<color>'; inherits: true; initial-value: #f1f1f2; }
+  @property --elevated     { syntax: '<color>'; inherits: true; initial-value: #e5e6e8; }
+  @property --line         { syntax: '<color>'; inherits: true; initial-value: #0000000d; }
+  @property --line-strong  { syntax: '<color>'; inherits: true; initial-value: #0000001a; }
+  @property --fg           { syntax: '<color>'; inherits: true; initial-value: #33353a; }
+  @property --fg-muted     { syntax: '<color>'; inherits: true; initial-value: #686c76; }
+  @property --fg-faint     { syntax: '<color>'; inherits: true; initial-value: #737373; }
+  @property --accent-ui    { syntax: '<color>'; inherits: true; initial-value: #7f56d9; }
+  @property --accent-solid { syntax: '<color>'; inherits: true; initial-value: #7f56d9; }
+  @property --accent-hover { syntax: '<color>'; inherits: true; initial-value: #6941c6; }
+  @property --accent-ink   { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+  @property --status-success { syntax: '<color>'; inherits: true; initial-value: #059669; }
+  @property --status-danger  { syntax: '<color>'; inherits: true; initial-value: #dc2626; }
+  @property --status-warning { syntax: '<color>'; inherits: true; initial-value: #b45309; }
+  @property --status-success-on-inverse { syntax: '<color>'; inherits: true; initial-value: #34d399; }
+  @property --status-danger-on-inverse  { syntax: '<color>'; inherits: true; initial-value: #f87171; }
+
   :root {
-    --bg:           #ffffff;   /* background-primary */
-    --surface:      #f6f6f7;   /* app --surface */
-    --surface2:     #e8e8ea;   /* app --elevated */
-    --border:       #e5e5e5;   /* app --line */
-    --border2:      #d4d4d4;   /* app --line-strong */
-    /* --text/--text-sub/--text-dim used to be a hand-tuned muted-gray
-       approximation (neutral/11 · /9 · /8) that this file's own header
-       claimed was "wired 1:1" but wasn't — measured, it cleared only
-       4.19 / 4.89 / 3.21:1 against this page, i.e. the plugin's default body
-       text sat under WCAG AA everywhere and --text-dim failed badly. Fixed by
-       actually mirroring the app's real chrome tokens — `--fg`/`--fg-muted`/
-       `--fg-faint` in scalable-designs/src/index.css — which are genuinely
-       contrast-tuned: 17.72 / 7.73 / 4.74:1 here. */
-    --text:         #18181b;   /* content-primary — app --fg */
-    --text-sub:     #52525b;   /* content-secondary — app --fg-muted */
-    --text-dim:     #737373;   /* content-tertiary — app --fg-faint */
-    --text-on-tint: #39393d;   /* neutral/12 — for text on a --accent-soft fill,
-                                   where content-primary's own contrast is too
-                                   thin (see dark-mode comment below) */
+    /* ── Surfaces — chromeTheme.generated.css, light ── */
+    --app:          #fdfdff;   /* surface.page    ← neutral.1 */
+    --surface:      #f1f1f2;   /* surface.layer-1 ← neutral.2 */
+    --elevated:     #e5e6e8;   /* surface.layer-2 ← neutral.3 */
+    --nav:          #f5f5f5;   /* shell frame — hand-tuned in the app too */
 
-    --success:      #68ca9e;   /* content-success — success/8 */
-    --error:        #f97969;   /* content-error — error/8 */
-    --success-tint: #edfcf4;   /* background-success-primary — success/2 */
+    /* ── Ink ── 12.08 / 5.17 / 4.67 : 1 on --app ── */
+    --fg:           #33353a;   /* content.primary   ← neutral.12 */
+    --fg-muted:     #686c76;   /* content.secondary ← neutral.11 */
+    --fg-faint:     #737373;   /* no third readable ink in the system;
+                                  hand-tuned in the app, copied here */
 
-    --accent:        #7f56d9;   /* app --accent-solid fallback */
-    --accent-strong: #6941c6;   /* hover step for the fallback accent */
-    --accent-soft:   #f7f1ff;   /* background-brand-primary — accent/2 */
-    --accent-ring:   #b594fe;   /* border-brand — accent/7 */
-    --on-accent:     #ffffff;
+    /* ── Hairlines — TWO colour roles, ONE width ──
+       --line        structure: column seams, header bands, row lattice.
+       --line-strong control outline, only where the fill is NOT the
+                     separator (an input sitting on a card).
+       Both are ALPHA, not solid grey, which is the single biggest reason
+       the app's chrome reads quieter than this plugin's did: a solid
+       #232326 edge on a #151515 card is heavier than the fill difference it
+       sits inside. Measured on the app's own dark palette, moving to alpha
+       took the control outline from ΔL 0.064 to 0.030 against its own
+       surface while dividers kept ~91% of their weight against the page.
+       Neither ever satisfied WCAG 1.4.11 — the accessible boundary is the
+       focus ring, which does. Don't "restore" a heavier border on an
+       accessibility argument. */
+    --line:         #0000000d;  /* border.subtle  ← black-a.1 */
+    --line-strong:  #0000001a;  /* border.default ← black-a.2 */
 
-    /* Spacing scale — 4px base. Named by beat rather than by pixel so the
-       rhythm stays deliberate: --sp-2 binds rows inside a card, --sp-3 is the
-       default card-to-card beat, --sp-4 marks a change of kind (read-only
-       summary → live control). Spacing used to be typed in by hand at every
-       call site, which is how a panel ended up with no gap at all. */
-    --sp-1: 4px;
-    --sp-2: 8px;
-    --sp-3: 12px;
-    --sp-4: 16px;
+    /* ── Accent — violet, the one thing kept from the plugin's own look ── */
+    --accent-ui:     #7f56d9;   /* ink   — 4.88:1 on --app */
+    --accent-solid:  #7f56d9;   /* fill  — the brand hex */
+    --accent-hover:  #6941c6;   /* light UI darkens on hover */
+    --accent-ink:    #ffffff;   /* 4.96:1 on the fill */
 
-    --radius: 8px;
-    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    --ease: cubic-bezier(0.22, 1, 0.36, 1);
-    /* Theme crossfade — a state change, not a micro-interaction. Quint-out
-       (same curve as --ease) so the last third settles instead of linear-fading
-       through the low-contrast midpoint. */
-    --dur-theme: 280ms;
-
-    --rail-w: 52px;
-    --aside-w: 336px;
+    /* ── Status — the app's two-role model: an INK for text and glyphs on
+       the page, a -solid FILL for chips and bars. The plugin used to carry
+       one value per status and use it for both, which is how success ink
+       shipped at 1.99:1 and error ink at 2.64:1 on a light page. Now
+       3.71 / 4.75 / 4.94 (success is the app's own known residual, not a
+       new one). --*-on-inverse is for the toast only: that chip is painted
+       in the OPPOSITE appearance, so it needs the other theme's ink —
+       measured 4.44 (danger) / 6.38 (success) against it. */
+    --status-success:       #059669;
+    --status-success-solid: #10b981;
+    --status-danger:        #dc2626;
+    --status-danger-solid:  #ef4444;
+    --status-warning:       #b45309;
+    --status-warning-solid: #f59e0b;
+    --status-success-on-inverse: #34d399;
+    --status-danger-on-inverse:  #f87171;
+    --status-success-ink:   #04231a;   /* 7.4:1 on the emerald fill; white is 2.54 */
 
     color-scheme: light;
   }
 
-  /* Dark theme — Escala's *-dark scale, built for dark surfaces rather than
-     derived from the light scale, so brand fills stay saturated instead of
-     washing out. Brand solid/hover inverts on purpose (brighten, don't
-     darken, on hover) — the convention dark UIs use since darkening reads as
-     "disabled" on an already-dark surface; light mode keeps the opposite
-     (accent/8 resting → accent/9, darker, on hover), the normal light-UI cue.
+  /* Dark — same six generated values, dark column. The accent INK walks up
+     its ramp (the anchor is 3.86:1 on this page, under AA); the accent FILL
+     does not move, so a violet button is the same violet in both themes.
+     Hover brightens rather than darkens: on an already-dark surface,
+     darkening reads as "disabled".
 
-     --text-on-tint exists because the OLD hand-tuned --text/--text-sub (a
-     muted-gray approximation, since replaced — see the :root block's comment)
-     dropped under WCAG AA on --accent-soft specifically (a much darker,
-     purple-tinted fill): ~4:1 for the bold heading, ~3:1 for the
-     regular-weight description, both below the 4.5:1 normal-text minimum.
-     Now that --text/--text-sub mirror the app's real --fg/--fg-muted (17.69 /
-     7.20:1 on this same fill), the escape is no longer strictly needed for
-     contrast — kept anyway since it's still a deliberately-tuned value and
-     retiring `.scope.on`'s override wasn't part of that fix; see `.scope.on`
-     below.
-
-     Defined twice on purpose: the media query is a same-tab fallback for the
-     sliver of time before the theme-detection script (see <head>) runs, or
-     for previewing this file outside Figma; :root[data-theme] is the real
-     source of truth and always wins, in both directions — including forcing
-     LIGHT back on when the OS prefers dark but Figma's actual theme isn't. */
+     Declared twice on purpose — the media query is a same-tab fallback for
+     the sliver before the theme-detection script runs (or for previewing
+     this file outside Figma); [data-theme] is the source of truth and wins
+     in both directions, including forcing LIGHT back on when the OS prefers
+     dark but Figma's own theme doesn't. */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg:           #0a0a0a;   /* app --app */
-      --surface:      #1c1c1f;   /* app --surface */
-      --surface2:     #2a2a2f;   /* app --elevated */
-      --border:       #232326;   /* app --line */
-      --border2:      #3a3a3f;   /* app --line-strong */
-      --text:         #fafafa;   /* content-primary — app --fg (dark) */
-      --text-sub:     #a1a1aa;   /* content-secondary — app --fg-muted (dark) */
-      --text-dim:     #7b7b83;   /* app --fg-faint */
-      --text-on-tint: #c9c9cc;   /* neutral-dark/12 — see comment above */
-
-      --success:      #228c64;   /* content-success — success-dark/8 */
-      --error:        #b53b30;   /* content-error — error-dark/8 */
-      --success-tint: #0d1913;   /* background-success-primary — success-dark/2 */
-
-      --accent:        #7f56d9;   /* app --accent-solid fallback */
-      --accent-strong: #9e77ed;   /* brighter hover on dark chrome */
-      --accent-soft:   #161122;   /* background-brand-primary — accent-dark/2 */
-      --accent-ring:   #532d8e;   /* border-brand — accent-dark/7 */
+      --app:          #0e0f13;
+      --surface:      #151515;
+      --elevated:     #1b1b1c;
+      --nav:          #151516;
+      --fg:           #e3e4e7;   /* 15.07:1 */
+      --fg-muted:     #c9ccd1;   /* 11.89:1 */
+      --fg-faint:     #7b7b83;   /*  4.56:1 */
+      --line:         #ffffff0d;
+      --line-strong:  #ffffff1a;
+      --accent-ui:     #9e77ed;  /* 5.76:1 — the anchor is only 3.86 here */
+      --accent-solid:  #7f56d9;
+      --accent-hover:  #9e77ed;
+      --accent-ink:    #ffffff;
+      --status-success:       #34d399;
+      --status-success-solid: #10b981;
+      --status-danger:        #f87171;
+      --status-danger-solid:  #ef4444;
+      --status-warning:       #fbbf24;
+      --status-warning-solid: #f59e0b;
+      --status-success-on-inverse: #047857;
+      --status-danger-on-inverse:  #b91c1c;
       color-scheme: dark;
     }
   }
   :root[data-theme="dark"] {
+    --app:          #0e0f13;
+    --surface:      #151515;
+    --elevated:     #1b1b1c;
+    --nav:          #151516;
+    --fg:           #e3e4e7;
+    --fg-muted:     #c9ccd1;
+    --fg-faint:     #7b7b83;
+    --line:         #ffffff0d;
+    --line-strong:  #ffffff1a;
+    --accent-ui:     #9e77ed;
+    --accent-solid:  #7f56d9;
+    --accent-hover:  #9e77ed;
+    --accent-ink:    #ffffff;
+    --status-success:       #34d399;
+    --status-success-solid: #10b981;
+    --status-danger:        #f87171;
+    --status-danger-solid:  #ef4444;
+    --status-warning:       #fbbf24;
+    --status-warning-solid: #f59e0b;
+    --status-success-on-inverse: #047857;
+    --status-danger-on-inverse:  #b91c1c;
     color-scheme: dark;
-    --bg:           #0a0a0a;
-    --surface:      #1c1c1f;
-    --surface2:     #2a2a2f;
-    --border:       #232326;
-    --border2:      #3a3a3f;
-    --text:         #fafafa;
-    --text-sub:     #a1a1aa;
-    --text-dim:     #7b7b83;
-    --text-on-tint: #c9c9cc;
-
-    --success:      #228c64;
-    --error:        #b53b30;
-    --success-tint: #0d1913;
-
-    --accent:        #7f56d9;
-    --accent-strong: #9e77ed;
-    --accent-soft:   #161122;
-      --accent-ring:   #532d8e;
   }
   :root[data-theme="light"] {
     color-scheme: light;
   }
 
+  :root {
+    /* ── Derived washes ──
+       A tinted state is a wash of the token it means, not a second hardcoded
+       colour that has to be maintained per theme. 10% is the app's own peak
+       chrome tint and the largest value at which --fg-muted still clears AA
+       on it (4.53:1 light; 4.42 at 12%, which does not). */
+    --accent-wash:  color-mix(in srgb, var(--accent-solid) 10%, transparent);
+    --success-wash: color-mix(in srgb, var(--status-success-solid) 12%, transparent);
+
+    /* ── Hairline width ──
+       0.8px like the app, floored to 1px below 2dppx — a sub-pixel line
+       vanishes on a 1x display. Every border and every painted rule reads
+       this, so a seam and a rule can meet without one looking heavier. */
+    --line-width: 0.8px;
+
+    /* ── Radius ──
+       The app's ladder, resolved to px. Its Tailwind radii are rem-based
+       against an 18px root, so `rounded-sm/md/lg/xl` land on these exact
+       half-pixel values — that is where the .5s come from, not a whim.
+       --radius-md is the app's Button (`rounded-md`); --radius-lg is its
+       workhorse (208 uses) and the card radius here. */
+    --radius-sm:   4.5px;
+    --radius-md:   6.75px;
+    --radius-lg:   9px;
+    --radius-xl:   13.5px;
+    --radius-full: 999px;
+
+    /* ── Type ──
+       The app's named roles, same px. Roles, not a t-shirt ramp: --text-ui
+       is a control label, --text-strong is a section title in-chrome.
+       Line-height is deliberately NOT paired — it is inherited, as in the
+       app. */
+    --text-micro:   9px;
+    --text-mini:   10px;
+    --text-caption:11px;
+    --text-body:   12px;
+    --text-ui:     13px;
+    --text-strong: 14px;
+    --text-title:  17px;
+    --text-heading:20px;
+
+    /* ── Spacing — 4px base, named by beat rather than by pixel so the
+       rhythm stays deliberate: --sp-2 binds rows inside a card, --sp-3 is
+       the card-to-card beat, --sp-4 marks a change of kind. ── */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+
+    /* ── Shadow — the app's overlay elevation. Chrome here is separated by
+       surface, not by shadow; the toast is the only thing that floats. ── */
+    --shadow-overlay: 0 16px 48px -12px rgba(0, 0, 0, 0.28);
+
+    --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);   /* ease-out-quint, as the app */
+    /* Theme crossfade — a state change, not a micro-interaction. Quint-out so
+       the last third settles instead of linear-fading through the
+       low-contrast midpoint. */
+    --dur-theme: 280ms;
+
+    --rail-w: 52px;
+    --aside-w: 336px;
+  }
+
+  @media (max-resolution: 1.99dppx) {
+    :root { --line-width: 1px; }
+  }
+
   html {
-    background: var(--bg);
-    color: var(--text);
+    background: var(--app);
+    color: var(--fg);
     height: 100%;
   }
 
@@ -187,23 +279,22 @@
      first paint never animates. */
   html.theme-switching {
     transition:
-      --bg var(--dur-theme) var(--ease),
+      --app var(--dur-theme) var(--ease),
       --surface var(--dur-theme) var(--ease),
-      --surface2 var(--dur-theme) var(--ease),
-      --border var(--dur-theme) var(--ease),
-      --border2 var(--dur-theme) var(--ease),
-      --text var(--dur-theme) var(--ease),
-      --text-sub var(--dur-theme) var(--ease),
-      --text-dim var(--dur-theme) var(--ease),
-      --text-on-tint var(--dur-theme) var(--ease),
-      --success var(--dur-theme) var(--ease),
-      --error var(--dur-theme) var(--ease),
-      --success-tint var(--dur-theme) var(--ease),
-      --accent var(--dur-theme) var(--ease),
-      --accent-strong var(--dur-theme) var(--ease),
-      --accent-soft var(--dur-theme) var(--ease),
-      --accent-ring var(--dur-theme) var(--ease),
-      --on-accent var(--dur-theme) var(--ease),
+      --elevated var(--dur-theme) var(--ease),
+      --line var(--dur-theme) var(--ease),
+      --line-strong var(--dur-theme) var(--ease),
+      --nav var(--dur-theme) var(--ease),
+      --fg var(--dur-theme) var(--ease),
+      --fg-muted var(--dur-theme) var(--ease),
+      --fg-faint var(--dur-theme) var(--ease),
+      --accent-ui var(--dur-theme) var(--ease),
+      --accent-hover var(--dur-theme) var(--ease),
+      --status-success var(--dur-theme) var(--ease),
+      --status-danger var(--dur-theme) var(--ease),
+      --status-warning var(--dur-theme) var(--ease),
+      --status-success-on-inverse var(--dur-theme) var(--ease),
+      --status-danger-on-inverse var(--dur-theme) var(--ease),
       background-color var(--dur-theme) var(--ease),
       color var(--dur-theme) var(--ease),
       color-scheme 0s;
@@ -224,9 +315,9 @@
 
   body {
     font-family: var(--font);
-    background: var(--bg);
-    color: var(--text);
-    font-size: 13px;
+    background: var(--app);
+    color: var(--fg);
+    font-size: var(--text-ui);
     line-height: 1.5;
     height: 100vh;
     overflow: hidden;
@@ -234,20 +325,33 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  button { font-family: var(--font); }
+  /* A <button> takes the UA's `buttontext`, not the page ink — so every card
+     that IS a button (.scope, .export-opt, .component-mode-option) was
+     rendering its title in a system colour that only coincidentally matched
+     --fg, and stopped matching whenever `color-scheme` and the theme
+     disagreed. Every button that wants a specific ink declares one; the rest
+     should read the page's. */
+  button { font-family: var(--font); color: inherit; }
 
+  /* The ring is the accessible boundary in this palette — the hairlines
+     deliberately are not (they never cleared WCAG 1.4.11, in either the app
+     or here). --accent-ui, so it clears 4.5:1 on the page in both themes;
+     the old --accent-ring measured 2.39:1 in light, i.e. the one thing that
+     HAD to be visible was the faintest thing on screen.
+     No border-radius here: the outline already follows the element's own
+     corner, and setting one restyled every focused control into a 4.5px
+     rectangle — a pill lost its shape the moment it was tabbed to. */
   :focus-visible {
-    outline: 2px solid var(--accent-ring);
+    outline: 2px solid var(--accent-ui);
     outline-offset: 1px;
-    border-radius: 4px;
   }
 
   /* ── Icon rail ── */
   .rail {
     width: var(--rail-w);
     flex-shrink: 0;
-    border-right: 1px solid var(--border);
-    background: var(--surface);
+    border-right: var(--line-width) solid var(--line);
+    background: var(--nav);
     display: flex; flex-direction: column; align-items: center;
     padding: 10px 0 12px;
     gap: 6px;
@@ -256,27 +360,27 @@
     height: 32px; display: flex; align-items: center; justify-content: center;
     margin-bottom: 4px;
   }
-  .rail-logo svg { width: 22px; height: 22px; border-radius: 6px; display: block; }
+  .rail-logo svg { width: 22px; height: 22px; border-radius: var(--radius-md); display: block; }
   .rail-btn {
-    width: 34px; height: 34px; border-radius: 8px;
-    background: none; border: 1px solid transparent; cursor: pointer;
-    color: var(--text-dim); font-size: 14px; line-height: 1;
+    width: 34px; height: 34px; border-radius: var(--radius-lg);
+    background: none; border: var(--line-width) solid transparent; cursor: pointer;
+    color: var(--fg-faint); font-size: var(--text-strong); line-height: 1;
     display: flex; align-items: center; justify-content: center;
     position: relative;
     transition: color 140ms var(--ease), background 140ms var(--ease), border-color 140ms var(--ease);
   }
-  .rail-btn:hover { color: var(--text); background: var(--surface2); }
+  .rail-btn:hover { color: var(--fg); background: var(--elevated); }
   .rail-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
   .rail-btn.active {
-    color: var(--accent);
-    background: var(--accent-soft);
-    border-color: var(--accent-ring);
+    color: var(--accent-ui);
+    background: var(--accent-wash);
+    border-color: var(--accent-ui);
   }
   /* Unread activity marker on the Log rail button */
   .rail-btn .rail-dot {
     position: absolute; top: 6px; right: 6px;
     width: 6px; height: 6px; border-radius: 50%;
-    background: var(--accent);
+    background: var(--accent-ui);
   }
   .rail-spacer { flex: 1; }
 
@@ -285,9 +389,9 @@
     content: attr(data-label);
     position: absolute; left: calc(100% + 8px); top: 50%;
     transform: translateY(-50%);
-    background: var(--text); color: var(--bg);
-    font-size: 10px; font-weight: 500; white-space: nowrap;
-    padding: 4px 8px; border-radius: 4px;
+    background: var(--fg); color: var(--app);
+    font-size: var(--text-mini); font-weight: 500; white-space: nowrap;
+    padding: 4px 8px; border-radius: var(--radius-sm);
     opacity: 0; pointer-events: none;
     transition: opacity 120ms var(--ease);
     z-index: 20;
@@ -299,28 +403,28 @@
 
   .header {
     display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding: 12px 16px;
-    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    gap: 12px; padding: 12px 16px; background: var(--nav);
+    border-bottom: var(--line-width) solid var(--line); flex-shrink: 0;
   }
   .header-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .header-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
-  .header-sub { font-size: 11px; color: var(--text-sub); }
+  .header-title { font-size: var(--text-strong); font-weight: 600; letter-spacing: -0.01em; }
+  .header-sub { font-size: var(--text-caption); color: var(--fg-muted); }
   .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   .aside-head-actions { display: flex; align-items: center; gap: 8px; }
 
   .close-btn {
     background: none; border: none; cursor: pointer;
-    color: var(--text-sub); font-size: 15px; line-height: 1;
-    padding: 4px 6px; border-radius: 5px;
+    color: var(--fg-muted); font-size: var(--text-strong); line-height: 1;
+    padding: 4px 6px; border-radius: var(--radius-sm);
     transition: color 140ms var(--ease), background 140ms var(--ease);
   }
-  .close-btn:hover { color: var(--text); background: var(--surface2); }
+  .close-btn:hover { color: var(--fg); background: var(--elevated); }
 
   .link-btn {
     background: none; border: none; cursor: pointer; padding: 2px 0;
-    color: var(--accent); font-size: 11px; font-weight: 500;
+    color: var(--accent-ui); font-size: var(--text-caption); font-weight: 500;
   }
-  .link-btn:hover { color: var(--accent-strong); text-decoration: underline; }
+  .link-btn:hover { color: var(--accent-hover); text-decoration: underline; }
 
   /* ── Two-column body ── */
   .body { flex: 1; min-height: 0; display: flex; }
@@ -331,23 +435,34 @@
   }
   .aside {
     width: var(--aside-w); flex-shrink: 0;
-    border-left: 1px solid var(--border);
-    background: var(--surface);
+    border-left: var(--line-width) solid var(--line);
+    background: var(--app);
     display: flex; flex-direction: column;
     min-height: 0;
   }
   .aside-head {
     display: flex; align-items: center; justify-content: space-between;
     gap: 8px; padding: 12px 14px 10px;
-    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    border-bottom: var(--line-width) solid var(--line); flex-shrink: 0;
   }
   .aside-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px 16px; display: flex; flex-direction: column; gap: 12px; }
 
+  /* The app's scrollbar: 6px, invisible at rest, thumb fading in on hover.
+     A permanently visible rule reads as one more border in a screen already
+     dense with them. Desktop-only surface, so :hover is the whole trigger. */
+  .main, .aside-body, .log-wrap, .json-view { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  .main:hover, .aside-body:hover, .log-wrap:hover, .json-view:hover { scrollbar-color: var(--line-strong) transparent; }
   .main::-webkit-scrollbar, .aside-body::-webkit-scrollbar,
-  .log-wrap::-webkit-scrollbar, .json-view::-webkit-scrollbar { width: 4px; height: 4px; }
-  .main::-webkit-scrollbar-track, .aside-body::-webkit-scrollbar-track { background: transparent; }
+  .log-wrap::-webkit-scrollbar, .json-view::-webkit-scrollbar { width: 6px; height: 6px; }
+  .main::-webkit-scrollbar-track, .aside-body::-webkit-scrollbar-track,
+  .log-wrap::-webkit-scrollbar-track, .json-view::-webkit-scrollbar-track { background: transparent; }
   .main::-webkit-scrollbar-thumb, .aside-body::-webkit-scrollbar-thumb,
-  .log-wrap::-webkit-scrollbar-thumb, .json-view::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+  .log-wrap::-webkit-scrollbar-thumb, .json-view::-webkit-scrollbar-thumb {
+    background: transparent; border-radius: var(--radius-full);
+    transition: background 150ms var(--ease);
+  }
+  .main:hover::-webkit-scrollbar-thumb, .aside-body:hover::-webkit-scrollbar-thumb,
+  .log-wrap:hover::-webkit-scrollbar-thumb, .json-view:hover::-webkit-scrollbar-thumb { background: var(--line-strong); }
 
   /* ── Panels ──
      A panel stacks cards. It had no rule at all, so its children were plain
@@ -359,75 +474,74 @@
   /* ── Cards ── */
   .card {
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border: var(--line-width) solid var(--line);
+    border-radius: var(--radius-lg);
     padding: 14px;
     display: flex; flex-direction: column; gap: 10px;
   }
-  .aside .card { background: var(--bg); }
   .card-title {
-    font-size: 10px; font-weight: 600;
-    color: var(--text-sub); text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: var(--text-mini); font-weight: 600;
+    color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.08em;
   }
   .card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
   /* ── Steps ── */
   .steps {
     display: flex; align-items: center; gap: 0;
-    padding: 10px 16px; border-bottom: 1px solid var(--border);
-    flex-shrink: 0; background: var(--bg);
+    padding: 10px 16px; border-bottom: var(--line-width) solid var(--line);
+    flex-shrink: 0; background: var(--nav);
   }
   .step {
     display: flex; align-items: center; gap: 8px;
     background: none; border: none; cursor: pointer;
-    padding: 4px 8px; border-radius: 6px;
-    color: var(--text-dim); font-size: 11px; font-weight: 500;
+    padding: 4px 8px; border-radius: var(--radius-md);
+    color: var(--fg-faint); font-size: var(--text-caption); font-weight: 500;
     font-family: var(--font);
     transition: color 140ms var(--ease), background 140ms var(--ease);
   }
   .step:disabled { cursor: not-allowed; }
-  .step:not(:disabled):hover { color: var(--text); background: var(--surface2); }
+  .step:not(:disabled):hover { color: var(--fg); background: var(--elevated); }
   .step-num {
     width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0;
-    border: 1px solid var(--border2);
+    border: var(--line-width) solid var(--line-strong);
     display: flex; align-items: center; justify-content: center;
-    font-size: 9px; font-weight: 600;
+    font-size: var(--text-micro); font-weight: 600;
     transition: all 140ms var(--ease);
   }
-  .step.active { color: var(--text); }
-  .step.active .step-num { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .step.done { color: var(--text-sub); }
-  .step.done .step-num { background: var(--success); border-color: var(--success); color: #fff; }
-  .step-sep { flex: 1; height: 1px; background: var(--border); min-width: 8px; }
+  .step.active { color: var(--fg); }
+  .step.active .step-num { background: var(--accent-solid); border-color: var(--accent-solid); color: var(--accent-ink); }
+  .step.done { color: var(--fg-muted); }
+  .step.done .step-num { background: var(--status-success-solid); border-color: var(--status-success-solid); color: var(--status-success-ink); }
+  .step-sep { flex: 1; height: var(--line-width); background: var(--line); min-width: 8px; }
 
   /* ── Step intro ── */
   /* No margin-bottom: the panel's own gap owns the space after the intro now,
      otherwise the two stack and the wizard's heading drifts twice as far from
      its first card as it used to. */
   .step-intro { display: flex; flex-direction: column; gap: var(--sp-1); }
-  .step-intro h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
-  .step-intro p { font-size: 12px; color: var(--text-sub); line-height: 1.6; }
+  .step-intro h2 { font-size: var(--text-strong); font-weight: 600; letter-spacing: -0.01em; }
+  .step-intro p { font-size: var(--text-body); color: var(--fg-muted); line-height: 1.6; }
 
   /* ── Textarea / inputs ── */
   textarea {
-    width: 100%; background: var(--bg); border: 1px solid var(--border2);
-    border-radius: 6px; color: var(--text); font-family: var(--mono);
-    font-size: 11px; line-height: 1.6; padding: 10px; resize: vertical;
+    width: 100%; background: var(--app); border: var(--line-width) solid var(--line-strong);
+    border-radius: var(--radius-md); color: var(--fg); font-family: var(--mono);
+    font-size: var(--text-caption); line-height: 1.6; padding: 10px; resize: vertical;
     outline: none; transition: border-color 140ms var(--ease);
     min-height: 72px;
   }
-  textarea:focus { border-color: var(--accent); }
-  textarea::placeholder { color: var(--text-dim); }
+  textarea:focus { border-color: var(--accent-ui); }
+  textarea::placeholder { color: var(--fg-faint); }
 
   .input-row { display: flex; gap: 8px; align-items: center; }
   input[type="text"] {
-    flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border2);
-    border-radius: 6px; color: var(--text); font-family: var(--mono);
-    font-size: 11px; padding: 8px 10px;
+    flex: 1; min-width: 0; background: var(--app); border: var(--line-width) solid var(--line-strong);
+    border-radius: var(--radius-md); color: var(--fg); font-family: var(--mono);
+    font-size: var(--text-caption); padding: 8px 10px;
     outline: none; transition: border-color 140ms var(--ease);
   }
-  input[type="text"]:focus { border-color: var(--accent); }
-  input[type="text"]::placeholder { color: var(--text-dim); }
+  input[type="text"]:focus { border-color: var(--accent-ui); }
+  input[type="text"]::placeholder { color: var(--fg-faint); }
 
   /* Custom chevron via a masked pseudo-element, not a background-image SVG:
      currentColor/var() don't reliably reach into a data-URI's own fill, but a
@@ -437,29 +551,29 @@
   .select-wrap::after {
     content: ''; position: absolute; top: 50%; right: 9px;
     width: 8px; height: 8px; transform: translateY(-50%);
-    background: var(--text-dim); pointer-events: none;
+    background: var(--fg-faint); pointer-events: none;
     transition: background-color 140ms var(--ease);
     mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / contain;
     -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / contain;
   }
-  .select-wrap:hover::after { background: var(--text-sub); }
-  .select-wrap:focus-within::after { background: var(--accent); }
+  .select-wrap:hover::after { background: var(--fg-muted); }
+  .select-wrap:focus-within::after { background: var(--accent-ui); }
 
   select {
     appearance: none; -webkit-appearance: none; -moz-appearance: none;
-    width: 100%; background: var(--bg); border: 1px solid var(--border2);
-    border-radius: 6px; color: var(--text); font-size: 11px;
+    width: 100%; background: var(--app); border: var(--line-width) solid var(--line-strong);
+    border-radius: var(--radius-md); color: var(--fg); font-size: var(--text-caption);
     font-family: var(--font); cursor: pointer;
     padding: 6px 26px 6px 10px; outline: none;
     transition: border-color 140ms var(--ease);
   }
-  select:hover { border-color: var(--text-dim); }
-  select:focus { border-color: var(--accent); }
+  select:hover { border-color: var(--fg-faint); }
+  select:focus { border-color: var(--accent-ui); }
 
   /* ── Buttons ── */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    font-size: 12px; font-weight: 500; border: none; border-radius: 6px;
+    font-size: var(--text-body); font-weight: 500; border: none; border-radius: var(--radius-md);
     cursor: pointer; padding: 8px 14px; white-space: nowrap;
     transition: background 140ms var(--ease), color 140ms var(--ease),
                 border-color 140ms var(--ease), transform 80ms var(--ease);
@@ -467,73 +581,76 @@
   .btn:active:not(:disabled) { transform: translateY(0.5px); }
   .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  .btn-primary { background: var(--accent); color: var(--on-accent); }
-  .btn-primary:hover:not(:disabled) { background: var(--accent-strong); }
+  .btn-primary { background: var(--accent-solid); color: var(--accent-ink); }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
 
+  /* `--elevated` fill + `--line` edge is the app's first control pattern:
+     the fill is what separates the button, so the outline can recede. With
+     a transparent fill the alpha hairline was the ONLY thing drawing it,
+     and at 5–10% that is not a button. */
   .btn-secondary {
-    background: transparent; color: var(--text-sub);
-    border: 1px solid var(--border2);
+    background: var(--elevated); color: var(--fg-muted);
+    border: var(--line-width) solid var(--line);
   }
-  .btn-secondary:hover:not(:disabled) { color: var(--text); border-color: var(--text-dim); }
+  .btn-secondary:hover:not(:disabled) { color: var(--fg); border-color: var(--line-strong); }
 
-  .btn-sm { padding: 6px 10px; font-size: 11px; }
-  .btn-success { background: var(--success) !important; color: #fff !important; }
+  .btn-sm { padding: 6px 10px; font-size: var(--text-caption); }
+  .btn-success { background: var(--status-success-solid) !important; color: var(--status-success-ink) !important; }
 
   /* ── Scope cards (what to import) ── */
   .scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .scope {
-    text-align: left; background: var(--bg);
-    border: 1px solid var(--border2); border-radius: var(--radius);
+    text-align: left; background: var(--elevated);
+    border: var(--line-width) solid var(--line-strong); border-radius: var(--radius-lg);
     padding: 10px 12px 12px; cursor: pointer;
     display: flex; flex-direction: column; gap: 4px;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
     position: relative;
   }
-  .scope:hover { border-color: var(--text-dim); }
-  .scope.on { border-color: var(--accent); background: var(--accent-soft); }
+  .scope:hover { border-color: var(--fg-faint); }
+  .scope.on { border-color: var(--accent-ui); background: var(--accent-wash); }
   .scope-head { display: flex; align-items: center; gap: 8px; }
   .scope-check {
-    width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
-    border: 1px solid var(--border2); background: var(--bg);
+    width: 14px; height: 14px; border-radius: var(--radius-sm); flex-shrink: 0;
+    border: var(--line-width) solid var(--line-strong); background: var(--app);
     display: flex; align-items: center; justify-content: center;
-    font-size: 9px; color: transparent; line-height: 1;
+    font-size: var(--text-micro); color: transparent; line-height: 1;
     transition: all 140ms var(--ease);
   }
-  .scope.on .scope-check { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .scope-name { font-size: 12px; font-weight: 600; }
-  .scope small { font-size: 11px; color: var(--text-sub); line-height: 1.45; }
-  /* --text/--text-sub are tuned for the page background, not the tinted
-     --accent-soft fill this card switches to when selected — see the
-     dark-mode comment near :root[data-theme="dark"] for the contrast math. */
-  .scope.on .scope-name,
-  .scope.on small { color: var(--text-on-tint); }
+  .scope.on .scope-check { background: var(--accent-solid); border-color: var(--accent-solid); color: var(--accent-ink); }
+  .scope-name { font-size: var(--text-body); font-weight: 600; }
+  .scope small { font-size: var(--text-caption); color: var(--fg-muted); line-height: 1.45; }
+  /* No ink override for the selected state: --accent-wash is 10%, where
+     --fg still measures 10.58:1 (light) / 13.93:1 (dark) and --fg-muted
+     4.53 / 11.00. The old --text-on-tint token existed to survive a much
+     heavier pale fill; there is nothing left to escape. */
   .component-mode {
     margin-top: var(--sp-3); padding-top: var(--sp-3);
-    border-top: 1px solid var(--border);
+    border-top: var(--line-width) solid var(--line);
     display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2);
   }
   .component-mode-option {
     appearance: none; text-align: left; cursor: pointer;
-    padding: 9px 10px; border-radius: 6px;
-    border: 1px solid var(--border2); background: var(--bg); color: var(--text-sub);
+    padding: 9px 10px; border-radius: var(--radius-md);
+    border: var(--line-width) solid var(--line-strong); background: var(--elevated); color: var(--fg-muted);
     display: flex; flex-direction: column; gap: 2px;
     transition: border-color 140ms var(--ease), background 140ms var(--ease), color 140ms var(--ease);
   }
-  .component-mode-option:hover { border-color: var(--text-dim); color: var(--text); }
-  .component-mode-option.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text-on-tint); }
-  .component-mode-option b { font-size: 11px; font-weight: 600; }
-  .component-mode-option small { font-size: 10px; line-height: 1.4; color: inherit; opacity: 0.82; }
+  .component-mode-option:hover { border-color: var(--fg-faint); color: var(--fg); }
+  .component-mode-option.on { border-color: var(--accent-ui); background: var(--accent-wash); color: var(--fg); }
+  .component-mode-option b { font-size: var(--text-caption); font-weight: 600; }
+  .component-mode-option small { font-size: var(--text-mini); line-height: 1.4; color: inherit; opacity: 0.82; }
 
   /* ── Option / export rows ── */
   .row {
     display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border);
+    gap: 12px; padding: 8px 0; border-bottom: var(--line-width) solid var(--line);
   }
   .row:first-of-type { padding-top: 2px; }
   .row:last-child { border-bottom: none; padding-bottom: 0; }
   .row-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .row-label span { font-size: 12px; font-weight: 500; }
-  .row-label small { font-size: 11px; color: var(--text-sub); line-height: 1.45; }
+  .row-label span { font-size: var(--text-body); font-weight: 500; }
+  .row-label small { font-size: var(--text-caption); color: var(--fg-muted); line-height: 1.45; }
 
   /* Export destinations are a radio list: the selected row is what the
      aside previews. Hairline `.row` separators would fight the selected
@@ -541,72 +658,77 @@
   .export-opt {
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px; width: 100%; padding: 10px 12px; margin: 0;
-    border: 1px solid var(--border2); border-radius: var(--radius);
-    background: var(--bg); cursor: pointer; text-align: left;
+    border: var(--line-width) solid var(--line-strong); border-radius: var(--radius-lg);
+    background: var(--elevated); cursor: pointer; text-align: left;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
   .export-opt + .export-opt { margin-top: 8px; }
-  .export-opt:hover { border-color: var(--text-dim); }
-  .export-opt.selected { border-color: var(--accent); background: var(--accent-soft); }
-  .export-opt.selected .row-label span,
-  .export-opt.selected .row-label small { color: var(--text-on-tint); }
-  .export-opt:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .export-opt:hover { border-color: var(--fg-faint); }
+  .export-opt.selected { border-color: var(--accent-ui); background: var(--accent-wash); }
+  .export-opt:focus-visible { outline: 2px solid var(--accent-ui); outline-offset: 1px; }
 
   .toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
   .toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
   .toggle-track {
-    position: absolute; inset: 0; border-radius: 9px; pointer-events: none;
-    background: var(--border2); transition: background 160ms var(--ease);
+    position: absolute; inset: 0; border-radius: var(--radius-full); pointer-events: none;
+    /* An OFF track has to be a fill, not a hairline colour — --line-strong
+       is 5–10% alpha and disappears against the card it sits on. Same
+       "the fill is what separates a control" rule as .btn-secondary. */
+    background: color-mix(in srgb, var(--fg) 22%, transparent);
+    transition: background 160ms var(--ease);
   }
   .toggle-track::after {
     content: ''; position: absolute; width: 12px; height: 12px;
+    /* White in both themes on purpose: the knob reads against the violet
+       ON track and the grey OFF track alike, which is the same call the
+       app makes for its own slider thumb. */
     border-radius: 50%; background: #fff; top: 3px; left: 3px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+    box-shadow: 0 1px 4px color-mix(in srgb, var(--fg) 24%, transparent);
     transition: transform 160ms var(--ease);
   }
-  .toggle input:checked + .toggle-track { background: var(--accent); }
+  .toggle input:checked + .toggle-track { background: var(--accent-solid); }
   .toggle input:checked + .toggle-track::after { transform: translateX(14px); }
-  .toggle input:focus-visible + .toggle-track { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .toggle input:focus-visible + .toggle-track { outline: 2px solid var(--accent-ui); outline-offset: 1px; }
 
   /* ── Live sync ── */
   .sync-row { display: flex; align-items: center; gap: 8px; }
   .sync-dot {
     width: 8px; height: 8px; border-radius: 50%;
-    background: var(--text-dim); flex-shrink: 0; transition: background 300ms var(--ease);
+    background: var(--fg-faint); flex-shrink: 0; transition: background 300ms var(--ease);
   }
-  .sync-dot.active { background: var(--success); animation: pulse 2s infinite; }
-  .sync-dot.error  { background: var(--error); }
+  .sync-dot.active { background: var(--status-success-solid); animation: pulse 2s infinite; }
+  .sync-dot.error  { background: var(--status-danger-solid); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-  .sync-status { font-size: 11px; color: var(--text-sub); flex: 1; min-width: 0; }
+  .sync-status { font-size: var(--text-caption); color: var(--fg-muted); flex: 1; min-width: 0; }
 
-  .help-list { font-size: 12px; color: var(--text-sub); line-height: 1.8; padding-left: 16px; }
-  .help-list strong { color: var(--text); font-weight: 500; }
-  .help-list a { color: var(--accent); }
-  code { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+  .help-list { font-size: var(--text-body); color: var(--fg-muted); line-height: 1.8; padding-left: 16px; }
+  .help-list strong { color: var(--fg); font-weight: 500; }
+  .help-list a { color: var(--accent-ui); }
+  code { font-family: var(--mono); font-size: var(--text-caption); color: var(--accent-ui); }
 
   /* ── Token preview (aside) ── */
   .token-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .meta-pill {
-    background: var(--bg); border: 1px solid var(--border);
-    border-radius: 6px; padding: 8px 10px;
+    background: var(--elevated); border: var(--line-width) solid var(--line);
+    border-radius: var(--radius-md); padding: 8px 10px;
     display: flex; flex-direction: column; gap: 1px; min-width: 0;
   }
-  .meta-pill .mk { font-size: 9px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.07em; }
-  .meta-pill .mv { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 1px solid var(--border); }
+  .meta-pill .mk { font-size: var(--text-micro); font-weight: 600; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.07em; }
+  .meta-pill .mv { font-size: var(--text-body); font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: var(--line-width) solid var(--line); }
 
   /* ── Progress ── */
   .progress {
     display: flex; flex-direction: column; gap: 6px;
-    padding: 10px 16px; border-top: 1px solid var(--border);
-    background: var(--bg); flex-shrink: 0;
+    padding: 10px 16px; border-top: var(--line-width) solid var(--line);
+    background: var(--nav); flex-shrink: 0;
   }
   .progress-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .progress-head span:first-child { font-size: 12px; font-weight: 500; color: var(--text); }
-  .progress-head span:last-child { font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
-  .progress-track { height: 4px; border-radius: 2px; background: var(--border2); overflow: hidden; }
+  .progress-head span:first-child { font-size: var(--text-body); font-weight: 500; color: var(--fg); }
+  .progress-head span:last-child { font-size: var(--text-caption); color: var(--fg-faint); font-family: var(--mono); }
+  .progress-track { height: 4px; border-radius: var(--radius-full); background: var(--elevated); overflow: hidden; }
   .progress-fill {
-    height: 100%; width: 0%; border-radius: 2px; background: var(--accent);
+    height: 100%; width: 0%; border-radius: var(--radius-full); background: var(--accent-solid);
     transition: width 220ms var(--ease);
   }
   /* Indeterminate: a phase that can't count its work still has to look alive. */
@@ -618,8 +740,8 @@
     0%   { transform: translateX(-105%); }
     100% { transform: translateX(320%); }
   }
-  .progress-note { font-size: 11px; color: var(--warning-fg, var(--text-sub)); line-height: 1.5; }
-  .progress-note.warn { color: var(--error); }
+  .progress-note { font-size: var(--text-caption); color: var(--fg-muted); line-height: 1.5; }
+  .progress-note.warn { color: var(--status-warning); }
 
   /* One notification system: Activity log is the record; toasts surface the
      same success/error lines so a designer doesn't have to open the log. */
@@ -630,15 +752,16 @@
   }
   .toast {
     display: flex; align-items: center; gap: 8px; max-width: 420px;
-    padding: 8px 14px; border-radius: 10px;
-    background: var(--text); color: var(--bg);
-    font-size: 12px; font-weight: 500; line-height: 1.35;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    padding: 8px 14px; border-radius: var(--radius-xl);
+    background: var(--fg); color: var(--app);
+    font-size: var(--text-body); font-weight: 500; line-height: 1.35;
+    box-shadow: var(--shadow-overlay);
     animation: toast-in 180ms var(--ease);
   }
-  .toast.error { background: var(--error); color: var(--on-accent); }
-  .toast-mark { flex-shrink: 0; font-size: 13px; }
-  .toast.success .toast-mark { color: var(--success); }
+  .toast-mark { flex-shrink: 0; font-size: var(--text-ui); }
+  .toast.success .toast-mark { color: var(--status-success-on-inverse); }
+  .toast.error .toast-mark { color: var(--status-danger-on-inverse); }
+  .toast.error { box-shadow: inset 3px 0 0 var(--status-danger-on-inverse), var(--shadow-overlay); }
   .toast.out { animation: toast-out 160ms var(--ease) forwards; }
   @keyframes toast-in {
     from { opacity: 0; transform: translateY(8px); }
@@ -675,34 +798,34 @@
 
   .ov-hero { display: flex; align-items: center; gap: 12px; }
   .ov-chip {
-    width: 38px; height: 38px; border-radius: 9px; flex-shrink: 0;
-    border: 1px solid var(--border);
+    width: 38px; height: 38px; border-radius: var(--radius-lg); flex-shrink: 0;
+    border: var(--line-width) solid var(--line);
   }
   .ov-hero-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .ov-hero-text b { font-size: 14px; font-weight: 600; color: var(--text-on-tint); }
-  .ov-hero-text small { font-size: 11px; color: var(--text-sub); font-family: var(--mono); }
+  .ov-hero-text b { font-size: var(--text-strong); font-weight: 600; color: var(--fg); }
+  .ov-hero-text small { font-size: var(--text-caption); color: var(--fg-muted); font-family: var(--mono); }
 
   /* The 1–12 ramp as one seamless strip — the same shape the configurator
      shows, so the two read as the same system. */
-  .ramp { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+  .ramp { display: flex; height: 26px; border-radius: var(--radius-md); overflow: hidden; border: var(--line-width) solid var(--line); }
   .ramp i { flex: 1; min-width: 0; }
-  .ramp-label { display: flex; justify-content: space-between; font-size: 9px; color: var(--text-dim); font-family: var(--mono); }
+  .ramp-label { display: flex; justify-content: space-between; font-size: var(--text-micro); color: var(--fg-faint); font-family: var(--mono); }
 
   .ov-states { display: flex; gap: 6px; }
-  .ov-states .color-dot { width: 14px; height: 14px; border-radius: 4px; }
+  .ov-states .color-dot { width: 14px; height: 14px; border-radius: var(--radius-sm); }
 
   .ov-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
   /* Edit / Create on the web is the payoff — full row, then the local action. */
   .ov-actions .btn-primary { flex: 1 1 100%; }
   .export-actions { display: flex; gap: 6px; flex-shrink: 0; }
   .ov-empty { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
-  .ov-empty p { font-size: 12px; color: var(--text-sub); line-height: 1.6; }
+  .ov-empty p { font-size: var(--text-body); color: var(--fg-muted); line-height: 1.6; }
 
   /* Identity and Foundations are one thing — "the system this file is on" —
      so they share a single card. As two cards they competed for the top of the
      screen and the eye had to decide which was the subject. A hairline does
      the internal grouping instead of a second border box. */
-  .ov-divide { height: 1px; background: var(--border2); }
+  .ov-divide { height: var(--line-width); background: var(--line); }
 
   /* ── "In this file" asset checklist ──
      A row per generated page: a checkbox (build this or skip it — see
@@ -712,34 +835,34 @@
   .asset-list { display: flex; flex-direction: column; }
   .asset-row {
     display: flex; align-items: center; gap: var(--sp-2);
-    padding: 5px 0; font-size: 11px; color: var(--text-sub);
+    padding: 5px 0; font-size: var(--text-caption); color: var(--fg-muted);
   }
-  .asset-row + .asset-row { border-top: 1px solid var(--border); }
+  .asset-row + .asset-row { border-top: var(--line-width) solid var(--line); }
   .asset-check {
     appearance: none; -webkit-appearance: none;
     width: 14px; height: 14px; flex-shrink: 0; margin: 0;
-    border: 1px solid var(--border2); border-radius: 4px;
-    background: var(--bg); cursor: pointer; position: relative;
+    border: var(--line-width) solid var(--line-strong); border-radius: var(--radius-sm);
+    background: var(--app); cursor: pointer; position: relative;
     transition: background-color 140ms var(--ease), border-color 140ms var(--ease);
   }
-  .asset-check:hover { border-color: var(--text-dim); }
-  .asset-check:checked { background: var(--accent); border-color: var(--accent); }
+  .asset-check:hover { border-color: var(--fg-faint); }
+  .asset-check:checked { background: var(--accent-solid); border-color: var(--accent-solid); }
   .asset-check:checked::after {
     content: ''; position: absolute; left: 4px; top: 1px;
     width: 4px; height: 8px;
-    border: solid var(--on-accent); border-width: 0 1.5px 1.5px 0;
+    border: solid var(--accent-ink); border-width: 0 1.5px 1.5px 0;
     transform: rotate(45deg);
   }
-  .asset-check:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
-  .asset-row.present .asset-name { color: var(--text); }
+  .asset-check:focus-visible { outline: 2px solid var(--accent-ui); outline-offset: 1px; }
+  .asset-row.present .asset-name { color: var(--fg); }
   .asset-name { font-weight: 500; }
-  .asset-note { margin-left: auto; font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
-  .asset-count { font-size: 10px; color: var(--text-dim); font-family: var(--mono); }
+  .asset-note { margin-left: auto; font-size: var(--text-mini); color: var(--fg-faint); flex-shrink: 0; }
+  .asset-count { font-size: var(--text-mini); color: var(--fg-faint); font-family: var(--mono); }
   .asset-foot {
     display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
     margin-top: var(--sp-2); padding-top: var(--sp-2);
-    border-top: 1px solid var(--border2);
-    font-size: 11px; color: var(--text-sub); line-height: 1.45;
+    border-top: var(--line-width) solid var(--line-strong);
+    font-size: var(--text-caption); color: var(--fg-muted); line-height: 1.45;
   }
   .asset-foot > span { flex: 1; min-width: 160px; }
 
@@ -747,169 +870,170 @@
      across a 448px card that flung four 14px swatches to the far edge, a
      third of a screen away from the word they belong to. */
   .ov-states-row { display: flex; align-items: center; gap: var(--sp-2); }
-  .ov-states-row > .mk { font-size: 11px; color: var(--text-sub); }
+  .ov-states-row > .mk { font-size: var(--text-caption); color: var(--fg-muted); }
 
   /* Secondary actions: a strip, not a card. Wrapping two buttons and one line
      of caption in its own bordered box gave "go do something elsewhere" the
      same visual weight as the system itself. */
   .ov-continue { display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 2px; }
-  /* --text-sub, not --text-dim: this is prose. The palette-level gap this
-     comment used to flag (--text-dim at 2.94:1 light / 2.21:1 dark, the whole
+  /* --fg-muted, not --fg-faint: this is prose. The palette-level gap this
+     comment used to flag (--fg-faint at 2.94:1 light / 2.21:1 dark, the whole
      neutral scale under AA) is fixed — see the :root block's comment —
-     --text-dim is now 4.74:1 light / 3.72:1 dark. --text-sub (7.73 / 7.20:1)
-     is still the more legible step, so prose keeps using it; --text-dim's
+     --fg-faint is now 4.74:1 light / 3.72:1 dark. --fg-muted (7.73 / 7.20:1)
+     is still the more legible step, so prose keeps using it; --fg-faint's
      dark value is the one deliberate residual left (matches the app's own
      accepted gap for that tier) and stays reserved for non-prose use. */
-  .ov-continue p { font-size: 11px; color: var(--text-sub); line-height: 1.55; }
+  .ov-continue p { font-size: var(--text-caption); color: var(--fg-muted); line-height: 1.55; }
 
   /* Live Sync is the one stateful surface on Overview, so it earns a border
      that reacts — accent ring while it's actually running. State, not decor. */
   .ov-sync { transition: border-color 300ms var(--ease); }
-  .ov-sync.is-live { border-color: var(--accent-ring); }
-  .sync-check { font-size: 10px; color: var(--text-dim); font-family: var(--mono); flex-shrink: 0; }
+  .ov-sync.is-live { border-color: var(--accent-ui); }
+  .sync-check { font-size: var(--text-mini); color: var(--fg-faint); font-family: var(--mono); flex-shrink: 0; }
   .sync-config { display: flex; flex-direction: column; gap: var(--sp-2); }
   .sync-meta { display: flex; align-items: center; gap: var(--sp-2); }
-  .sync-meta label { font-size: 11px; color: var(--text-sub); flex-shrink: 0; }
+  .sync-meta label { font-size: var(--text-caption); color: var(--fg-muted); flex-shrink: 0; }
   /* Wide enough for the longest option ("5 minutes") plus the chevron's 26px
      of right padding — it used to hug its content and clip the label. */
   .sync-interval { min-width: 132px; }
   .sync-now { margin-left: auto; flex-shrink: 0; }
   .sync-field-label {
-    font-size: 10px; font-weight: 600;
-    color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: var(--text-mini); font-weight: 600;
+    color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.08em;
   }
-  .sync-hint { font-size: 10px; color: var(--text-sub); line-height: 1.5; }
+  .sync-hint { font-size: var(--text-mini); color: var(--fg-muted); line-height: 1.5; }
 
   /* The sync contract. Deliberately quiet type — it is a standing fact about
      the connection, not a warning, and it must not compete with the status
      dot right above it. */
   .sync-scope { display: flex; flex-direction: column; gap: 6px; }
-  .sync-scope-row { font-size: 10px; color: var(--text-sub); line-height: 1.55; display: flex; gap: 6px; align-items: baseline; }
-  .sync-scope-yes { color: var(--success); flex: none; }
-  .sync-scope-no { color: var(--text-dim); flex: none; }
-  .sync-scope-why { color: var(--text-dim); }
+  .sync-scope-row { font-size: var(--text-mini); color: var(--fg-muted); line-height: 1.55; display: flex; gap: 6px; align-items: baseline; }
+  .sync-scope-yes { color: var(--status-success); flex: none; }
+  .sync-scope-no { color: var(--fg-faint); flex: none; }
+  .sync-scope-why { color: var(--fg-faint); }
 
   /* Reset row: a quiet, secondary zone below the sync config — not styled as
      a call to action, since resetting is the exception, not something anyone
      reaches for on a normal visit. .link-btn.is-danger only appears for the
      ~4s "click again to confirm" window (see resetFileBtn's click handler). */
   .reset-row { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
-  .reset-hint { font-size: 10px; color: var(--text-dim); line-height: 1.5; }
-  .link-btn.is-danger { color: var(--error); }
+  .reset-hint { font-size: var(--text-mini); color: var(--fg-faint); line-height: 1.5; }
+  .link-btn.is-danger { color: var(--status-danger); }
 
   /* Progressive disclosure for the walkthrough. It used to sit open forever,
      costing ~9 permanent lines to explain a two-field form to people who read
      token JSON for a living. */
   .ov-help > summary {
-    font-size: 11px; color: var(--text-sub); cursor: pointer;
-    padding: 2px 2px; border-radius: 4px; list-style: none;
+    font-size: var(--text-caption); color: var(--fg-muted); cursor: pointer;
+    padding: 2px 2px; border-radius: var(--radius-sm); list-style: none;
     display: flex; align-items: center; gap: 6px;
     transition: color 140ms var(--ease);
   }
   .ov-help > summary::-webkit-details-marker { display: none; }
   .ov-help > summary::before {
-    content: '›'; font-size: 13px; line-height: 1;
+    content: '›'; font-size: var(--text-ui); line-height: 1;
     transition: transform 160ms var(--ease);
   }
   .ov-help[open] > summary::before { transform: rotate(90deg); }
-  .ov-help > summary:hover { color: var(--text); }
-  .ov-help > summary:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .ov-help > summary:hover { color: var(--fg); }
+  .ov-help > summary:focus-visible { outline: 2px solid var(--accent-ui); outline-offset: 1px; }
   .ov-help .help-list { margin-top: var(--sp-2); padding-left: 22px; line-height: 1.7; }
   .ov-help .asset-list { margin-top: var(--sp-2); }
 
   /* JSON viewer with a line-number gutter */
   .json-view {
     flex: 1; min-height: 120px; overflow: auto;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    font-family: var(--mono); font-size: 10px; line-height: 1.65;
+    background: var(--app); border: var(--line-width) solid var(--line); border-radius: var(--radius-md);
+    font-family: var(--mono); font-size: var(--text-mini); line-height: 1.65;
     padding: 8px 0;
   }
   .json-line { display: flex; white-space: pre; }
-  .json-line:hover { background: var(--surface2); }
+  .json-line:hover { background: var(--elevated); }
   .json-n {
     width: 34px; flex-shrink: 0; text-align: right; padding-right: 8px;
-    color: var(--text-dim); user-select: none;
+    color: var(--fg-faint); user-select: none;
   }
-  .json-t { padding-right: 10px; color: var(--text-sub); }
-  .json-more { padding: 6px 12px; font-size: 10px; color: var(--text-dim); }
+  .json-t { padding-right: 10px; color: var(--fg-muted); }
+  .json-more { padding: 6px 12px; font-size: var(--text-mini); color: var(--fg-faint); }
 
   .empty {
     flex: 1; display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 6px; text-align: center;
-    color: var(--text-dim); padding: 24px 20px;
+    color: var(--fg-faint); padding: 24px 20px;
   }
-  .empty-icon { font-size: 19px; opacity: 0.55; }
-  .empty-main { font-size: 12px; font-weight: 500; color: var(--text-sub); }
-  .empty-sub { font-size: 11px; }
+  .empty-icon { font-size: var(--text-heading); opacity: 0.55; }
+  .empty-main { font-size: var(--text-body); font-weight: 500; color: var(--fg-muted); }
+  .empty-sub { font-size: var(--text-caption); }
 
   /* ── Log ── */
   .log-wrap {
-    background: var(--bg); border: 1px solid var(--border);
-    border-radius: 6px; padding: 8px 10px;
-    font-family: var(--mono); font-size: 10px; line-height: 1.7;
-    flex: 1; min-height: 140px; overflow-y: auto; color: var(--text-sub);
+    background: var(--app); border: var(--line-width) solid var(--line);
+    border-radius: var(--radius-md); padding: 8px 10px;
+    font-family: var(--mono); font-size: var(--text-mini); line-height: 1.7;
+    flex: 1; min-height: 140px; overflow-y: auto; color: var(--fg-muted);
   }
-  .log-wrap:empty::before { content: 'No activity yet — imports and exports are logged here.'; color: var(--text-dim); }
+  .log-wrap:empty::before { content: 'No activity yet — imports and exports are logged here.'; color: var(--fg-faint); }
   .log-line { display: block; }
-  .log-line.success { color: var(--success); }
-  .log-line.error   { color: var(--error); }
-  .log-line.heading { color: var(--text); font-weight: 600; }
+  .log-line.success { color: var(--status-success); }
+  .log-line.error   { color: var(--status-danger); }
+  .log-line.heading { color: var(--fg); font-weight: 600; }
   .log-card { flex: 1; min-height: 0; }
 
   /* ── Footer ── */
   .footer {
-    padding: 12px 16px; border-top: 1px solid var(--border);
+    padding: 12px 16px; border-top: var(--line-width) solid var(--line);
     display: flex; align-items: center; gap: 8px; flex-shrink: 0;
-    background: var(--bg);
+    background: var(--nav);
   }
-  .footer-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--text-sub); }
-  .footer-hint.error { color: var(--error); }
+  .footer-hint { flex: 1; min-width: 0; font-size: var(--text-caption); color: var(--fg-muted); }
+  .footer-hint.error { color: var(--status-danger); }
 
   /* ── Drop zone ── */
   .drop-zone {
-    border: 1.5px dashed var(--border2);
-    border-radius: var(--radius);
+    border: calc(var(--line-width) * 2) dashed var(--line-strong);
+    border-radius: var(--radius-lg);
+    background: var(--app);
     padding: 20px 12px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 2px; cursor: pointer; text-align: center;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
     min-height: 96px; user-select: none;
   }
-  .drop-zone:hover { border-color: var(--text-dim); background: var(--surface2); }
-  .drop-zone.drag-active { border-color: var(--accent); border-style: solid; background: var(--accent-soft); }
-  .drop-zone.loaded { border-color: var(--success); border-style: solid; background: var(--success-tint); }
-  .drop-icon { font-size: 17px; line-height: 1.2; color: var(--text-dim); transition: color 140ms var(--ease); }
-  .drag-active .drop-icon { color: var(--accent); }
-  .loaded .drop-icon      { color: var(--success); }
-  .drop-main { font-size: 12px; font-weight: 500; color: var(--text-sub); transition: color 140ms var(--ease); }
-  .drag-active .drop-main { color: var(--accent); }
-  .loaded .drop-main      { color: var(--success); }
-  .drop-hint { font-size: 10px; color: var(--text-dim); }
+  .drop-zone:hover { border-color: var(--fg-faint); background: var(--elevated); }
+  .drop-zone.drag-active { border-color: var(--accent-ui); border-style: solid; background: var(--accent-wash); }
+  .drop-zone.loaded { border-color: var(--status-success); border-style: solid; background: var(--success-wash); }
+  .drop-icon { font-size: var(--text-title); line-height: 1.2; color: var(--fg-faint); transition: color 140ms var(--ease); }
+  .drag-active .drop-icon { color: var(--accent-ui); }
+  .loaded .drop-icon      { color: var(--status-success); }
+  .drop-main { font-size: var(--text-body); font-weight: 500; color: var(--fg-muted); transition: color 140ms var(--ease); }
+  .drag-active .drop-main { color: var(--accent-ui); }
+  .loaded .drop-main      { color: var(--status-success); }
+  .drop-hint { font-size: var(--text-mini); color: var(--fg-faint); }
 
   .or-row {
     display: flex; align-items: center; gap: 8px;
-    font-size: 9px; font-weight: 600; color: var(--text-dim);
+    font-size: var(--text-micro); font-weight: 600; color: var(--fg-faint);
     text-transform: uppercase; letter-spacing: 0.07em; flex-shrink: 0;
   }
-  .or-row::before, .or-row::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .or-row::before, .or-row::after { content: ''; flex: 1; height: var(--line-width); background: var(--line); }
 
   /* ── Review list ── */
   .review-item {
     display: flex; align-items: flex-start; gap: 8px;
-    padding: 8px 0; border-bottom: 1px solid var(--border);
+    padding: 8px 0; border-bottom: var(--line-width) solid var(--line);
   }
   .review-item:last-child { border-bottom: none; padding-bottom: 0; }
-  .review-mark { font-size: 11px; line-height: 1.4; flex-shrink: 0; width: 14px; text-align: center; }
-  .review-mark.yes { color: var(--success); }
-  .review-mark.no  { color: var(--text-dim); }
+  .review-mark { font-size: var(--text-caption); line-height: 1.4; flex-shrink: 0; width: 14px; text-align: center; }
+  .review-mark.yes { color: var(--status-success); }
+  .review-mark.no  { color: var(--fg-faint); }
   .review-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .review-text span { font-size: 12px; font-weight: 500; }
-  .review-text small { font-size: 11px; color: var(--text-sub); line-height: 1.45; }
-  .review-item.off .review-text span { color: var(--text-dim); font-weight: 400; }
+  .review-text span { font-size: var(--text-body); font-weight: 500; }
+  .review-text small { font-size: var(--text-caption); color: var(--fg-muted); line-height: 1.45; }
+  .review-item.off .review-text span { color: var(--fg-faint); font-weight: 400; }
 
   /* ── States ── */
   .hidden { display: none !important; }
-  .parse-error { font-size: 11px; color: var(--error); }
+  .parse-error { font-size: var(--text-caption); color: var(--status-danger); }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; animation: none !important; }
@@ -919,7 +1043,7 @@
 </style>
 <script>
 // Real theme detection — reads the RAW --figma-color-bg Figma injects
-// directly (NOT our own --bg, which is now a fixed Escala hex per theme and
+// directly (NOT our own --app, which is now a fixed Escala hex per theme and
 // would be circular to read here) rather than trusting prefers-color-scheme,
 // which tracks the OS/browser and can disagree with Figma's own light/dark
 // setting. Runs here, before <body>, so [data-theme] is set before first
@@ -1289,7 +1413,7 @@
         <div class="step-intro guide-only">
           <h2>Where do your tokens come from?</h2>
           <p>Drop the <code>tokens.json</code> exported from the
-             <a href="https://www.escalatokens.com" target="_blank" rel="noopener" style="color:var(--accent)">Escala configurator</a>,
+             <a href="https://www.escalatokens.com" target="_blank" rel="noopener" style="color:var(--accent-ui)">Escala configurator</a>,
              paste it, or pull it straight from the publish URL.</p>
         </div>
 
@@ -1464,7 +1588,7 @@
         <div class="aside-head-actions">
           <button class="btn btn-primary btn-sm hidden" id="asideCopyBtn" type="button">Copy</button>
           <button class="link-btn" id="asideTabTokens">Tokens</button>
-          <button class="link-btn" id="asideTabLog" style="color:var(--text-dim)">Activity</button>
+          <button class="link-btn" id="asideTabLog" style="color:var(--fg-faint)">Activity</button>
         </div>
       </div>
 
@@ -2319,8 +2443,8 @@ function setAside(pane) {
   $('asidePaneTokens').classList.toggle('hidden', !isTokens)
   $('asidePaneLog').classList.toggle('hidden', isTokens)
   $('asideTitle').textContent = isTokens ? 'Token preview' : 'Activity log'
-  $('asideTabTokens').style.color = isTokens ? 'var(--accent)' : 'var(--text-dim)'
-  $('asideTabLog').style.color    = isTokens ? 'var(--text-dim)' : 'var(--accent)'
+  $('asideTabTokens').style.color = isTokens ? 'var(--accent-ui)' : 'var(--fg-faint)'
+  $('asideTabLog').style.color    = isTokens ? 'var(--fg-faint)' : 'var(--accent-ui)'
   if (!isTokens) $('logDot').classList.add('hidden')
   syncAsideCopyBtn()
 }
@@ -3025,7 +3149,7 @@ function renderHome() {
 
   $('ovProject').textContent = t.project || 'Untitled system'
   $('ovAccentHex').textContent = accent ? accent.toUpperCase() : '—'
-  $('ovAccentChip').style.background = accent || 'var(--border2)'
+  $('ovAccentChip').style.background = accent || 'var(--line-strong)'
 
   const ramp = famRamp(t, brand)
   $('ovRamp').innerHTML = ramp.map((hex) =>
@@ -3057,7 +3181,7 @@ function renderHome() {
     .map((f) => ({ f, hex: familySolid(t, statusFamily(t, f)) }))
     .filter((e) => e.hex)
     .map((e) => `<span class="color-dot" title="${e.f}" style="background:${escapeHtml(e.hex)}"></span>`)
-    .join('') || '<span style="font-size:11px;color:var(--text-dim)">—</span>'
+    .join('') || '<span style="font-size:var(--text-caption);color:var(--fg-faint)">—</span>'
 
   renderAssets()
 }
