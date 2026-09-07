@@ -2793,10 +2793,11 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     for (const [mid, value] of entry.values) v.setValueForMode(mid, value)
   }
 
+  const modeNames = modeSpec.map(([, label]) => label).join(', ')
   if (norm && arch) {
-    log(`✓ Semantic tokens — ${ARCH_LABEL[arch.kind] ?? arch.kind} architecture (${plan.length} tokens · ${norm.groups.length} groups × ${allModeIds.length} mode${allModeIds.length > 1 ? 's' : ''} — ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ''})`)
+    log(`✓ Semantic tokens — ${ARCH_LABEL[arch.kind] ?? arch.kind} architecture (${plan.length} tokens · ${norm.groups.length} groups × ${allModeIds.length} mode${allModeIds.length > 1 ? 's' : ''}: ${modeNames} — ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ''})`)
   } else {
-    log(`✓ Semantic tokens (${plan.length} roles × ${allModeIds.length} theme${allModeIds.length > 1 ? 's' : ''} — ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ''})`)
+    log(`✓ Semantic tokens (${plan.length} roles × ${allModeIds.length} theme${allModeIds.length > 1 ? 's' : ''}: ${modeNames} — ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ''})`)
   }
 
   pruneVars(semCache, new Set(desired), COLLECTIONS.semantics)
@@ -3004,7 +3005,9 @@ function parseCssGradient(css: string): GradientPaint | null {
   let body = m[2].trim()
   let angle = 180 // CSS default: to bottom
   if (radial) {
-    body = body.replace(/^circle\s+at\s+[^,]+,\s*/, '')
+    // gradientToCss emits `circle at 30% 30%`; older / hand-edited CSS may
+    // use `ellipse 80% 70% at …`. Strip either so the hex stops still parse.
+    body = body.replace(/^(?:circle|ellipse)(?:\s+[\d.]+%?\s+[\d.]+%?)?\s+at\s+[^,]+,\s*/i, '')
   } else {
     const am = body.match(/^(-?\d+(?:\.\d+)?)deg\s*,\s*/)
     if (am) { angle = parseFloat(am[1]); body = body.slice(am[0].length) }
@@ -3043,6 +3046,77 @@ function parseCssGradient(css: string): GradientPaint | null {
   }
 }
 
+// Mirror of escala-tokens `LINKED_GRADIENT_TONES`. The three built-ins are
+// REFERENCES to the previewed brand family's ramp (tone 9 = the accent
+// hex) — not the CSS hex cache, which stays on the GLOBAL accent (or the
+// pre-link lime moss-glow seed) the moment a System Style is adopted.
+const LINKED_GRADIENT_TONES: Record<string, { tone: number; pos: number }[]> = {
+  'brand-cover': [{ tone: 9, pos: 0 }, { tone: 12, pos: 100 }],
+  aurora: [{ tone: 7, pos: 0 }, { tone: 9, pos: 50 }, { tone: 11, pos: 100 }],
+  'moss-glow': [{ tone: 7, pos: 0 }, { tone: 11, pos: 100 }],
+}
+
+function linkedBrandStops(
+  tokens: DesignTokens,
+  slug: string,
+  appearance: 'light' | 'dark',
+): ColorStop[] | null {
+  const sig = LINKED_GRADIENT_TONES[slug]
+  if (!sig) return null
+  const brand = brandFamilyFromTokens(tokens)
+  const lightFam = brand.replace(/-dark$/, '')
+  const darkFam = lightFam.endsWith('-dark') ? lightFam : `${lightFam}-dark`
+  const family = appearance === 'dark' ? darkFam : lightFam
+  const prim = tokens.colors.primitive ?? {}
+  const out: ColorStop[] = []
+  for (const { tone, pos } of sig) {
+    const keys = [String(tone), tone < 10 ? `0${tone}` : String(tone)]
+    const hex = familyToneHex(prim, family, keys) ?? familyToneHex(prim, lightFam, keys)
+    if (!hex) return null
+    out.push({ color: hexToRgba(hex), position: pos / 100 })
+  }
+  return out
+}
+
+function defaultGradientPaint(slug: string, gradientStops: ColorStop[]): GradientPaint {
+  if (slug === 'moss-glow') {
+    const cx = 0.3, cy = 0.3, r = 0.9
+    return {
+      type: 'GRADIENT_RADIAL',
+      gradientStops,
+      gradientTransform: [[r, 0, cx - r / 2], [0, r, cy - r / 2]],
+    }
+  }
+  const angle = slug === 'aurora' ? 120 : 135
+  const rad = ((angle - 90) * Math.PI) / 180
+  const cos = Math.cos(rad), sin = Math.sin(rad)
+  return {
+    type: 'GRADIENT_LINEAR',
+    gradientStops,
+    gradientTransform: [
+      [cos, sin, 0.5 - 0.5 * cos - 0.5 * sin],
+      [-sin, cos, 0.5 + 0.5 * sin - 0.5 * cos],
+    ],
+  }
+}
+
+// Geometry from the payload CSS (angle / radial); stop COLOURS from the
+// previewed brand family for the three linked built-ins. Custom / unlocked
+// slugs keep the CSS hexes as authored.
+function paintForNamedGradient(
+  tokens: DesignTokens,
+  slug: string,
+  css: string | undefined,
+  appearance: 'light' | 'dark' = 'light',
+): GradientPaint | null {
+  const parsed = css ? parseCssGradient(css) : null
+  const linked = linkedBrandStops(tokens, slug, appearance)
+  if (parsed && linked) return { ...parsed, gradientStops: linked }
+  if (parsed) return parsed
+  if (linked) return defaultGradientPaint(slug, linked)
+  return null
+}
+
 // Resolve the gradient assigned to a preview surface ("cover" / "avatar") into
 // a Figma paint, or null when the payload carries none.
 function assignedGradient(tokens: DesignTokens, surface: 'cover' | 'avatar'): GradientPaint | null {
@@ -3051,7 +3125,7 @@ function assignedGradient(tokens: DesignTokens, surface: 'cover' | 'avatar'): Gr
   // The previewed theme's resolution, so the Cover art is the same colour as
   // the `Gradient/<slug>` paint style importStyles creates.
   const css = previewGradients(tokens).light[slug] ?? tokens.gradients?.[slug]
-  return css ? parseCssGradient(css) : null
+  return paintForNamedGradient(tokens, slug, css, 'light')
 }
 
 // ─── Color Styles ────────────────────────────────────────────────────────────
@@ -3120,10 +3194,12 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     let darkMade = 0
     const unparsed: string[] = []
     for (const [slug, css] of Object.entries(gradients)) {
-      const paint = parseCssGradient(css)
-      // parseCssGradient returns null for a form it doesn't handle (conic, a
-      // colour-stop syntax it can't read). Name them in the log rather than
-      // dropping them silently — the same gradient still paints the Cover.
+      const paint = paintForNamedGradient(tokens, slug, css, 'light')
+      // paintForNamedGradient returns null for a form parseCssGradient
+      // can't read (conic, unsupported stop syntax) AND that isn't one of
+      // the three linked built-ins. Name them in the log rather than
+      // dropping them silently — the same gradient still paints the Cover
+      // when assignedGradient can remint it from the brand ramp.
       if (!paint) { unparsed.push(slug); continue }
       upsertPaint(`Gradient/${slug}`, paint)
       made++
@@ -3131,10 +3207,16 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
       // Dark variants get their own style: a paint style has no modes, so a
       // light/dark pair can't live in one. Only when it genuinely differs —
       // see the gradientsDark type comment.
-      const darkCss = gradientsDark[slug]
-      if (darkCss && darkCss !== css) {
-        const darkPaint = parseCssGradient(darkCss)
-        if (darkPaint) { upsertPaint(`Gradient/${slug} (Dark)`, darkPaint); darkMade++ }
+      const darkPaint = paintForNamedGradient(tokens, slug, gradientsDark[slug] ?? css, 'dark')
+      if (darkPaint) {
+        const sameStops = darkPaint.gradientStops.length === paint.gradientStops.length
+          && darkPaint.gradientStops.every((s, i) =>
+            s.position === paint.gradientStops[i].position
+            && s.color.r === paint.gradientStops[i].color.r
+            && s.color.g === paint.gradientStops[i].color.g
+            && s.color.b === paint.gradientStops[i].color.b
+            && s.color.a === paint.gradientStops[i].color.a)
+        if (!sameStops) { upsertPaint(`Gradient/${slug} (Dark)`, darkPaint); darkMade++ }
       }
     }
     // Which gradient drives which surface is part of the contract, and the
@@ -8518,6 +8600,30 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     return f
   }
 
+  // A type-scale row: fixed label + specimen that WRAPS inside INNER_W.
+  // WIDTH_AND_HEIGHT on a HUG row lets display-2xl (~72px × one sentence)
+  // paint ~1800px wide and get cropped by the card.
+  // FILL is only legal on a child of an auto-layout parent — set it after
+  // appendChild or the Documentation phase throws and the wiped page stays empty.
+  function typeSpecimenRow(parent: FrameNode, name: string, labelW: number, labelChars: string, spec: TextNode): FrameNode {
+    const row = autoFrame(name, 'HORIZONTAL', 24)
+    parent.appendChild(row)
+    row.layoutSizingHorizontal = 'FILL'
+    row.counterAxisAlignItems = 'CENTER'
+    const label = mkText(labelChars, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
+    row.appendChild(label)
+    label.resize(labelW, label.height)
+    label.textAutoResize = 'HEIGHT'
+    label.layoutSizingHorizontal = 'FIXED'
+    label.layoutSizingVertical = 'HUG'
+    row.appendChild(spec)
+    spec.textAutoResize = 'HEIGHT'
+    spec.layoutSizingHorizontal = 'FILL'
+    spec.layoutGrow = 1
+    spec.layoutSizingVertical = 'HUG'
+    return row
+  }
+
   // Page metrics — every card and section bar shares one fixed width
   const CARD_W = 1180
   const INNER_W = CARD_W - 80
@@ -8540,8 +8646,13 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     card.paddingTop = 36; card.paddingBottom = 44
     card.paddingLeft = 40; card.paddingRight = 40
     vStack(card, CARD_W)
-
+    // Specimens (72px display type, a 12-tone ramp + hex labels) must be
+    // allowed to wrap inside INNER_W. The default clipsContent:true plus a
+    // HUG child painted a 1800px line and cropped it at the card edge.
+    card.clipsContent = false
     const head = autoFrame(`${title}__head`, 'VERTICAL', 8)
+    card.appendChild(head)
+    head.layoutSizingHorizontal = 'FILL'
     head.appendChild(mkText(title, { size: 24, style: 'Semi Bold', colorVar: textVar, colorHex: textHex }))
     const sub = mkText(subtitle, { size: 12, colorVar: mutedVar, colorHex: mutedHex })
     // Typography's own subtitle carries the font family name(s) — "Family
@@ -8561,10 +8672,10 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     sub.resize(INNER_W, 200)
     sub.textAutoResize = 'HEIGHT'
     head.appendChild(sub)
-    card.appendChild(head)
 
     const body = autoFrame(`${title}__body`, 'VERTICAL', 20)
     card.appendChild(body)
+    body.layoutSizingHorizontal = 'FILL'
     return { card, body }
   }
 
@@ -8614,6 +8725,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     const idx = String(boards.length + 1).padStart(2, '0')
     const b = autoFrame(`${idx} · ${label}`, 'VERTICAL', 24)
     b.fills = [boundFill(surfaceVar, surfaceHex)]
+    b.clipsContent = false
     b.paddingTop = 48; b.paddingBottom = 96
     b.paddingLeft = 48; b.paddingRight = 48
     b.cornerRadius = 24
@@ -8756,38 +8868,68 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     await newBoard('Primitive Colors')
     root.appendChild(sectionBar('Primitive Colors'))
     const { card, body } = section('Primitives', 'The raw color ramps — unopinionated source values that every semantic token aliases. Never used directly in designs.')
-    // Group tokens by family path (e.g. Accent, Neutral, State/Error)
-    const families = new Map<string, { tone: string; hex: string; v: Variable | undefined }[]>()
+    // Air between family blocks — States/Error sitting on Error Dark was a
+    // 20px body gap against a hex line + heading, so the rows read as one
+    // block. 32 + extra padding when the slot changes (Error → Warning).
+    body.itemSpacing = 32
+    // Group by the RAW primitive family (`error` vs `error-dark` vs `error-a`),
+    // not by the Figma folder path. primitiveGroupFor strips `-a`, so alpha
+    // twins used to land on the same States/Error row as the solid — 24
+    // swatches, no wrap, hex labels colliding with the next heading.
+    const families = new Map<string, { heading: string; tones: { tone: string; hex: string; v: Variable | undefined }[] }>()
     for (const [key, hex] of Object.entries(tokens.colors.primitive)) {
       if (!hex) continue
+      const dash = key.lastIndexOf('-')
+      const famKey = dash === -1 ? key : key.slice(0, dash)
       const name = primitiveVarName(key)
       const slash = name.lastIndexOf('/')
-      const fam = slash === -1 ? name : name.slice(0, slash)
       const tone = slash === -1 ? '' : name.slice(slash + 1)
-      if (!families.has(fam)) families.set(fam, [])
-      families.get(fam)!.push({ tone, hex, v: findVar(COLLECTIONS.primitives, name) })
+      let heading = primitiveGroupFor(famKey)
+      if (famKey.endsWith('-a') && !/alpha/i.test(heading)) heading = `${heading} Alpha`
+      if (!families.has(famKey)) families.set(famKey, { heading, tones: [] })
+      families.get(famKey)!.tones.push({ tone, hex, v: findVar(COLLECTIONS.primitives, name) })
     }
-    for (const [fam, tones] of families) {
-      const famRow = autoFrame(fam, 'VERTICAL', 8)
-      famRow.appendChild(mkText(fam, { size: 12, style: 'Medium', colorVar: mutedVar, colorHex: mutedHex }))
-      const ramp = autoFrame(`${fam}__ramp`, 'HORIZONTAL', 8)
+    const famKeys = [...families.keys()].sort((a, b) => comparePrimitiveKeys(`${a}-1`, `${b}-1`))
+    let prevStem = ''
+    for (const famKey of famKeys) {
+      const { heading, tones } = families.get(famKey)!
+      const famRow = autoFrame(heading, 'VERTICAL', 12)
+      famRow.clipsContent = false
+      const stem = familyBaseKey(famKey)
+      if (prevStem && stem !== prevStem) famRow.paddingTop = 16
+      prevStem = stem
+      body.appendChild(famRow)
+      famRow.layoutSizingHorizontal = 'FILL'
+      famRow.appendChild(mkText(heading, { size: 12, style: 'Medium', colorVar: mutedVar, colorHex: mutedHex }))
+      const ramp = autoFrame(`${heading}__ramp`, 'HORIZONTAL', 10)
+      ramp.layoutWrap = 'WRAP'
+      ramp.counterAxisSpacing = 16
+      ramp.clipsContent = false
+      famRow.appendChild(ramp)
+      ramp.layoutSizingHorizontal = 'FILL'
       for (const { tone, hex, v } of tones) {
-        const cell = autoFrame(`${fam}/${tone}`, 'VERTICAL', 6)
+        const cell = autoFrame(`${heading}/${tone}`, 'VERTICAL', 8)
         cell.counterAxisAlignItems = 'CENTER'
+        cell.clipsContent = false
         const sw = figma.createFrame()
         sw.name = 'swatch'
+        sw.layoutMode = 'VERTICAL'
+        sw.primaryAxisAlignItems = 'CENTER'
+        sw.counterAxisAlignItems = 'CENTER'
+        sw.primaryAxisSizingMode = 'FIXED'
+        sw.counterAxisSizingMode = 'FIXED'
         sw.resize(56, 56)
         sw.cornerRadius = 8
         sw.fills = [boundFill(v, hex)]
         sw.strokes = [boundFill(borderVar, borderHex, 0.4)]
         sw.strokeWeight = 1
+        sw.appendChild(mkText(tone || '—', { size: 10, style: 'Medium', colorHex: onColor(hex), bindFamily: false }))
         cell.appendChild(sw)
-        cell.appendChild(mkText(tone || '—', { size: 10, style: 'Medium', colorVar: textVar, opacity: 0.9 }))
-        cell.appendChild(mkText(hex.toUpperCase(), { size: 9, colorVar: mutedVar, colorHex: mutedHex, opacity: 0.9 }))
+        const hx = mkText(hex.toUpperCase(), { size: 8, colorVar: mutedVar, colorHex: mutedHex, opacity: 0.9 })
+        hx.textAlignHorizontal = 'CENTER'
+        cell.appendChild(hx)
         ramp.appendChild(cell)
       }
-      famRow.appendChild(ramp)
-      body.appendChild(famRow)
     }
     root.appendChild(card)
     sections++
@@ -9129,12 +9271,6 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       .filter(([, px]) => px > 0)
       .sort((a, b) => b[1] - a[1])
     for (const [key, px] of sizes) {
-      const row = autoFrame(key, 'HORIZONTAL', 24)
-      row.counterAxisAlignItems = 'CENTER'
-      const label = mkText(`${key} · ${px}px`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
-      row.appendChild(label)
-      label.resize(150, label.height)
-      ;(label as TextNode).textAutoResize = 'HEIGHT'
       const spec = mkText('Almost before we knew it, we had left the ground.', {
         style: px >= 28 ? 'Semi Bold' : 'Regular',
         colorVar: textVar,
@@ -9146,8 +9282,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       if (lh) spec.lineHeight = { value: pxToFloat(lh), unit: 'PIXELS' }
       const lhv = bestVar(COLLECTIONS.typography, `line-height/${key}`)
       if (lhv) bindField(spec, 'lineHeight', lhv)
-      row.appendChild(spec)
-      body.appendChild(row)
+      typeSpecimenRow(body, key, 150, `${key} · ${px}px`, spec)
     }
     // Weights
     const wRow = autoFrame('weights', 'HORIZONTAL', 32)
@@ -9175,43 +9310,20 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         if (!d) continue
         const px = pxToFloat(tokens.typography.sizes[d.size] ?? '')
         if (!px) continue
-        // A row here spans display-2xl (72px) down to helper (12px) — the
-        // widest size range in the whole doc. BASELINE alignment on a HUG row
-        // with that much size variance left the row's reported height out of
-        // sync with the specimen's actual rendered box, so every row visually
-        // collapsed onto the next (the clipped/overlapping "Type roles" stack).
-        // CENTER is what the "sizes" list right above already uses safely —
-        // matching it here removes the one thing that differed between a
-        // working row and a broken one, and a vertically centered label reads
-        // fine next to a specimen of any size.
-        const row = autoFrame(`role-${key}`, 'HORIZONTAL', 24)
-        row.counterAxisAlignItems = 'CENTER'
-        const label = mkText(`${key}  →  ${d.size} / ${d.weight}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
-        row.appendChild(label)
-        label.resize(220, label.height)
-        label.textAutoResize = 'HEIGHT'
-        label.layoutSizingHorizontal = 'FIXED'
-        label.layoutSizingVertical = 'HUG'
+        // A row here spans display-2xl (72px) down to helper (12px). The
+        // specimen fills the remaining width and wraps (`typeSpecimenRow`) —
+        // WIDTH_AND_HEIGHT on a HUG row cropped the sentence at the card edge.
         const spec = mkText('Almost before we knew it, we had left the ground.', {
           style: weightStyle(d.weight),
           colorVar: textVar,
           colorHex: textHex,
         })
         spec.fontSize = px
-        // An explicit, deterministic line-height — the same "resize before
-        // trusting the box" reasoning as label above — so a display-size
-        // specimen never carries over a smaller row's auto line-height.
         spec.lineHeight = { value: 120, unit: 'PERCENT' }
-        spec.textAutoResize = 'WIDTH_AND_HEIGHT'
         bindField(spec, 'fontSize', bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`))
         bindField(spec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`))
         bindField(spec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body))
-        row.appendChild(spec)
-        spec.layoutSizingHorizontal = 'HUG'
-        spec.layoutSizingVertical = 'HUG'
-        roleBody.appendChild(row)
-        row.layoutSizingHorizontal = 'HUG'
-        row.layoutSizingVertical = 'HUG'
+        typeSpecimenRow(roleBody, `role-${key}`, 220, `${key}  →  ${d.size} / ${d.weight}`, spec)
       }
       root.appendChild(roleCard)
       sections++
@@ -9545,18 +9657,20 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     if (entries.length > 0) {
       await newBoard('Gradients')
       root.appendChild(sectionBar('Gradients'))
-      const { card, body } = section('Gradients', 'Named gradients from the configurator. Tags mark the surface each one is assigned to — the "cover" gradient paints the ⬡ Cover page.')
+      const { card, body } = section('Gradients', 'Named gradients from the configurator, resolved against the previewed accent ramp. Tags mark the surface each one is assigned to — the "cover" gradient paints the ⬡ Cover page.')
       const assigned = tokens.gradientAssignments ?? {}
+      const paintStylesByName = new Map(
+        (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s] as const),
+      )
       const row = autoFrame('gradients', 'HORIZONTAL', 24)
       row.layoutWrap = 'WRAP'
       row.counterAxisSpacing = 24
-      row.primaryAxisSizingMode = 'FIXED'
-      row.counterAxisSizingMode = 'AUTO'
-      row.resize(INNER_W, 100)
+      body.appendChild(row)
+      row.layoutSizingHorizontal = 'FILL'
       for (const [slug, css] of entries) {
-        const paint = parseCssGradient(css)
+        const paint = paintForNamedGradient(tokens, slug, css, 'light')
         if (!paint) continue
-        const cell = autoFrame(slug, 'VERTICAL', 8)
+        const cell = autoFrame(slug, 'VERTICAL', 10)
         const sw = figma.createFrame()
         sw.name = `gradient-${slug}`
         sw.resize(248, 140)
@@ -9564,12 +9678,13 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         sw.strokes = [boundFill(borderVar, borderHex)]
         sw.strokeWeight = 1
         sw.fills = [paint]
+        const style = paintStylesByName.get(`Gradient/${slug}`)
+        if (style) { try { await sw.setFillStyleIdAsync(style.id) } catch { /* keep the reminted paint */ } }
         cell.appendChild(sw)
         const tags = (['cover', 'avatar'] as const).filter((s) => assigned[s] === slug)
         cell.appendChild(mkText(slug + (tags.length ? `  ·  ${tags.join(' + ')}` : ''), { size: 11, style: 'Medium', colorVar: textVar, colorHex: textHex }))
         row.appendChild(cell)
       }
-      body.appendChild(row)
       root.appendChild(card)
       sections++
     }

@@ -1889,10 +1889,11 @@
       const v = upsertVarIn(semCol, semCache, entry.name, entry.type, scopes);
       for (const [mid, value] of entry.values) v.setValueForMode(mid, value);
     }
+    const modeNames = modeSpec.map(([, label]) => label).join(", ");
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_O = ARCH_LABEL[arch.kind]) != null ? _O : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_O = ARCH_LABEL[arch.kind]) != null ? _O : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
-      log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
+      log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
     pruneVars(semCache, new Set(desired), COLLECTIONS.semantics);
     for (const stale of existingCollections.filter((c) => LEGACY_COLLECTIONS.indexOf(c.name) !== -1)) {
@@ -2145,7 +2146,7 @@
     let body = m[2].trim();
     let angle = 180;
     if (radial) {
-      body = body.replace(/^circle\s+at\s+[^,]+,\s*/, "");
+      body = body.replace(/^(?:circle|ellipse)(?:\s+[\d.]+%?\s+[\d.]+%?)?\s+at\s+[^,]+,\s*/i, "");
     } else {
       const am = body.match(/^(-?\d+(?:\.\d+)?)deg\s*,\s*/);
       if (am) {
@@ -2182,15 +2183,67 @@
       ]
     };
   }
+  var LINKED_GRADIENT_TONES = {
+    "brand-cover": [{ tone: 9, pos: 0 }, { tone: 12, pos: 100 }],
+    aurora: [{ tone: 7, pos: 0 }, { tone: 9, pos: 50 }, { tone: 11, pos: 100 }],
+    "moss-glow": [{ tone: 7, pos: 0 }, { tone: 11, pos: 100 }]
+  };
+  function linkedBrandStops(tokens, slug, appearance) {
+    var _a, _b;
+    const sig = LINKED_GRADIENT_TONES[slug];
+    if (!sig) return null;
+    const brand = brandFamilyFromTokens(tokens);
+    const lightFam = brand.replace(/-dark$/, "");
+    const darkFam = lightFam.endsWith("-dark") ? lightFam : `${lightFam}-dark`;
+    const family = appearance === "dark" ? darkFam : lightFam;
+    const prim = (_a = tokens.colors.primitive) != null ? _a : {};
+    const out = [];
+    for (const { tone, pos } of sig) {
+      const keys = [String(tone), tone < 10 ? `0${tone}` : String(tone)];
+      const hex = (_b = familyToneHex(prim, family, keys)) != null ? _b : familyToneHex(prim, lightFam, keys);
+      if (!hex) return null;
+      out.push({ color: hexToRgba(hex), position: pos / 100 });
+    }
+    return out;
+  }
+  function defaultGradientPaint(slug, gradientStops) {
+    if (slug === "moss-glow") {
+      const cx = 0.3, cy = 0.3, r = 0.9;
+      return {
+        type: "GRADIENT_RADIAL",
+        gradientStops,
+        gradientTransform: [[r, 0, cx - r / 2], [0, r, cy - r / 2]]
+      };
+    }
+    const angle = slug === "aurora" ? 120 : 135;
+    const rad = (angle - 90) * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    return {
+      type: "GRADIENT_LINEAR",
+      gradientStops,
+      gradientTransform: [
+        [cos, sin, 0.5 - 0.5 * cos - 0.5 * sin],
+        [-sin, cos, 0.5 + 0.5 * sin - 0.5 * cos]
+      ]
+    };
+  }
+  function paintForNamedGradient(tokens, slug, css, appearance = "light") {
+    const parsed = css ? parseCssGradient(css) : null;
+    const linked = linkedBrandStops(tokens, slug, appearance);
+    if (parsed && linked) return __spreadProps(__spreadValues({}, parsed), { gradientStops: linked });
+    if (parsed) return parsed;
+    if (linked) return defaultGradientPaint(slug, linked);
+    return null;
+  }
   function assignedGradient(tokens, surface) {
     var _a, _b, _c;
     const slug = (_a = tokens.gradientAssignments) == null ? void 0 : _a[surface];
     if (!slug) return null;
     const css = (_c = previewGradients(tokens).light[slug]) != null ? _c : (_b = tokens.gradients) == null ? void 0 : _b[slug];
-    return css ? parseCssGradient(css) : null;
+    return paintForNamedGradient(tokens, slug, css, "light");
   }
   async function importStyles(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
     let count = 0;
     const previewType = previewTypography(tokens);
     const fontFamily = normalizeFontFamilyName(previewType.fontFamily);
@@ -2231,17 +2284,17 @@
       let darkMade = 0;
       const unparsed = [];
       for (const [slug, css] of Object.entries(gradients)) {
-        const paint = parseCssGradient(css);
+        const paint = paintForNamedGradient(tokens, slug, css, "light");
         if (!paint) {
           unparsed.push(slug);
           continue;
         }
         upsertPaint(`Gradient/${slug}`, paint);
         made++;
-        const darkCss = gradientsDark[slug];
-        if (darkCss && darkCss !== css) {
-          const darkPaint = parseCssGradient(darkCss);
-          if (darkPaint) {
+        const darkPaint = paintForNamedGradient(tokens, slug, (_c = gradientsDark[slug]) != null ? _c : css, "dark");
+        if (darkPaint) {
+          const sameStops = darkPaint.gradientStops.length === paint.gradientStops.length && darkPaint.gradientStops.every((s, i) => s.position === paint.gradientStops[i].position && s.color.r === paint.gradientStops[i].color.r && s.color.g === paint.gradientStops[i].color.g && s.color.b === paint.gradientStops[i].color.b && s.color.a === paint.gradientStops[i].color.a);
+          if (!sameStops) {
             upsertPaint(`Gradient/${slug} (Dark)`, darkPaint);
             darkMade++;
           }
@@ -2273,7 +2326,7 @@
       }
     }
     const { loadedFamilies, fontFor: fontForStyle } = await createFontResolver(tokens);
-    const weightMap = (_c = tokens.typography.weights) != null ? _c : {};
+    const weightMap = (_d = tokens.typography.weights) != null ? _d : {};
     function resolvedStyle(weightKey) {
       var _a2, _b2;
       const val = (_b2 = weightMap[weightKey]) != null ? _b2 : weightKey.startsWith("display") ? (_a2 = weightMap.semibold) != null ? _a2 : 600 : 400;
@@ -2303,17 +2356,17 @@
         ts.fontName = { family: "Inter", style: fontStyle };
       }
       ts.fontSize = sizePx;
-      const lhVal = (_d = tokens.typography.lineHeights) == null ? void 0 : _d[sizeKey];
+      const lhVal = (_e = tokens.typography.lineHeights) == null ? void 0 : _e[sizeKey];
       ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
-      const lsVal = (_e = tokens.typography.letterSpacings) == null ? void 0 : _e[sizeKey];
+      const lsVal = (_f = tokens.typography.letterSpacings) == null ? void 0 : _f[sizeKey];
       ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
       bindTextStyle(
         ts,
         "fontFamily",
-        (_h = (_g = isHeading ? (_f = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _f : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _g : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _h : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
+        (_i = (_h = isHeading ? (_g = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _g : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _h : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _i : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
       );
       bindTextStyle(ts, "fontSize", typoVars.get(`size/${sizeKey}`));
-      bindTextStyle(ts, "fontWeight", (_i = typoVars.get(`weight/${isHeading ? "semibold" : "regular"}`)) != null ? _i : typoVars.get("weight/regular"));
+      bindTextStyle(ts, "fontWeight", (_j = typoVars.get(`weight/${isHeading ? "semibold" : "regular"}`)) != null ? _j : typoVars.get("weight/regular"));
       bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${sizeKey}`));
       bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${sizeKey}`));
     }
@@ -2347,17 +2400,17 @@
           ts.fontName = { family: "Inter", style: fontStyle };
         }
         ts.fontSize = sizePx;
-        const lhVal = (_j = tokens.typography.lineHeights) == null ? void 0 : _j[d.size];
+        const lhVal = (_k = tokens.typography.lineHeights) == null ? void 0 : _k[d.size];
         ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
-        const lsVal = (_k = tokens.typography.letterSpacings) == null ? void 0 : _k[d.size];
+        const lsVal = (_l = tokens.typography.letterSpacings) == null ? void 0 : _l[d.size];
         ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
         bindTextStyle(
           ts,
           "fontFamily",
-          (_o = (_n = (_m = typoVars.get(`role/${key}/family`)) != null ? _m : isHeading ? (_l = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _l : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _n : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _o : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
+          (_p = (_o = (_n = typoVars.get(`role/${key}/family`)) != null ? _n : isHeading ? (_m = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _m : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _o : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _p : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
         );
-        bindTextStyle(ts, "fontSize", (_p = typoVars.get(`role/${key}/size`)) != null ? _p : typoVars.get(`size/${d.size}`));
-        bindTextStyle(ts, "fontWeight", (_q = typoVars.get(`role/${key}/weight`)) != null ? _q : typoVars.get(`weight/${d.weight}`));
+        bindTextStyle(ts, "fontSize", (_q = typoVars.get(`role/${key}/size`)) != null ? _q : typoVars.get(`size/${d.size}`));
+        bindTextStyle(ts, "fontWeight", (_r = typoVars.get(`role/${key}/weight`)) != null ? _r : typoVars.get(`weight/${d.weight}`));
         bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${d.size}`));
         bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${d.size}`));
         roleStyles++;
@@ -2387,7 +2440,7 @@
       for (const [key, css] of Object.entries(tokens.shadows)) {
         if (upsertEffect(`Shadow/${key}`, css)) made++;
         else unparsed.push(key);
-        const darkCss = (_r = tokens.shadowsDark) == null ? void 0 : _r[key];
+        const darkCss = (_s = tokens.shadowsDark) == null ? void 0 : _s[key];
         if (darkCss && darkCss !== css) {
           if (upsertEffect(`Shadow/${key} (Dark)`, darkCss)) darkMade++;
         }
@@ -2399,7 +2452,7 @@
         log(`\u26A0 ${unparsed.length} shadow${unparsed.length > 1 ? "s" : ""} couldn't be converted to a Figma effect (${unparsed.join(", ")}) \u2014 unsupported CSS box-shadow form`);
       }
     }
-    if ((_s = tokens.grid) == null ? void 0 : _s.columns) {
+    if ((_t = tokens.grid) == null ? void 0 : _t.columns) {
       const name = `Grid/${tokens.grid.columns} columns`;
       const gridByName = new Map(
         (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s])
@@ -2412,8 +2465,8 @@
         pattern: "COLUMNS",
         alignment: "STRETCH",
         count: parseInt(tokens.grid.columns) || 12,
-        gutterSize: pxToFloat((_t = tokens.grid.gutter) != null ? _t : "24px"),
-        offset: pxToFloat((_u = tokens.grid.margin) != null ? _u : "32px")
+        gutterSize: pxToFloat((_u = tokens.grid.gutter) != null ? _u : "24px"),
+        offset: pxToFloat((_v = tokens.grid.margin) != null ? _v : "32px")
       }];
       log(`\u2713 Grid style (${name})`);
     }
@@ -6805,6 +6858,24 @@
       f.fills = [];
       return f;
     }
+    function typeSpecimenRow(parent, name, labelW, labelChars, spec) {
+      const row = autoFrame(name, "HORIZONTAL", 24);
+      parent.appendChild(row);
+      row.layoutSizingHorizontal = "FILL";
+      row.counterAxisAlignItems = "CENTER";
+      const label = mkText(labelChars, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
+      row.appendChild(label);
+      label.resize(labelW, label.height);
+      label.textAutoResize = "HEIGHT";
+      label.layoutSizingHorizontal = "FIXED";
+      label.layoutSizingVertical = "HUG";
+      row.appendChild(spec);
+      spec.textAutoResize = "HEIGHT";
+      spec.layoutSizingHorizontal = "FILL";
+      spec.layoutGrow = 1;
+      spec.layoutSizingVertical = "HUG";
+      return row;
+    }
     const CARD_W = 1180;
     const INNER_W = CARD_W - 80;
     const solid = (hex, opacity = 1) => ({ type: "SOLID", color: hexToRgb(hex), opacity });
@@ -6823,16 +6894,19 @@
       card.paddingLeft = 40;
       card.paddingRight = 40;
       vStack(card, CARD_W);
+      card.clipsContent = false;
       const head = autoFrame(`${title}__head`, "VERTICAL", 8);
+      card.appendChild(head);
+      head.layoutSizingHorizontal = "FILL";
       head.appendChild(mkText(title, { size: 24, style: "Semi Bold", colorVar: textVar, colorHex: textHex }));
       const sub = mkText(subtitle, { size: 12, colorVar: mutedVar, colorHex: mutedHex });
       sub.textAutoResize = "NONE";
       sub.resize(INNER_W, 200);
       sub.textAutoResize = "HEIGHT";
       head.appendChild(sub);
-      card.appendChild(head);
       const body = autoFrame(`${title}__body`, "VERTICAL", 20);
       card.appendChild(body);
+      body.layoutSizingHorizontal = "FILL";
       return { card, body };
     }
     function sectionBar(label) {
@@ -6863,6 +6937,7 @@
       const idx = String(boards.length + 1).padStart(2, "0");
       const b = autoFrame(`${idx} \xB7 ${label}`, "VERTICAL", 24);
       b.fills = [boundFill(surfaceVar, surfaceHex)];
+      b.clipsContent = false;
       b.paddingTop = 48;
       b.paddingBottom = 96;
       b.paddingLeft = 48;
@@ -6995,37 +7070,61 @@
       await newBoard("Primitive Colors");
       root.appendChild(sectionBar("Primitive Colors"));
       const { card, body } = section("Primitives", "The raw color ramps \u2014 unopinionated source values that every semantic token aliases. Never used directly in designs.");
+      body.itemSpacing = 32;
       const families = /* @__PURE__ */ new Map();
       for (const [key, hex] of Object.entries(tokens.colors.primitive)) {
         if (!hex) continue;
+        const dash = key.lastIndexOf("-");
+        const famKey = dash === -1 ? key : key.slice(0, dash);
         const name = primitiveVarName(key);
         const slash = name.lastIndexOf("/");
-        const fam = slash === -1 ? name : name.slice(0, slash);
         const tone = slash === -1 ? "" : name.slice(slash + 1);
-        if (!families.has(fam)) families.set(fam, []);
-        families.get(fam).push({ tone, hex, v: findVar(COLLECTIONS.primitives, name) });
+        let heading = primitiveGroupFor(famKey);
+        if (famKey.endsWith("-a") && !/alpha/i.test(heading)) heading = `${heading} Alpha`;
+        if (!families.has(famKey)) families.set(famKey, { heading, tones: [] });
+        families.get(famKey).tones.push({ tone, hex, v: findVar(COLLECTIONS.primitives, name) });
       }
-      for (const [fam, tones] of families) {
-        const famRow = autoFrame(fam, "VERTICAL", 8);
-        famRow.appendChild(mkText(fam, { size: 12, style: "Medium", colorVar: mutedVar, colorHex: mutedHex }));
-        const ramp = autoFrame(`${fam}__ramp`, "HORIZONTAL", 8);
+      const famKeys = [...families.keys()].sort((a, b) => comparePrimitiveKeys(`${a}-1`, `${b}-1`));
+      let prevStem = "";
+      for (const famKey of famKeys) {
+        const { heading, tones } = families.get(famKey);
+        const famRow = autoFrame(heading, "VERTICAL", 12);
+        famRow.clipsContent = false;
+        const stem = familyBaseKey(famKey);
+        if (prevStem && stem !== prevStem) famRow.paddingTop = 16;
+        prevStem = stem;
+        body.appendChild(famRow);
+        famRow.layoutSizingHorizontal = "FILL";
+        famRow.appendChild(mkText(heading, { size: 12, style: "Medium", colorVar: mutedVar, colorHex: mutedHex }));
+        const ramp = autoFrame(`${heading}__ramp`, "HORIZONTAL", 10);
+        ramp.layoutWrap = "WRAP";
+        ramp.counterAxisSpacing = 16;
+        ramp.clipsContent = false;
+        famRow.appendChild(ramp);
+        ramp.layoutSizingHorizontal = "FILL";
         for (const { tone, hex, v } of tones) {
-          const cell = autoFrame(`${fam}/${tone}`, "VERTICAL", 6);
+          const cell = autoFrame(`${heading}/${tone}`, "VERTICAL", 8);
           cell.counterAxisAlignItems = "CENTER";
+          cell.clipsContent = false;
           const sw = figma.createFrame();
           sw.name = "swatch";
+          sw.layoutMode = "VERTICAL";
+          sw.primaryAxisAlignItems = "CENTER";
+          sw.counterAxisAlignItems = "CENTER";
+          sw.primaryAxisSizingMode = "FIXED";
+          sw.counterAxisSizingMode = "FIXED";
           sw.resize(56, 56);
           sw.cornerRadius = 8;
           sw.fills = [boundFill(v, hex)];
           sw.strokes = [boundFill(borderVar, borderHex, 0.4)];
           sw.strokeWeight = 1;
+          sw.appendChild(mkText(tone || "\u2014", { size: 10, style: "Medium", colorHex: onColor(hex), bindFamily: false }));
           cell.appendChild(sw);
-          cell.appendChild(mkText(tone || "\u2014", { size: 10, style: "Medium", colorVar: textVar, opacity: 0.9 }));
-          cell.appendChild(mkText(hex.toUpperCase(), { size: 9, colorVar: mutedVar, colorHex: mutedHex, opacity: 0.9 }));
+          const hx = mkText(hex.toUpperCase(), { size: 8, colorVar: mutedVar, colorHex: mutedHex, opacity: 0.9 });
+          hx.textAlignHorizontal = "CENTER";
+          cell.appendChild(hx);
           ramp.appendChild(cell);
         }
-        famRow.appendChild(ramp);
-        body.appendChild(famRow);
       }
       root.appendChild(card);
       sections++;
@@ -7330,12 +7429,6 @@
       const { card, body } = section("Typography", `Family \u201C${fontFamily}\u201D${tokens.typography.headingFontFamily && tokens.typography.headingFontFamily !== fontFamily ? ` \xB7 headings \u201C${tokens.typography.headingFontFamily}\u201D` : ""} \u2014 sizes, weights, line-heights bound to Typography variables.`);
       const sizes = Object.entries(tokens.typography.sizes).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => b[1] - a[1]);
       for (const [key, px] of sizes) {
-        const row = autoFrame(key, "HORIZONTAL", 24);
-        row.counterAxisAlignItems = "CENTER";
-        const label = mkText(`${key} \xB7 ${px}px`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
-        row.appendChild(label);
-        label.resize(150, label.height);
-        label.textAutoResize = "HEIGHT";
         const spec = mkText("Almost before we knew it, we had left the ground.", {
           style: px >= 28 ? "Semi Bold" : "Regular",
           colorVar: textVar
@@ -7347,8 +7440,7 @@
         if (lh) spec.lineHeight = { value: pxToFloat(lh), unit: "PIXELS" };
         const lhv = bestVar(COLLECTIONS.typography, `line-height/${key}`);
         if (lhv) bindField(spec, "lineHeight", lhv);
-        row.appendChild(spec);
-        body.appendChild(row);
+        typeSpecimenRow(body, key, 150, `${key} \xB7 ${px}px`, spec);
       }
       const wRow = autoFrame("weights", "HORIZONTAL", 32);
       for (const [wKey, wVal] of Object.entries((_h = tokens.typography.weights) != null ? _h : {})) {
@@ -7374,14 +7466,6 @@
           if (!d) continue;
           const px = pxToFloat((_i = tokens.typography.sizes[d.size]) != null ? _i : "");
           if (!px) continue;
-          const row = autoFrame(`role-${key}`, "HORIZONTAL", 24);
-          row.counterAxisAlignItems = "CENTER";
-          const label = mkText(`${key}  \u2192  ${d.size} / ${d.weight}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
-          row.appendChild(label);
-          label.resize(220, label.height);
-          label.textAutoResize = "HEIGHT";
-          label.layoutSizingHorizontal = "FIXED";
-          label.layoutSizingVertical = "HUG";
           const spec = mkText("Almost before we knew it, we had left the ground.", {
             style: weightStyle(d.weight),
             colorVar: textVar,
@@ -7389,16 +7473,10 @@
           });
           spec.fontSize = px;
           spec.lineHeight = { value: 120, unit: "PERCENT" };
-          spec.textAutoResize = "WIDTH_AND_HEIGHT";
           bindField(spec, "fontSize", bestVar(COLLECTIONS.typography, `role/${key}/size`, `size/${d.size}`));
           bindField(spec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`));
           bindField(spec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body));
-          row.appendChild(spec);
-          spec.layoutSizingHorizontal = "HUG";
-          spec.layoutSizingVertical = "HUG";
-          roleBody.appendChild(row);
-          row.layoutSizingHorizontal = "HUG";
-          row.layoutSizingVertical = "HUG";
+          typeSpecimenRow(roleBody, `role-${key}`, 220, `${key}  \u2192  ${d.size} / ${d.weight}`, spec);
         }
         root.appendChild(roleCard);
         sections++;
@@ -7705,18 +7783,20 @@
       if (entries.length > 0) {
         await newBoard("Gradients");
         root.appendChild(sectionBar("Gradients"));
-        const { card, body } = section("Gradients", 'Named gradients from the configurator. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
+        const { card, body } = section("Gradients", 'Named gradients from the configurator, resolved against the previewed accent ramp. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
         const assigned = (_A = tokens.gradientAssignments) != null ? _A : {};
+        const paintStylesByName = new Map(
+          (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s])
+        );
         const row = autoFrame("gradients", "HORIZONTAL", 24);
         row.layoutWrap = "WRAP";
         row.counterAxisSpacing = 24;
-        row.primaryAxisSizingMode = "FIXED";
-        row.counterAxisSizingMode = "AUTO";
-        row.resize(INNER_W, 100);
+        body.appendChild(row);
+        row.layoutSizingHorizontal = "FILL";
         for (const [slug, css] of entries) {
-          const paint = parseCssGradient(css);
+          const paint = paintForNamedGradient(tokens, slug, css, "light");
           if (!paint) continue;
-          const cell = autoFrame(slug, "VERTICAL", 8);
+          const cell = autoFrame(slug, "VERTICAL", 10);
           const sw = figma.createFrame();
           sw.name = `gradient-${slug}`;
           sw.resize(248, 140);
@@ -7724,12 +7804,18 @@
           sw.strokes = [boundFill(borderVar, borderHex)];
           sw.strokeWeight = 1;
           sw.fills = [paint];
+          const style = paintStylesByName.get(`Gradient/${slug}`);
+          if (style) {
+            try {
+              await sw.setFillStyleIdAsync(style.id);
+            } catch (e) {
+            }
+          }
           cell.appendChild(sw);
           const tags = ["cover", "avatar"].filter((s) => assigned[s] === slug);
           cell.appendChild(mkText(slug + (tags.length ? `  \xB7  ${tags.join(" + ")}` : ""), { size: 11, style: "Medium", colorVar: textVar, colorHex: textHex }));
           row.appendChild(cell);
         }
-        body.appendChild(row);
         root.appendChild(card);
         sections++;
       }

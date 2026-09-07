@@ -25,14 +25,17 @@
 
      THE ELEVATION LADDER — four rungs, always climbed in the same order:
        --nav       shell frame: icon rail, header, step bar, footer, progress
-       --app       working canvas + the aside
-       --surface   a card on that canvas
-       --elevated  a tile nested inside a card, and every hover fill
-     The direction flips between themes (light runs lightest→darkest, dark
-     runs darkest→lightest) but "one rung up" always means "one step further
-     from the page", which is what keeps the two readings of the ladder the
-     same shape. Never skip a rung to get more separation — the tightness is
-     deliberate (dark measures ΔL 0.083 page→card, 0.030 card→tile).
+       --app       working canvas + the aside (surface.page)
+       --surface   layer-1: inset wells ON a card (fields, secondary fills,
+                   nested tiles). Not the card itself.
+       --elevated  layer-2: CARDS, and hover fills on the shell (--nav/--app).
+     Cards used to sit on --surface. Dark ΔL page→layer-1 is 0.083 and
+     layer-1→layer-2 is 0.030, so a card at layer-1 read as the page with a
+     hairline — the wash in the screenshot. Layer-2 is the first rung that
+     actually lifts, and it pairs with Shadow/sm (the same pairing the
+     generated Card component uses). Nested tiles step DOWN to --surface so
+     they stay visible on the new card fill — never skip a rung the other
+     way either.
 
      THE ACCENT IS THE ONE THING THAT STAYS THE PLUGIN'S OWN — violet. It is
      split the way the app splits it, because ink and fill are different
@@ -130,6 +133,10 @@
     --status-danger-on-inverse:  #f87171;
     --status-success-ink:   #04231a;   /* 7.4:1 on the emerald fill; white is 2.54 */
 
+    /* Shadow/sm — SHADOW_DEFAULT.sm. Cards float with this, not with a
+       heavier overlay (that's the toast). */
+    --shadow-sm: 0 1px 3px rgba(10,13,18,0.10), 0 1px 2px -1px rgba(10,13,18,0.10);
+
     color-scheme: light;
   }
 
@@ -167,6 +174,8 @@
       --status-warning-solid: #f59e0b;
       --status-success-on-inverse: #047857;
       --status-danger-on-inverse:  #b91c1c;
+      /* darkShadow(SHADOW_DEFAULT.sm) — rim first, then the remapped layers. */
+      --shadow-sm: 0 0 0 1px rgba(255,255,255,0.065), 0 1px 3px rgba(0,0,0,0.469), 0 1px 2px -1px rgba(0,0,0,0.469);
       color-scheme: dark;
     }
   }
@@ -192,6 +201,7 @@
     --status-warning-solid: #f59e0b;
     --status-success-on-inverse: #047857;
     --status-danger-on-inverse:  #b91c1c;
+    --shadow-sm: 0 0 0 1px rgba(255,255,255,0.065), 0 1px 3px rgba(0,0,0,0.469), 0 1px 2px -1px rgba(0,0,0,0.469);
     color-scheme: dark;
   }
   :root[data-theme="light"] {
@@ -247,9 +257,14 @@
     --sp-3: 12px;
     --sp-4: 16px;
 
-    /* ── Shadow — the app's overlay elevation. Chrome here is separated by
-       surface, not by shadow; the toast is the only thing that floats. ── */
+    /* ── Shadow ──
+       Cards use --shadow-sm (declared with the surfaces, theme-flipped).
+       The toast is the one overlay; it keeps the heavier lift. */
     --shadow-overlay: 0 16px 48px -12px rgba(0, 0, 0, 0.28);
+
+    /* Size/sm — compact control. Buttons, text fields and selects share
+       this so a row of "field + action" lands on one baseline. */
+    --control-h: 32px;
 
     --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
     --mono: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
@@ -471,13 +486,17 @@
      single card, glaring the moment Live Sync folded into Overview. */
   .panel { display: flex; flex-direction: column; gap: var(--sp-3); }
 
-  /* ── Cards ── */
+  /* ── Cards ──
+     Layer-2 fill + Shadow/sm. A card at --surface (layer-1) was ΔL 0.083
+     off the page in dark — a hairline, not a surface. --elevated is the
+     first rung that reads as sitting ON the canvas. */
   .card {
-    background: var(--surface);
+    background: var(--elevated);
     border: var(--line-width) solid var(--line);
     border-radius: var(--radius-lg);
     padding: 14px;
     display: flex; flex-direction: column; gap: 10px;
+    box-shadow: var(--shadow-sm);
   }
   .card-title {
     font-size: var(--text-mini); font-weight: 600;
@@ -534,10 +553,12 @@
   textarea::placeholder { color: var(--fg-faint); }
 
   .input-row { display: flex; gap: 8px; align-items: center; }
+  .input-row .btn { flex-shrink: 0; }
   input[type="text"] {
-    flex: 1; min-width: 0; background: var(--app); border: var(--line-width) solid var(--line-strong);
+    flex: 1; min-width: 0; height: var(--control-h);
+    background: var(--app); border: var(--line-width) solid var(--line-strong);
     border-radius: var(--radius-md); color: var(--fg); font-family: var(--mono);
-    font-size: var(--text-caption); padding: 8px 10px;
+    font-size: var(--text-caption); padding: 0 10px; line-height: 1.2;
     outline: none; transition: border-color 140ms var(--ease);
   }
   input[type="text"]:focus { border-color: var(--accent-ui); }
@@ -547,7 +568,10 @@
      currentColor/var() don't reliably reach into a data-URI's own fill, but a
      mask takes only the shape from the SVG and paints it with a real
      background-color — so the arrow tracks the theme like everything else. */
-  .select-wrap { position: relative; display: inline-flex; min-width: 0; }
+  .select-wrap {
+    position: relative; display: inline-flex; min-width: 0;
+    height: var(--control-h); align-items: stretch;
+  }
   .select-wrap::after {
     content: ''; position: absolute; top: 50%; right: 9px;
     width: 8px; height: 8px; transform: translateY(-50%);
@@ -561,46 +585,56 @@
 
   select {
     appearance: none; -webkit-appearance: none; -moz-appearance: none;
-    width: 100%; background: var(--app); border: var(--line-width) solid var(--line-strong);
+    width: 100%; height: 100%;
+    background: var(--app); border: var(--line-width) solid var(--line-strong);
     border-radius: var(--radius-md); color: var(--fg); font-size: var(--text-caption);
     font-family: var(--font); cursor: pointer;
-    padding: 6px 26px 6px 10px; outline: none;
+    padding: 0 26px 0 10px; outline: none; line-height: 1.2;
     transition: border-color 140ms var(--ease);
   }
   select:hover { border-color: var(--fg-faint); }
   select:focus { border-color: var(--accent-ui); }
 
-  /* ── Buttons ── */
+  /* ── Buttons ──
+     Same outer height as text fields and selects (--control-h / Size sm).
+     Padding is horizontal only; vertical centering is flex. .btn-sm keeps
+     the caption type and tighter sides — it does NOT shrink the box, which
+     is what made "Start sync" sit shorter than the ID field beside it. */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    font-size: var(--text-body); font-weight: 500; border: none; border-radius: var(--radius-md);
-    cursor: pointer; padding: 8px 14px; white-space: nowrap;
+    height: var(--control-h); padding: 0 14px;
+    font-size: var(--text-body); font-weight: 500; line-height: 1;
+    border: none; border-radius: var(--radius-md);
+    cursor: pointer; white-space: nowrap;
     transition: background 140ms var(--ease), color 140ms var(--ease),
                 border-color 140ms var(--ease), transform 80ms var(--ease);
   }
   .btn:active:not(:disabled) { transform: translateY(0.5px); }
   .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  @media (prefers-reduced-motion: reduce) {
+    .btn:active:not(:disabled) { transform: none; }
+  }
 
   .btn-primary { background: var(--accent-solid); color: var(--accent-ink); }
   .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
 
-  /* `--elevated` fill + `--line` edge is the app's first control pattern:
-     the fill is what separates the button, so the outline can recede. With
-     a transparent fill the alpha hairline was the ONLY thing drawing it,
-     and at 5–10% that is not a button. */
+  /* Inset on the card: --surface is one rung DOWN from --elevated, so a
+     secondary fill stays visible now that cards occupy layer-2. A
+     transparent fill would leave only the alpha hairline, which is not a
+     button. */
   .btn-secondary {
-    background: var(--elevated); color: var(--fg-muted);
+    background: var(--surface); color: var(--fg-muted);
     border: var(--line-width) solid var(--line);
   }
   .btn-secondary:hover:not(:disabled) { color: var(--fg); border-color: var(--line-strong); }
 
-  .btn-sm { padding: 6px 10px; font-size: var(--text-caption); }
+  .btn-sm { padding: 0 10px; font-size: var(--text-caption); }
   .btn-success { background: var(--status-success-solid) !important; color: var(--status-success-ink) !important; }
 
   /* ── Scope cards (what to import) ── */
   .scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .scope {
-    text-align: left; background: var(--elevated);
+    text-align: left; background: var(--surface);
     border: var(--line-width) solid var(--line-strong); border-radius: var(--radius-lg);
     padding: 10px 12px 12px; cursor: pointer;
     display: flex; flex-direction: column; gap: 4px;
@@ -632,7 +666,7 @@
   .component-mode-option {
     appearance: none; text-align: left; cursor: pointer;
     padding: 9px 10px; border-radius: var(--radius-md);
-    border: var(--line-width) solid var(--line-strong); background: var(--elevated); color: var(--fg-muted);
+    border: var(--line-width) solid var(--line-strong); background: var(--surface); color: var(--fg-muted);
     display: flex; flex-direction: column; gap: 2px;
     transition: border-color 140ms var(--ease), background 140ms var(--ease), color 140ms var(--ease);
   }
@@ -659,7 +693,7 @@
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px; width: 100%; padding: 10px 12px; margin: 0;
     border: var(--line-width) solid var(--line-strong); border-radius: var(--radius-lg);
-    background: var(--elevated); cursor: pointer; text-align: left;
+    background: var(--surface); cursor: pointer; text-align: left;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
   .export-opt + .export-opt { margin-top: 8px; }
@@ -814,11 +848,12 @@
   .ov-states { display: flex; gap: 6px; }
   .ov-states .color-dot { width: 14px; height: 14px; border-radius: var(--radius-sm); }
 
-  .ov-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
-  /* Edit / Create on the web is the payoff — full row, then the local action. */
-  .ov-actions .btn-primary { flex: 1 1 100%; }
+  .ov-actions {
+    display: flex; flex-direction: column; gap: var(--sp-2);
+    align-items: stretch; width: 100%;
+  }
   .export-actions { display: flex; gap: 6px; flex-shrink: 0; }
-  .ov-empty { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  .ov-empty { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
   .ov-empty p { font-size: var(--text-body); color: var(--fg-muted); line-height: 1.6; }
 
   /* Identity and Foundations are one thing — "the system this file is on" —
@@ -891,7 +926,8 @@
   .ov-sync.is-live { border-color: var(--accent-ui); }
   .sync-check { font-size: var(--text-mini); color: var(--fg-faint); font-family: var(--mono); flex-shrink: 0; }
   .sync-config { display: flex; flex-direction: column; gap: var(--sp-2); }
-  .sync-meta { display: flex; align-items: center; gap: var(--sp-2); }
+  .sync-meta { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
+  .sync-meta .btn { flex-shrink: 0; }
   .sync-meta label { font-size: var(--text-caption); color: var(--fg-muted); flex-shrink: 0; }
   /* Wide enough for the longest option ("5 minutes") plus the chevron's 26px
      of right padding — it used to hug its content and clip the label. */
@@ -999,7 +1035,7 @@
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
     min-height: 96px; user-select: none;
   }
-  .drop-zone:hover { border-color: var(--fg-faint); background: var(--elevated); }
+  .drop-zone:hover { border-color: var(--fg-faint); background: var(--surface); }
   .drop-zone.drag-active { border-color: var(--accent-ui); border-style: solid; background: var(--accent-wash); }
   .drop-zone.loaded { border-color: var(--status-success); border-style: solid; background: var(--success-wash); }
   .drop-icon { font-size: var(--text-title); line-height: 1.2; color: var(--fg-faint); transition: color 140ms var(--ease); }
