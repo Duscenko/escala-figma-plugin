@@ -83,6 +83,14 @@ interface DesignTokens {
   // value" — which is why importStyles only creates a second paint style when
   // the two actually differ.
   gradientsDark?: Record<string, string>
+  // Per-THEME gradients, keyed exactly like `foundationsByTheme` (Sync
+  // flattens to `theme::light` / `theme::dark`). A linked gradient stop
+  // REFERENCES a tone of "the accent", and which family that is depends on
+  // the theme (`themeSources[t].brand`) — so root `gradients`/`gradientsDark`
+  // stay the GLOBAL accent's resolution, which for any system whose shipped
+  // themes were minted from a System Style is a colour that appears nowhere
+  // in `colors.primitive`. Prefer this map; see previewGradients().
+  gradientsByTheme?: Record<string, Record<string, string>>
   gradientAssignments?: { cover?: string | null; avatar?: string | null }
   radius: Record<string, string>
   radiusRoles?: Record<string, string>
@@ -303,6 +311,40 @@ function previewRadius(tokens: DesignTokens): {
     radius: over?.radius ?? root,
     radiusRoles: over?.radiusRoles ?? rootRoles,
   }
+}
+
+// The gradients of the PREVIEWED theme, light and dark, with the root maps as
+// the fallback — the same split previewTypography/previewRadius already make
+// for the typeface and the corners, and for the same reason: a linked stop is
+// a REFERENCE to a tone of "the accent", so its resolved CSS is per theme.
+// Root `gradients` is the global accent's resolution and goes stale the moment
+// a theme is minted from another brand family: measured on a shipped green
+// system, `Gradient/brand-cover` painted #9522e9 → #472668, two violets that
+// exist in no primitive the payload ships.
+function previewGradients(tokens: DesignTokens): { light: Record<string, string>; dark: Record<string, string> } {
+  const rootLight = tokens.gradients ?? {}
+  const rootDark = tokens.gradientsDark ?? rootLight
+  const byTheme = tokens.gradientsByTheme
+  if (!byTheme || Object.keys(byTheme).length === 0) return { light: rootLight, dark: rootDark }
+  const order = tokens.colors.themeOrder ?? []
+  const keys = [...order.filter((k) => byTheme[k]), ...Object.keys(byTheme).filter((k) => !order.includes(k))]
+  if (keys.length === 0) return { light: rootLight, dark: rootDark }
+  // Sync ships one key per `theme::appearance`; an un-flattened My-theme ships
+  // a bare theme key and carries only the one appearance it is.
+  const baseOf = (k: string) => (k.includes('::') ? k.slice(0, k.indexOf('::')) : k)
+  const appearanceOf = (k: string) => (k.includes('::') ? k.slice(k.indexOf('::') + 2).toLowerCase() : '')
+  const active = activeThemeKey(tokens)
+  const preferred = keys.find((k) => k === active) ?? keys.find((k) => baseOf(k) === baseOf(active)) ?? keys[0]
+  const family = baseOf(preferred)
+  const lightKey = keys.find((k) => baseOf(k) === family && appearanceOf(k) === 'light')
+    ?? (appearanceOf(preferred) === 'dark' ? undefined : preferred)
+  const darkKey = keys.find((k) => baseOf(k) === family && appearanceOf(k) === 'dark')
+  const light = (lightKey !== undefined ? byTheme[lightKey] : undefined) ?? byTheme[preferred] ?? rootLight
+  // No themed dark half → the themed light one, NOT root `gradientsDark`:
+  // pairing a themed light with a global dark ships two different brands under
+  // one slug. Equal values are how importStyles already says "no dark variant".
+  const dark = (darkKey !== undefined ? byTheme[darkKey] : undefined) ?? light
+  return { light, dark }
 }
 
 function varStringAt(v: Variable, modeId: string): string | undefined {
@@ -1945,6 +1987,12 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   })()
   // Same labels Color Semantics uses — Sync flattens to `theme::light`
   // keys, and `cap()` of that string is not a column name anyone can read.
+  // This helper went missing in an edit and every one of its three call sites
+  // (two typography logs, the radius log) threw a bare ReferenceError at
+  // runtime — see the note above importVariables' typography block: a throw
+  // there aborts the WHOLE Variables phase, so a system with a per-theme
+  // typeface synced its font family and no colours at all.
+  const capFoundationTheme = (key: string): string => shippedThemeLabel(key, tokens)
 
   // Modes are needed when ANY theme's resolved foundation map differs from the
   // ROOT export — not only when themes differ from each other. Theme Preview
@@ -2976,7 +3024,9 @@ function parseCssGradient(css: string): GradientPaint | null {
 function assignedGradient(tokens: DesignTokens, surface: 'cover' | 'avatar'): GradientPaint | null {
   const slug = tokens.gradientAssignments?.[surface]
   if (!slug) return null
-  const css = tokens.gradients?.[slug]
+  // The previewed theme's resolution, so the Cover art is the same colour as
+  // the `Gradient/<slug>` paint style importStyles creates.
+  const css = previewGradients(tokens).light[slug] ?? tokens.gradients?.[slug]
   return css ? parseCssGradient(css) : null
 }
 
@@ -3028,7 +3078,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
   // on anything. Reported as "los gradientes como style no se están
   // exportando". The variables-only rule above is about SOLID colours (which
   // do have a variable type) and deliberately doesn't reach here.
-  const gradients = tokens.gradients ?? {}
+  const { light: gradients, dark: gradientsDark } = previewGradients(tokens)
   if (Object.keys(gradients).length > 0) {
     const paintByName = new Map(
       (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s] as const),
@@ -3057,7 +3107,7 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
       // Dark variants get their own style: a paint style has no modes, so a
       // light/dark pair can't live in one. Only when it genuinely differs —
       // see the gradientsDark type comment.
-      const darkCss = tokens.gradientsDark?.[slug]
+      const darkCss = gradientsDark[slug]
       if (darkCss && darkCss !== css) {
         const darkPaint = parseCssGradient(darkCss)
         if (darkPaint) { upsertPaint(`Gradient/${slug} (Dark)`, darkPaint); darkMade++ }
@@ -9469,7 +9519,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
 
   // ── 10 · Gradients ─────────────────────────────────────────────────────────
   {
-    const entries = Object.entries(tokens.gradients ?? {})
+    const entries = Object.entries(previewGradients(tokens).light)
     if (entries.length > 0) {
       await newBoard('Gradients')
       root.appendChild(sectionBar('Gradients'))

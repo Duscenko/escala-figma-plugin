@@ -1227,7 +1227,7 @@
           <div class="sync-config">
             <p class="sync-field-label" id="syncUrlLabel">ID to plugin</p>
             <div class="input-row">
-              <input type="text" id="syncUrl" value="" placeholder="https://www.escalatokens.com/api/tokens?project=your-system" aria-labelledby="syncUrlLabel" />
+              <input type="text" id="syncUrl" value="" placeholder="esc_7K2M-9QX4-N3PD  ·  or paste the sync URL" aria-labelledby="syncUrlLabel" />
               <button class="btn btn-sm btn-secondary" id="syncToggleBtn">Start sync</button>
             </div>
             <div class="sync-meta">
@@ -1729,7 +1729,11 @@ var EscalaAgent = (() => {
     const byGroup = /* @__PURE__ */ new Map();
     for (const [key, hex] of Object.entries((_e = json.colors.primitive) != null ? _e : {})) {
       if (!hex) continue;
-      const name = figmaPrimitiveName(key);
+      const name = figmaPrimitiveName(key, {
+        themeSources: json.colors.themeSources,
+        themeOrder: json.colors.themeOrder,
+        themeLabels: json.colors.themeLabels
+      });
       const group = name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : name;
       const list = (_f = byGroup.get(group)) != null ? _f : [];
       list.push([name, hex]);
@@ -1958,14 +1962,97 @@ const $ = (id) => document.getElementById(id)
 
 // The plugin's one door to the configurator. Never a Vercel preview host.
 const CONFIGURATOR_URL = 'https://www.escalatokens.com'
+// Where a bare ID resolves to. Same host as the configurator, so a key copied
+// from Figma sync is valid here without anyone pasting an origin.
+const API_BASE = 'https://www.escalatokens.com'
+
+// ─── One field, anything pasted ──────────────────────────────────────────────
+// This box used to hold a full API URL and nothing else, and the URL's last
+// segment was `slugify(<Figma file name>)` — a LABEL the designer is expected
+// to keep editing. Rename a theme on the web and the key moved; the file kept
+// polling the old one (stale forever) or the freshly-copied one (404 forever,
+// reported as a red "Fetch failed x2: HTTP 404"). The web now mints a stable
+// `esc_XXXX-XXXX-XXXX` per system, and this field takes whichever of its forms
+// happens to be in the clipboard rather than making anyone pick the right one:
+//
+//   esc_7K2M-9QX4-N3PD                                  the ID
+//   https://escalatokens.com/api/tokens?project=esc_…   the API URL
+//   https://escalatokens.com/?project=esc_…             the workspace page
+//   https://escalatokens.com/api/tokens?project=escala  a legacy name slug
+//   escala                                              a legacy slug, bare
+//
+// A second "Page URL" box was considered and rejected: its value is the same
+// constant nearly every time, and it would hand the plugin the job of building
+// an endpoint out of two user-typed halves — one more place for a stray slash
+// to break the link. Mirrors `parsePublishRef` in the configurator
+// (src/lib/publishId.ts); the two are covered by tests on that side.
+const PUBLISH_ID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+const PUBLISH_ID_RE = /esc_[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}/i
+
+function canonicalPublishId(raw) {
+  const compact = String(raw || '').trim().replace(/\s+/g, '')
+  if (!compact) return ''
+  const body = compact.toLowerCase().startsWith('esc_') ? compact.slice(4) : compact
+  const symbols = body.replace(/-/g, '').toUpperCase()
+  if (symbols.length !== 12) return ''
+  for (const ch of symbols) if (PUBLISH_ID_ALPHABET.indexOf(ch) === -1) return ''
+  return 'esc_' + symbols.match(/.{1,4}/g).join('-')
+}
+
+/** The origin of a pasted URL, so a preview deployment or a self-hosted
+ *  instance keeps addressing ITSELF. Only a bare ID falls back to API_BASE —
+ *  rewriting a URL someone deliberately pasted would send their sync to the
+ *  wrong server. */
+function originOf(raw) {
+  const m = /^(https?:\/\/[^/?#\s]+)/i.exec(String(raw || '').trim())
+  return m ? m[1] : ''
+}
+
+/** → { key, legacy, origin } or null. `key` is what goes in `?project=`. */
+function parsePublishRef(input) {
+  const raw = String(input || '').trim()
+  if (!raw) return null
+  // A MISTYPED id is rejected, never reinterpreted as a legacy name — see the
+  // matching guard in the configurator's publishId.ts.
+  if (/^esc_/i.test(raw) && !canonicalPublishId(raw)) return null
+  const fromQuery = /[?&]project=([^&#\s]+)/i.exec(raw)
+  if (fromQuery) {
+    let value = fromQuery[1]
+    try { value = decodeURIComponent(value) } catch { /* keep the raw form */ }
+    const id = canonicalPublishId(value)
+    if (id) return { key: id, legacy: false, origin: originOf(raw) }
+    const slug = legacyKey(value)
+    return slug ? { key: slug, legacy: true, origin: originOf(raw) } : null
+  }
+  const embedded = PUBLISH_ID_RE.exec(raw)
+  if (embedded) {
+    const id = canonicalPublishId(embedded[0])
+    if (id) return { key: id, legacy: false, origin: originOf(raw) }
+  }
+  const direct = canonicalPublishId(raw)
+  if (direct) return { key: direct, legacy: false, origin: '' }
+  // A URL with no ?project= carries no key at all — guessing one from the path
+  // would silently connect this file to the wrong system.
+  if (/^https?:\/\//i.test(raw) || raw.indexOf('/') !== -1) return null
+  const slug = legacyKey(raw)
+  return slug ? { key: slug, legacy: true, origin: '' } : null
+}
+
+function legacyKey(value) {
+  return String(value).toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+}
+
+/** The endpoint to fetch, built from whatever is in the field. '' when the
+ *  field holds nothing key-shaped. */
+function syncEndpoint() {
+  const ref = parsePublishRef($('syncUrl').value)
+  if (!ref) return ''
+  return (ref.origin || API_BASE) + '/api/tokens?project=' + encodeURIComponent(ref.key)
+}
 
 function projectFromSyncUrl(sync) {
-  try {
-    const u = new URL(sync)
-    return u.searchParams.get('project') || ''
-  } catch {
-    return ''
-  }
+  const ref = parsePublishRef(sync)
+  return ref ? ref.key : ''
 }
 
 function configuratorUrl() {
@@ -3076,7 +3163,7 @@ $('pasteBtn').addEventListener('click', async () => {
 
 // One-shot pull from the publish URL, without turning on Live Sync
 $('fetchUrlBtn').addEventListener('click', async () => {
-  const url = $('syncUrl').value.trim()
+  const url = syncEndpoint()
   if (!url) { goSync(); return }
   const btn = $('fetchUrlBtn')
   btn.disabled = true
@@ -3450,12 +3537,43 @@ function maybeAutoBuild() {
 // forever: the sync tick never finished, and on the import path that left
 // `importInFlight` stuck true, which quietly killed Live Sync for the rest of
 // the session. 20s is well past a normal fetch of a tokens.json.
+// `/api/tokens?project=<slug>` answers 404 with a JSON body and ONE meaning:
+// nothing has ever been published under that slug. Reported as a red "Fetch
+// failed x2: HTTP 404" that reads like an outage — a status code is not a
+// diagnosis, and this one has a single, fixable cause. The slug is the thing
+// that has to match, so name it.
+function projectSlugOf(url) {
+  const m = /[?&]project=([^&#]*)/.exec(url || '')
+  if (!m) return ''
+  try { return decodeURIComponent(m[1]) } catch { return m[1] }
+}
+
 async function fetchJson(url, ms = 20000) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), ms)
   try {
     const res = await fetch(url, { cache: 'no-store', signal: ctrl.signal })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      // Distinguish OUR 404 (the endpoint answered, the slug is empty) from a
+      // routing 404 (a mistyped path never reached the function) — the two
+      // need opposite fixes and both used to print the same three characters.
+      let served = ''
+      try {
+        const body = await res.clone().json()
+        if (body && typeof body.error === 'string') served = body.error
+      } catch { /* not JSON — a routing 404 or an HTML error page */ }
+      const slug = projectSlugOf(url)
+      if (res.status === 404 && served && slug) {
+        throw new Error(`Nothing published yet for "${slug}". On escalatokens.com open Figma sync, check the File name matches "${slug}", and press Sync now.`)
+      }
+      if (res.status === 404) {
+        throw new Error(`HTTP 404 — no Escala endpoint at this URL. It should look like https://escalatokens.com/api/tokens?project=<your-file-name>`)
+      }
+      if (res.status === 400 && !slug) {
+        throw new Error('HTTP 400 — this URL has no ?project= slug. Copy the ID to plugin URL from Figma sync on escalatokens.com.')
+      }
+      throw new Error(`HTTP ${res.status}${served ? ` — ${served}` : ''}`)
+    }
     return await res.text()
   } catch (e) {
     // A timeout surfaces as a bare "AbortError", which tells the user nothing.
@@ -3587,9 +3705,11 @@ function updateSyncStatus(state, msg) {
 }
 
 function startSync() {
-  const url = $('syncUrl').value.trim()
+  const url = syncEndpoint()
   if (!url) {
-    addLog('Enter a URL first', 'error')
+    addLog($('syncUrl').value.trim()
+      ? 'That is not an Escala ID. Paste the ID to plugin from Figma sync — it looks like esc_7K2M-9QX4-N3PD.'
+      : 'Paste your ID to plugin first — it looks like esc_7K2M-9QX4-N3PD.', 'error')
     return
   }
   const btn = $('syncToggleBtn')
@@ -3641,8 +3761,8 @@ $('syncToggleBtn').addEventListener('click', () => {
 // `fetchAndSync` unchanged, hash check included — if nothing was published
 // since the last check it says "Up to date" instead of rewriting the file.
 $('syncNowBtn').addEventListener('click', async () => {
-  const url = $('syncUrl').value.trim()
-  if (!url) { addLog('Enter ID to plugin first', 'error'); return }
+  const url = syncEndpoint()
+  if (!url) { addLog('Paste your ID to plugin first — it looks like esc_7K2M-9QX4-N3PD', 'error'); return }
   if (importInFlight) { notify('An import is already running — the check will follow it', 'error'); return }
   userRequestedSync = true
   // Explicit user action clears a retry pause — that is what the paused
@@ -3667,7 +3787,16 @@ $('syncNowBtn').addEventListener('click', async () => {
 // Re-persist settings whenever sync config changes. The URL is file-scoped
 // (saveFileSync) since it names which system THIS file talks to; the interval
 // is a tool preference (saveSettings) that applies to every file.
-$('syncUrl').addEventListener('change', saveFileSync)
+// Normalize whatever was pasted down to the canonical key BEFORE persisting,
+// so the field shows one stable string and this file's stored connection can't
+// drift between an ID, a URL and a page link that all mean the same system.
+// A value nothing can be read out of is left exactly as typed — silently
+// blanking someone's paste is worse than showing it back to them with an error.
+$('syncUrl').addEventListener('change', () => {
+  const ref = parsePublishRef($('syncUrl').value)
+  if (ref) $('syncUrl').value = ref.origin ? ref.origin + '/api/tokens?project=' + ref.key : ref.key
+  saveFileSync()
+})
 $('syncInterval').addEventListener('change', saveSettings)
 
 // ─── Reset this file ─────────────────────────────────────────────────────────

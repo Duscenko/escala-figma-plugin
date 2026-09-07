@@ -122,6 +122,26 @@
       radiusRoles: (_g = over == null ? void 0 : over.radiusRoles) != null ? _g : rootRoles
     };
   }
+  function previewGradients(tokens) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+    const rootLight = (_a = tokens.gradients) != null ? _a : {};
+    const rootDark = (_b = tokens.gradientsDark) != null ? _b : rootLight;
+    const byTheme = tokens.gradientsByTheme;
+    if (!byTheme || Object.keys(byTheme).length === 0) return { light: rootLight, dark: rootDark };
+    const order = (_c = tokens.colors.themeOrder) != null ? _c : [];
+    const keys = [...order.filter((k) => byTheme[k]), ...Object.keys(byTheme).filter((k) => !order.includes(k))];
+    if (keys.length === 0) return { light: rootLight, dark: rootDark };
+    const baseOf = (k) => k.includes("::") ? k.slice(0, k.indexOf("::")) : k;
+    const appearanceOf = (k) => k.includes("::") ? k.slice(k.indexOf("::") + 2).toLowerCase() : "";
+    const active = activeThemeKey(tokens);
+    const preferred = (_e = (_d = keys.find((k) => k === active)) != null ? _d : keys.find((k) => baseOf(k) === baseOf(active))) != null ? _e : keys[0];
+    const family = baseOf(preferred);
+    const lightKey = (_f = keys.find((k) => baseOf(k) === family && appearanceOf(k) === "light")) != null ? _f : appearanceOf(preferred) === "dark" ? void 0 : preferred;
+    const darkKey = keys.find((k) => baseOf(k) === family && appearanceOf(k) === "dark");
+    const light = (_h = (_g = lightKey !== void 0 ? byTheme[lightKey] : void 0) != null ? _g : byTheme[preferred]) != null ? _h : rootLight;
+    const dark = (_i = darkKey !== void 0 ? byTheme[darkKey] : void 0) != null ? _i : light;
+    return { light, dark };
+  }
   function varStringAt(v, modeId) {
     const val = v.valuesByMode[modeId];
     return typeof val === "string" ? val : void 0;
@@ -1278,6 +1298,7 @@
       const order = (_a2 = tokens.colors.themeOrder) != null ? _a2 : [];
       return [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))];
     })();
+    const capFoundationTheme = (key) => shippedThemeLabel(key, tokens);
     function themeMapsDiffer(pick, root) {
       var _a2;
       if (foundationThemes.length === 0) return false;
@@ -2145,14 +2166,14 @@
     };
   }
   function assignedGradient(tokens, surface) {
-    var _a, _b;
+    var _a, _b, _c;
     const slug = (_a = tokens.gradientAssignments) == null ? void 0 : _a[surface];
     if (!slug) return null;
-    const css = (_b = tokens.gradients) == null ? void 0 : _b[slug];
+    const css = (_c = previewGradients(tokens).light[slug]) != null ? _c : (_b = tokens.gradients) == null ? void 0 : _b[slug];
     return css ? parseCssGradient(css) : null;
   }
   async function importStyles(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u;
     let count = 0;
     const previewType = previewTypography(tokens);
     const fontFamily = normalizeFontFamilyName(previewType.fontFamily);
@@ -2173,7 +2194,7 @@
       }
       log(`\u2713 Removed ${stalePaints.length} legacy color paint styles (colors are variables-only now)`);
     }
-    const gradients = (_b = tokens.gradients) != null ? _b : {};
+    const { light: gradients, dark: gradientsDark } = previewGradients(tokens);
     if (Object.keys(gradients).length > 0) {
       const paintByName = new Map(
         (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s])
@@ -2188,7 +2209,7 @@
         style.name = name;
         style.paints = [paint];
       };
-      const assigned = (_c = tokens.gradientAssignments) != null ? _c : {};
+      const assigned = (_b = tokens.gradientAssignments) != null ? _b : {};
       let made = 0;
       let darkMade = 0;
       const unparsed = [];
@@ -2200,7 +2221,7 @@
         }
         upsertPaint(`Gradient/${slug}`, paint);
         made++;
-        const darkCss = (_d = tokens.gradientsDark) == null ? void 0 : _d[slug];
+        const darkCss = gradientsDark[slug];
         if (darkCss && darkCss !== css) {
           const darkPaint = parseCssGradient(darkCss);
           if (darkPaint) {
@@ -2235,7 +2256,7 @@
       }
     }
     const { loadedFamilies, fontFor: fontForStyle } = await createFontResolver(tokens);
-    const weightMap = (_e = tokens.typography.weights) != null ? _e : {};
+    const weightMap = (_c = tokens.typography.weights) != null ? _c : {};
     function resolvedStyle(weightKey) {
       var _a2, _b2;
       const val = (_b2 = weightMap[weightKey]) != null ? _b2 : weightKey.startsWith("display") ? (_a2 = weightMap.semibold) != null ? _a2 : 600 : 400;
@@ -2265,17 +2286,17 @@
         ts.fontName = { family: "Inter", style: fontStyle };
       }
       ts.fontSize = sizePx;
-      const lhVal = (_f = tokens.typography.lineHeights) == null ? void 0 : _f[sizeKey];
+      const lhVal = (_d = tokens.typography.lineHeights) == null ? void 0 : _d[sizeKey];
       ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
-      const lsVal = (_g = tokens.typography.letterSpacings) == null ? void 0 : _g[sizeKey];
+      const lsVal = (_e = tokens.typography.letterSpacings) == null ? void 0 : _e[sizeKey];
       ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
       bindTextStyle(
         ts,
         "fontFamily",
-        (_j = (_i = isHeading ? (_h = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _h : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _i : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _j : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
+        (_h = (_g = isHeading ? (_f = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _f : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _g : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _h : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
       );
       bindTextStyle(ts, "fontSize", typoVars.get(`size/${sizeKey}`));
-      bindTextStyle(ts, "fontWeight", (_k = typoVars.get(`weight/${isHeading ? "semibold" : "regular"}`)) != null ? _k : typoVars.get("weight/regular"));
+      bindTextStyle(ts, "fontWeight", (_i = typoVars.get(`weight/${isHeading ? "semibold" : "regular"}`)) != null ? _i : typoVars.get("weight/regular"));
       bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${sizeKey}`));
       bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${sizeKey}`));
     }
@@ -2309,17 +2330,17 @@
           ts.fontName = { family: "Inter", style: fontStyle };
         }
         ts.fontSize = sizePx;
-        const lhVal = (_l = tokens.typography.lineHeights) == null ? void 0 : _l[d.size];
+        const lhVal = (_j = tokens.typography.lineHeights) == null ? void 0 : _j[d.size];
         ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
-        const lsVal = (_m = tokens.typography.letterSpacings) == null ? void 0 : _m[d.size];
+        const lsVal = (_k = tokens.typography.letterSpacings) == null ? void 0 : _k[d.size];
         ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
         bindTextStyle(
           ts,
           "fontFamily",
-          (_q = (_p = (_o = typoVars.get(`role/${key}/family`)) != null ? _o : isHeading ? (_n = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _n : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _p : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _q : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
+          (_o = (_n = (_m = typoVars.get(`role/${key}/family`)) != null ? _m : isHeading ? (_l = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _l : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _n : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _o : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
         );
-        bindTextStyle(ts, "fontSize", (_r = typoVars.get(`role/${key}/size`)) != null ? _r : typoVars.get(`size/${d.size}`));
-        bindTextStyle(ts, "fontWeight", (_s = typoVars.get(`role/${key}/weight`)) != null ? _s : typoVars.get(`weight/${d.weight}`));
+        bindTextStyle(ts, "fontSize", (_p = typoVars.get(`role/${key}/size`)) != null ? _p : typoVars.get(`size/${d.size}`));
+        bindTextStyle(ts, "fontWeight", (_q = typoVars.get(`role/${key}/weight`)) != null ? _q : typoVars.get(`weight/${d.weight}`));
         bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${d.size}`));
         bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${d.size}`));
         roleStyles++;
@@ -2349,7 +2370,7 @@
       for (const [key, css] of Object.entries(tokens.shadows)) {
         if (upsertEffect(`Shadow/${key}`, css)) made++;
         else unparsed.push(key);
-        const darkCss = (_t = tokens.shadowsDark) == null ? void 0 : _t[key];
+        const darkCss = (_r = tokens.shadowsDark) == null ? void 0 : _r[key];
         if (darkCss && darkCss !== css) {
           if (upsertEffect(`Shadow/${key} (Dark)`, darkCss)) darkMade++;
         }
@@ -2361,7 +2382,7 @@
         log(`\u26A0 ${unparsed.length} shadow${unparsed.length > 1 ? "s" : ""} couldn't be converted to a Figma effect (${unparsed.join(", ")}) \u2014 unsupported CSS box-shadow form`);
       }
     }
-    if ((_u = tokens.grid) == null ? void 0 : _u.columns) {
+    if ((_s = tokens.grid) == null ? void 0 : _s.columns) {
       const name = `Grid/${tokens.grid.columns} columns`;
       const gridByName = new Map(
         (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s])
@@ -2374,8 +2395,8 @@
         pattern: "COLUMNS",
         alignment: "STRETCH",
         count: parseInt(tokens.grid.columns) || 12,
-        gutterSize: pxToFloat((_v = tokens.grid.gutter) != null ? _v : "24px"),
-        offset: pxToFloat((_w = tokens.grid.margin) != null ? _w : "32px")
+        gutterSize: pxToFloat((_t = tokens.grid.gutter) != null ? _t : "24px"),
+        offset: pxToFloat((_u = tokens.grid.margin) != null ? _u : "32px")
       }];
       log(`\u2713 Grid style (${name})`);
     }
@@ -6628,7 +6649,7 @@
     return builtVariants;
   }
   async function importDocumentation(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A;
     namingCtx = tokens;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
@@ -7672,12 +7693,12 @@
       }
     }
     {
-      const entries = Object.entries((_A = tokens.gradients) != null ? _A : {});
+      const entries = Object.entries(previewGradients(tokens).light);
       if (entries.length > 0) {
         await newBoard("Gradients");
         root.appendChild(sectionBar("Gradients"));
         const { card, body } = section("Gradients", 'Named gradients from the configurator. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
-        const assigned = (_B = tokens.gradientAssignments) != null ? _B : {};
+        const assigned = (_A = tokens.gradientAssignments) != null ? _A : {};
         const row = autoFrame("gradients", "HORIZONTAL", 24);
         row.layoutWrap = "WRAP";
         row.counterAxisSpacing = 24;

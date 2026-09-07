@@ -614,3 +614,7 @@ The UI additionally runs a 30s stall watchdog: any log or progress message from
 the sandbox counts as proof of life, and if nothing arrives it surfaces a Reset
 that releases `importInFlight` so sync can resume. It's an escape hatch, not a
 cancel — a running sandbox job can't be interrupted.
+
+## License
+
+[MIT](LICENSE) © 2026 Cesar Durango (Duscenko).
