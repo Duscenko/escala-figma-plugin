@@ -1062,14 +1062,32 @@ function isStatusOrNeutralFamily(fam: string): boolean {
   return false
 }
 
+function themeColumnBase(key: string): string {
+  const split = key.indexOf('::')
+  return split === -1 ? key : key.slice(0, split)
+}
+
+function matchThemeColumn(order: string[], named: string): string | undefined {
+  if (order.includes(named)) return named
+  const base = themeColumnBase(named)
+  return order.find((key) => key === named || themeColumnBase(key) === base)
+}
+
 function activeThemeKey(tokens: DesignTokens): string {
   const order = tokens.colors.themeOrder ?? []
   const named = tokens.colors.activeTheme
-  if (named && (
-    order.includes(named)
-    || Boolean(tokens.foundationsByTheme?.[named])
-    || Boolean(tokens.colors.themes?.[named])
-  )) return named
+  if (named) {
+    if (
+      order.includes(named)
+      || Boolean(tokens.foundationsByTheme?.[named])
+      || Boolean(tokens.colors.themes?.[named])
+    ) return named
+    // Sync flattens library themes to `theme::light` / `theme::dark`.
+    // Older publishes still stamp the bare library key; match the first
+    // column of that theme rather than falling through to the last mode.
+    const match = matchThemeColumn(order, named)
+    if (match) return match
+  }
   const own = order.filter((t) => t !== 'light' && t !== 'dark')
   return own[own.length - 1] ?? order[0] ?? 'light'
 }
@@ -1489,14 +1507,18 @@ function docModePin(tokens: DesignTokens, allCols: VariableCollection[]): { coll
 function componentThemeKey(tokens: DesignTokens): string {
   const order = tokens.colors.themeOrder ?? ['light']
   const active = tokens.colors.activeTheme
-  if (active && order.includes(active)) return active
+  const match = active ? matchThemeColumn(order, active) : undefined
+  if (match) return match
   return order.length > 2 ? (order[order.length - 1] ?? 'light') : (order[0] ?? 'light')
 }
 function componentModePin(tokens: DesignTokens, allCols: VariableCollection[]): { collection: VariableCollection; modeId: string } | undefined {
   const collection = allCols.find((c) => c.name === COLLECTIONS.semantics)
   if (!collection) return undefined
   const key = componentThemeKey(tokens)
-  const mode = collection.modes.find((m) => m.name.toLowerCase() === key.toLowerCase()) ?? collection.modes[0]
+  const label = tokens.colors.themeLabels?.[key]?.trim()
+  const mode = collection.modes.find((m) =>
+    (label && m.name === label) || m.name.toLowerCase() === key.toLowerCase()
+  ) ?? collection.modes[0]
   return mode ? { collection, modeId: mode.modeId } : undefined
 }
 
@@ -2570,9 +2592,11 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     try { modeIdOf[key] = semCol.addMode(label) } catch (e) { skippedModes.push(label) }
   }
   const allModeIds = Object.values(modeIdOf)
-  // Adding modes fails once the file's plan mode cap is hit (Figma Free allows 1
-  // mode per collection, Professional up to 4). Surface it as one clear line so
-  // the user knows the missing columns are a plan limit, not a bug.
+  // Adding modes fails once the file's plan mode cap is hit (Starter 1,
+  // Professional / Organization 4, Enterprise 40). Escala may publish up to
+  // 10 columns (five themes × Light/Dark); extras are skipped in order, not
+  // dropped by the configurator. Surface it as one clear line so the user
+  // knows the missing columns are a plan limit, not a bug.
   if (skippedModes.length > 0) {
     log(`⚠ ${skippedModes.length} theme column${skippedModes.length > 1 ? 's' : ''} skipped (${skippedModes.join(', ')}) — your Figma plan's mode-per-collection limit was reached. Upgrade the plan to add more theme columns.`)
   }
@@ -3571,7 +3595,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     actionHover:    pair(['Action/primary/hover', 'Action/primary.hover', 'action/primary/hover', 'action/primary.hover', 'background/brand-solid-hover', 'action/primary-hover', 'bg/accent-solid_hover'], ['background-brand-solid-hover', 'action-primary-hover'], '#2f6fe0'),
     actionDisabled: pair(['background/disabled', 'action/disabled'], ['background-disabled', 'action-disabled'], '#2a2a2a'),
     actionDisabledSubtle: pair(['background/disabled-subtle', 'action/disabled-subtle'], ['background-disabled-subtle', 'action-disabled-subtle'], '#222222'),
-    textPrimary:    pair(['content/primary', 'text/primary', 'text'], ['content-primary', 'text-primary', 'text'], '#f5f5f5'),
+    textPrimary:    pair(['Content/primary', 'content/primary', 'text/primary', 'text'], ['content-primary', 'text-primary', 'text'], '#f5f5f5'),
     textSecondary:  pair(['content/secondary', 'text/secondary'], ['content-secondary', 'text-secondary'], '#c9c9c9'),
     textTertiary:   pair(['content/tertiary', 'text/tertiary'], ['content-tertiary', 'text-tertiary'], '#9a9a9a'),
     textQuaternary: pair(['content/quaternary', 'text/quaternary', 'text/tertiary'], ['content-quaternary', 'text-quaternary', 'text-tertiary'], '#8a8a8a'),
@@ -3600,7 +3624,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     borderError:    pair(['Status/critical/border-strong', 'Status/critical.border-strong', 'status/critical/border-strong', 'status/critical.border-strong', 'border/error'], ['border-error'], '#f04438'),
     // Icon roles — no icon-* family exists any more; alias the matching
     // content-* role (Radix convention: icon and text share their tint).
-    iconPrimary:    pair(['content/primary', 'icon/primary', 'fg/primary', 'text/primary'], ['content-primary', 'icon-primary', 'fg-primary', 'text-primary'], '#f5f5f5'),
+    iconPrimary:    pair(['Content/primary', 'content/primary', 'icon/primary', 'fg/primary', 'text/primary'], ['content-primary', 'icon-primary', 'fg-primary', 'text-primary'], '#f5f5f5'),
     iconSecondary:  pair(['content/secondary', 'icon/secondary', 'fg/secondary', 'text/secondary'], ['content-secondary', 'icon-secondary', 'fg-secondary', 'text-secondary'], '#c9c9c9'),
     iconTertiary:   pair(['content/tertiary', 'icon/tertiary', 'fg/tertiary', 'text/tertiary'], ['content-tertiary', 'icon-tertiary', 'fg-tertiary', 'text-tertiary'], '#9a9a9a'),
     iconQuaternary: pair(['content/quaternary', 'icon/quaternary', 'text/placeholder'], ['content-quaternary', 'icon-quaternary', 'text-placeholder'], '#8a8a8a'),
@@ -3931,7 +3955,14 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
         ? 'Empty circular icon slot (Phosphor circle-dashed). Swap this instance for any icon/<library>/… set.'
         : 'Empty square icon slot (Phosphor rectangle-dashed). Swap this instance for any icon/<library>/… set.'
     } catch { /* plan may reject */ }
+    // The master itself carries Content/primary — instances inherit it, then
+    // a slot may override to the local ink (on-action, disabled, …).
+    paintSolidTree(comp, fillP(p.iconPrimary))
     return comp
+  }
+
+  function bindPlaceholderInk(master: ComponentNode) {
+    paintSolidTree(master, fillP(p.iconPrimary))
   }
 
   interface IconSlotResult { frame: FrameNode; instance: InstanceNode | null }
@@ -4052,6 +4083,41 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
      */
     swapDefaultId?: string
     swapPreferred?: InstanceSwapPreferredValue[]
+  }
+
+  /** Bind an instantiated placeholder to a SET-level INSTANCE_SWAP so the
+   *  slot is the shared circle/square master — not an invented glyph. */
+  function connectIconSlot(
+    out: PendingProp[],
+    slot: IconSlotResult,
+    prop: string,
+    kind: PlaceholderKind = 'circle',
+  ) {
+    const master = kind === 'square' ? squareMaster : circleMaster
+    if (slot.instance && master && !master.removed) {
+      out.push({
+        node: slot.instance,
+        prop,
+        def: '',
+        swapDefaultId: master.id,
+        swapPreferred: iconSwapPreferred,
+      })
+    }
+  }
+
+  function appendIcon(
+    parent: Box,
+    out: PendingProp[],
+    size: number,
+    colorP: Pair,
+    name: string,
+    prop: string,
+    kind: PlaceholderKind = 'circle',
+  ): FrameNode {
+    const slot = makeIconSlot(size, colorP, name, kind)
+    parent.appendChild(slot.frame)
+    connectIconSlot(out, slot, prop, kind)
+    return slot.frame
   }
 
   interface VariantDef {
@@ -4183,25 +4249,11 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     // a state a designer reaches for, and the old text-glyph version drew
     // the same conclusion.
     const addIconSlot = (propPrefix: string, name: string) => {
-      const { frame, instance } = makeIconSlot(sz.f, textP, name)
-      c.appendChild(frame)
-      out.push({ node: frame, prop: `${propPrefix} visible`, def: false })
-      // `instance` is only non-null when `makeIconSlot` actually found a
-      // live master to instantiate — which means `circleMaster` (the master
-      // it used, `iconSlot`'s default `kind`) is guaranteed non-null right
-      // here too, in the same synchronous call. `def` is a required field on
-      // PendingProp but is IGNORED whenever `swapDefaultId` is set — its
-      // value doesn't matter, it just has to satisfy the type.
-      if (instance && circleMaster) {
-        out.push({
-          node: instance,
-          prop: `${propPrefix} icon`,
-          def: '',
-          swapDefaultId: circleMaster.id,
-          swapPreferred: iconSwapPreferred,
-        })
-      }
-      return frame
+      const slot = makeIconSlot(sz.f, textP, name)
+      c.appendChild(slot.frame)
+      out.push({ node: slot.frame, prop: `${propPrefix} visible`, def: false })
+      connectIconSlot(out, slot, `${propPrefix} icon`, 'circle')
+      return slot.frame
     }
 
     if (state === 'Loading') {
@@ -4227,35 +4279,21 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   // dial prefix, https:// prefix + copy), 7 interaction states, 3 sizes.
   const INPUT_STATES = ['Default', 'Hover', 'Focused', 'Filled', 'Error', 'Loading', 'Disabled'] as const
   const INPUT_TYPES = ['Default', 'Icon Leading', 'Icon Trailing', 'E-Mail', 'Password', 'Search', 'Phone Number', 'Website'] as const
-  const INPUT_TYPE_META: Record<string, { label: string; text: string; lead?: string; trail?: string }> = {
+  const INPUT_TYPE_META: Record<string, { label: string; text: string; lead?: boolean; trail?: boolean }> = {
     'Default':       { label: 'Default Input',   text: 'Placeholder Text..' },
-    'Icon Leading':  { label: 'Default Input',   text: 'Placeholder Text..', lead: '★' },
-    'Icon Trailing': { label: 'Default Input',   text: 'Placeholder Text..', trail: '★' },
-    'E-Mail':        { label: 'E-Mail Address',  text: 'hi@createui.co',    lead: '✉' },
-    'Password':      { label: 'Password',        text: '••••••••••••',      lead: '🔒' },
-    'Search':        { label: 'Search',          text: 'Search anything..', lead: '🔍' },
-    'Phone Number':  { label: 'Phone Number',    text: '171 39200 12',      lead: '🇩🇪' },
-    'Website':       { label: 'Website Address', text: 'createui.co',       lead: '🌐' },
+    'Icon Leading':  { label: 'Default Input',   text: 'Placeholder Text..', lead: true },
+    'Icon Trailing': { label: 'Default Input',   text: 'Placeholder Text..', trail: true },
+    'E-Mail':        { label: 'E-Mail Address',  text: 'hi@createui.co',    lead: true },
+    'Password':      { label: 'Password',        text: '••••••••••••',      lead: true },
+    'Search':        { label: 'Search',          text: 'Search anything..', lead: true },
+    'Phone Number':  { label: 'Phone Number',    text: '171 39200 12',      lead: true },
+    'Website':       { label: 'Website Address', text: 'createui.co',       lead: true },
   }
   const INPUT_SIZE_KEYS = ['MD', 'SM', 'XS'] as const
   const INPUT_SIZES: Record<string, { h: number; f: number; fv?: Variable; label: number; meta: number; padX: number }> = {
     MD: { h: 40, f: 14, fv: sizeSm, label: 13,   meta: 12,   padX: 12 },
     SM: { h: 36, f: 13,             label: 12.5, meta: 11.5, padX: 10 },
     XS: { h: 32, f: 12, fv: sizeXs, label: 12,   meta: 11,   padX: 10 },
-  }
-
-  // Small filled circle with a glyph — clear buttons, error dots, helper icons.
-  function circleGlyph(d: number, glyph: string, bg: Pair, fg: Pair): FrameNode {
-    const f = row('icon-circle', 0)
-    f.primaryAxisSizingMode = 'FIXED'
-    f.counterAxisSizingMode = 'FIXED'
-    f.primaryAxisAlignItems = 'CENTER'
-    f.counterAxisAlignItems = 'CENTER'
-    f.cornerRadius = 9999
-    f.fills = [fillP(bg)]
-    f.appendChild(txt(glyph, { style: 'Bold', size: Math.round(d * 0.58), colorP: fg }))
-    f.resize(d, d)
-    return f
   }
 
   function buildInputField(c: ComponentNode, out: PendingProp[], sizeKey: string, type: string, state: string) {
@@ -4286,7 +4324,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     labelRow.appendChild(label)
     labelRow.appendChild(txt('*', { style: 'Medium', size: s.label, weightVar: wMedium, colorP: p.textError }))
     labelRow.appendChild(txt('(Optional)', { size: s.meta, colorP: metaP }))
-    labelRow.appendChild(iconSlot(s.meta, metaP, 'icon-hint', 'circle'))
+    appendIcon(labelRow, out, s.meta, metaP, 'icon-hint', 'Icon hint', 'circle')
     c.appendChild(labelRow)
     out.push({ node: labelRow, prop: 'Show Label', def: true })
 
@@ -4330,19 +4368,12 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     }
     const fixDivider = (d: FrameNode) => { d.layoutSizingHorizontal = 'FIXED'; d.layoutSizingVertical = 'FIXED'; d.resize(1, s.h - 14) }
 
-    // Leading — icon / flag + dial / protocol prefix
+    // Leading — always the shared circle placeholder, never an invented
+    // symbol (★ ✉ 🔒 🔍 🇩🇪 🌐). Phone/Website keep their text prefixes.
     if (meta.lead) {
-      // Generic + library-shaped leads become the circle-dashed slot. Phone's
-      // flag and Website's globe stay literal — they aren't icons from the set.
-      const leadIsSlot = type === 'Icon Leading' || type === 'E-Mail' || type === 'Password' || type === 'Search'
-      const lead = leadIsSlot
-        ? iconSlot(s.f, iconP, 'icon-leading', 'circle')
-        : txt(meta.lead, { size: s.f, colorP: iconP })
-      lead.name = 'icon-leading'
-      box.appendChild(lead)
+      appendIcon(box, out, s.f, iconP, 'icon-leading', 'Icon leading', 'circle')
     }
     if (type === 'Phone Number') {
-      box.appendChild(txt('▾', { size: Math.round(s.f * 0.75), colorP: iconP }))
       const d = boxDivider(); box.appendChild(d); fixDivider(d)
       box.appendChild(txt('+49', { size: s.f, colorP: disabled ? p.textDisabled : p.textTertiary }))
     }
@@ -4370,29 +4401,24 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     box.appendChild(valueWrap)
     valueWrap.layoutSizingHorizontal = 'FILL'
 
-    // Trailing — state dot / type-specific controls
+    // Trailing — shared placeholders, not ! / ✕ / invented marks
     if (error) {
-      box.appendChild(circleGlyph(14, '!', p.statusError, p.textOnBrand))
+      appendIcon(box, out, 14, p.iconError, 'icon-error', 'Icon trailing', 'circle')
     } else if (!loading) {
       if (type === 'E-Mail' && (state === 'Hover' || focused)) {
-        box.appendChild(circleGlyph(14, '✕', p.surface3, p.textSecondary))
+        appendIcon(box, out, 14, iconP, 'icon-clear', 'Icon trailing', 'square')
       } else if (type === 'Password') {
-        const eye = iconSlot(s.f, iconP, 'icon-eye', 'square')
-        box.appendChild(eye)
+        appendIcon(box, out, s.f, iconP, 'icon-eye', 'Icon trailing', 'square')
       } else if (type === 'Phone Number') {
-        box.appendChild(iconSlot(s.meta, iconP, 'icon-info', 'circle'))
+        appendIcon(box, out, s.meta, iconP, 'icon-info', 'Icon trailing', 'circle')
       }
     }
     if (meta.trail) {
-      const trail = type === 'Icon Trailing'
-        ? iconSlot(s.f, iconP, 'icon-trailing', 'square')
-        : txt(meta.trail, { size: s.f, colorP: iconP })
-      trail.name = 'icon-trailing'
-      box.appendChild(trail)
+      appendIcon(box, out, s.f, iconP, 'icon-trailing', 'Icon trailing', 'square')
     }
     if (type === 'Website') {
       const d = boxDivider(); box.appendChild(d); fixDivider(d)
-      box.appendChild(iconSlot(s.f, iconP, 'icon-copy', 'square'))
+      appendIcon(box, out, s.f, iconP, 'icon-copy', 'Icon trailing', 'square')
     }
     if (type === 'Search') {
       if (!error) {
@@ -4422,9 +4448,9 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       box.appendChild(miniSpinner(s.f, p.textBrand))
     }
 
-    // Helper row — "ⓘ Helper hint text for you."
+    // Helper row — shared icon, not a ! glyph
     const helperRow = row('helper-row', 6)
-    helperRow.appendChild(circleGlyph(s.meta + 2, '!', error ? p.statusError : p.surface3, error ? p.textOnBrand : p.textSecondary))
+    appendIcon(helperRow, out, s.meta + 2, error ? p.iconError : iconP, 'icon-helper', 'Icon helper', 'circle')
     const helper = txt('Helper hint text for you.', { size: s.meta, colorP: error ? p.textError : metaP })
     helper.name = 'helper'
     helperRow.appendChild(helper)
@@ -4471,9 +4497,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     c.appendChild(content)
     out.push({ node: content, prop: 'Placeholder', def: 'Placeholder…' })
 
-    const ch = txt('▾', { size: 12, colorP: disabled ? p.textDisabled : p.textTertiary })
-    ch.name = 'chevron'
-    c.appendChild(ch)
+    appendIcon(c, out, 12, disabled ? p.textDisabled : p.textTertiary, 'icon-chevron', 'Icon', 'square')
   }
 
   const selControl   = findVar(COLLECTIONS.selector, 'role/control')   ?? findVar(COLLECTIONS.selector, 'md')
@@ -4942,7 +4966,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     MD: { d: 32, f: 14 },
     SM: { d: 24, f: 12 },
   }
-  function buildCloseButton(c: ComponentNode, _out: PendingProp[], state: string, size = 'MD') {
+  function buildCloseButton(c: ComponentNode, out: PendingProp[], state: string, size = 'MD') {
     const sz = CLOSE_SIZES[size] ?? CLOSE_SIZES.MD
     c.layoutMode = 'HORIZONTAL'
     c.primaryAxisSizingMode = 'FIXED'
@@ -4955,15 +4979,14 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     const hoverish = state === 'Hover' || state === 'Pressed'
     c.fills = hoverish ? [fillP(p.surface2, state === 'Pressed' ? 1 : 0.8)] : []
     if (state === 'Focused') focusRing(c, p.action.hex)
-    const icon = iconSlot(sz.f, disabled ? p.textDisabled : p.textSecondary, 'icon', 'circle')
-    c.appendChild(icon)
+    appendIcon(c, out, sz.f, disabled ? p.textDisabled : p.textSecondary, 'icon', 'Icon', 'circle')
   }
 
   // FAB size axis — mirrors the configurator (MD, LG).
   const FAB_SIZES: Record<string, { d: number; f: number }> = {
     MD: { d: 48, f: 20 }, LG: { d: 56, f: 24 },
   }
-  function buildFab(c: ComponentNode, _out: PendingProp[], size: string, state: string) {
+  function buildFab(c: ComponentNode, out: PendingProp[], size: string, state: string) {
     const s = FAB_SIZES[size]
     c.layoutMode = 'HORIZONTAL'
     c.primaryAxisSizingMode = 'FIXED'
@@ -4977,8 +5000,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       type: 'DROP_SHADOW', color: { ...hexToRgb(p.action.hex), a: 0.35 },
       offset: { x: 0, y: 4 }, radius: 12, spread: 0, visible: true, blendMode: 'NORMAL',
     }]
-    const icon = iconSlot(s.f, p.textOnBrand, 'icon', 'circle')
-    c.appendChild(icon)
+    appendIcon(c, out, s.f, p.textOnBrand, 'icon', 'Icon', 'circle')
   }
 
   // Button group size axis — mirrors the configurator (MD, SM, LG).
@@ -5033,9 +5055,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     c.strokes = [fillP(state === 'Hover' ? p.borderStrong : p.borderDefault)]
     c.strokeWeight = 1
     tryBind(c, 'strokeWeight', borderWidthVar())
-    const icon = txt(provider.charAt(0), { style: 'Bold', size: sz.f, colorP: p.textPrimary })
-    icon.name = 'provider-icon'
-    c.appendChild(icon)
+    appendIcon(c, out, sz.f, p.textPrimary, 'provider-icon', 'Icon', 'circle')
     const label = txt(`Continue with ${provider}`, { roleKey: 'button', style: 'Medium', size: sz.f, sizeVar: sz.fv, weightVar: wMedium, colorP: p.textPrimary })
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: `Continue with ${provider}` })
@@ -5053,12 +5073,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     if (state === 'Hover') label.textDecoration = 'UNDERLINE'
     c.appendChild(label)
     out.push({ node: label, prop: 'Label', def: 'Learn more' })
-    const arrow = txt('→', { style: 'Medium', size: 14, weightVar: wMedium, colorP })
-    arrow.name = 'icon'
-    c.appendChild(arrow)
+    appendIcon(c, out, 14, colorP, 'icon', 'Icon', 'square')
   }
 
-  function buildStoreBadge(c: ComponentNode, _out: PendingProp[], store: string) {
+  function buildStoreBadge(c: ComponentNode, out: PendingProp[], store: string) {
     const apple = store === 'App Store'
     c.layoutMode = 'HORIZONTAL'
     c.primaryAxisSizingMode = 'AUTO'
@@ -5069,9 +5087,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     c.strokes = [fillP(p.borderStrong)]
     c.strokeWeight = 1
     bindRadius(c, radAction, radiusAction)
-    const icon = txt(apple ? '' : '▶', { size: 18, colorP: p.textOnInverse })
-    icon.name = 'store-icon'
-    c.appendChild(icon)
+    appendIcon(c, out, 18, p.textOnInverse, 'store-icon', 'Icon', apple ? 'circle' : 'square')
     const lines = col('labels', 0)
     lines.appendChild(txt(apple ? 'Download on the' : 'GET IT ON', { size: 8, colorP: p.textOnInverse, opacity: 0.8 }))
     lines.appendChild(txt(apple ? 'App Store' : 'Google Play', { style: 'Semi Bold', size: 14, weightVar: wSemibold, colorP: p.textOnInverse }))
@@ -5341,7 +5357,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     iconWrap.counterAxisAlignItems = 'CENTER'
     iconWrap.cornerRadius = 9999
     iconWrap.fills = [fillP(p.surface2)]
-    iconWrap.appendChild(txt('↑', { style: 'Medium', size: 16, weightVar: wMedium, colorP: p.textSecondary }))
+    appendIcon(iconWrap, out, 16, p.textSecondary, 'icon-upload', 'Icon', 'circle')
     iconWrap.resize(40, 40)
     c.appendChild(iconWrap)
     const title = row('title', 4)
@@ -5590,7 +5606,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     pad(trigger, 10, 12, 10, 12)
     if (open) focusRing(trigger, p.borderBrand.hex)
     const lead = row('lead', 8)
-    lead.appendChild(iconSlot(12, p.iconQuaternary, 'icon', 'circle'))
+    appendIcon(lead, out, 12, p.iconQuaternary, 'icon', 'Icon leading', 'circle')
     const query = txt(open ? 'ber' : 'Search options…', {
       size: 14, sizeVar: sizeSm,
       colorP: open ? p.textPrimary : p.textPlaceholder,
@@ -5598,7 +5614,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     query.name = 'query'
     lead.appendChild(query)
     trigger.appendChild(lead)
-    trigger.appendChild(txt('▾', { size: 12, colorP: p.iconTertiary }))
+    appendIcon(trigger, out, 12, p.iconTertiary, 'icon-chevron', 'Icon', 'square')
     c.appendChild(trigger)
     trigger.resize(260, 40)
     out.push({ node: query, prop: 'Query', def: query.characters })
@@ -5869,7 +5885,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       head.primaryAxisAlignItems = 'SPACE_BETWEEN'
       pad(head, 14, 4, 14, 4)
       head.appendChild(txt(q, { roleKey: 'label', style: 'Medium', size: 14, sizeVar: sizeSm, weightVar: wMedium, colorP: p.textPrimary }))
-      head.appendChild(txt(openRow ? '▴' : '▾', { size: 12, colorP: p.iconTertiary }))
+      appendIcon(head, out, 12, p.iconTertiary, 'icon-chevron', 'Icon', 'square')
       item.appendChild(head)
       head.layoutSizingHorizontal = 'FILL'
       if (openRow) {
@@ -6016,7 +6032,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   }
 
   // Pagination — prev/next arrows, numbered pages, overflow ellipsis.
-  function buildPagination(c: ComponentNode, _out: PendingProp[]) {
+  function buildPagination(c: ComponentNode, out: PendingProp[]) {
     c.layoutMode = 'HORIZONTAL'
     c.primaryAxisSizingMode = 'AUTO'
     c.counterAxisSizingMode = 'AUTO'
@@ -6031,23 +6047,27 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       b.counterAxisAlignItems = 'CENTER'
       bindRadius(b, radControl, radiusControl)
       if (kind === 'current') b.fills = [fillP(p.action)]
-      b.appendChild(txt(label, {
-        style: kind === 'current' ? 'Medium' : 'Regular', size: 13, sizeVar: sizeSm,
-        weightVar: kind === 'current' ? wMedium : wRegular,
-        colorP: kind === 'current' ? p.textOnBrand
-          : kind === 'ellipsis' ? p.textPlaceholder
-          : kind === 'arrow' ? p.iconTertiary : p.textSecondary,
-      }))
+      if (kind === 'arrow') {
+        appendIcon(b, out, 13, p.iconTertiary, 'icon-page', 'Icon', 'square')
+      } else {
+        b.appendChild(txt(label, {
+          style: kind === 'current' ? 'Medium' : 'Regular', size: 13, sizeVar: sizeSm,
+          weightVar: kind === 'current' ? wMedium : wRegular,
+          colorP: kind === 'current' ? p.textOnBrand
+            : kind === 'ellipsis' ? p.textPlaceholder
+            : p.textSecondary,
+        }))
+      }
       c.appendChild(b)
       b.resize(32, 32)
     }
-    pageBtn('‹', 'arrow')
+    pageBtn('prev', 'arrow')
     pageBtn('1', 'page')
     pageBtn('2', 'current')
     pageBtn('3', 'page')
     pageBtn('…', 'ellipsis')
     pageBtn('8', 'page')
-    pageBtn('›', 'arrow')
+    pageBtn('next', 'arrow')
   }
 
   // Tab Menu — pill-style horizontal menu, the softer sibling of Tabs.
@@ -8111,9 +8131,9 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   }
 
   // Two shared placeholder Components on their own page (Assets reference).
-  // Component slots paint INLINE glyphs — they must not nest instances of these
-  // masters (that broke variant sets on re-import). Failure here must not abort
-  // the Components phase.
+  // Created BEFORE the component build loop so every field/button icon hole
+  // can instantiate them (INSTANCE_SWAP). Failure here must not abort the
+  // Components phase.
   try {
     const PLACEHOLDERS_PAGE = '⬡ Icon Placeholders'
     let host = pageByName(PLACEHOLDERS_PAGE)
@@ -8136,6 +8156,8 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       squareMaster = createPlaceholderMaster(PLACEHOLDER_SQUARE_NAME, SQUARE_DASHED_PATH)
       existingSingles.set(PLACEHOLDER_SQUARE_NAME, squareMaster)
     }
+    if (circleMaster) bindPlaceholderInk(circleMaster)
+    if (squareMaster) bindPlaceholderInk(squareMaster)
 
     // Drop prior chrome; harvest already lifted the two masters out of any
     // previous `docs/` board. Keep the masters themselves.
@@ -8155,7 +8177,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     board.y = MARGIN
     board.appendChild(wrapText(
       docText(
-        'Reference marks (circle-dashed · square-dashed). Component slots draw the same paths inline — swap in a real glyph from Assets when you need one.',
+        'Reference marks (circle-dashed · square-dashed). Fields and buttons instantiate these two components — swap in a real glyph from Assets when you need one.',
         12, 'Regular', DOC.muted, 1, sampleChrome.muted,
       ),
       SLOT * 2 + 32,
