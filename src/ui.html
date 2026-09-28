@@ -907,6 +907,29 @@
   .ov-states-row { display: flex; align-items: center; gap: var(--sp-2); }
   .ov-states-row > .mk { font-size: var(--text-caption); color: var(--fg-muted); }
 
+  /* Standing note once a payload asks for more than two Color Semantics
+     columns. Figma's plan is what decides how many of them the file can
+     show; the plugin already skips the rest. Hidden at 1–2 columns. */
+  .plan-notice {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 10px 12px;
+    background: var(--app);
+    border: var(--line-width) solid var(--line);
+    border-left: 2px solid var(--status-warning);
+    border-radius: var(--radius-md);
+  }
+  .plan-notice.hidden { display: none; }
+  .plan-notice svg { flex-shrink: 0; margin-top: 1px; color: var(--status-warning); }
+  .plan-notice b {
+    display: block;
+    font-size: var(--text-caption); font-weight: 600; color: var(--fg);
+    margin-bottom: 2px;
+  }
+  .plan-notice p {
+    margin: 0;
+    font-size: var(--text-mini); line-height: 1.45; color: var(--fg-muted);
+  }
+
   /* Secondary actions: a strip, not a card. Wrapping two buttons and one line
      of caption in its own bordered box gave "go do something elsewhere" the
      same visual weight as the system itself. */
@@ -1309,6 +1332,7 @@
               <span class="mk">States</span>
               <div class="ov-states" id="ovStates"></div>
             </div>
+            <div id="ovPlanNotice" class="plan-notice hidden" role="note"></div>
           </div>
 
           <!-- What's actually IN the file, as opposed to which system it's on.
@@ -1537,6 +1561,7 @@
         </div>
         <div class="card">
           <div class="card-title">Summary</div>
+          <div id="reviewPlanNotice" class="plan-notice hidden" role="note"></div>
           <div id="reviewList"></div>
         </div>
         <div class="card">
@@ -1635,6 +1660,7 @@
           <div class="empty-sub" id="previewEmptySub">Drop or paste a tokens.json to see it here</div>
         </div>
         <div class="hidden" id="previewLoaded" style="display:flex;flex-direction:column;gap:12px;flex:1;min-height:0;">
+          <div id="previewPlanNotice" class="plan-notice hidden" role="note"></div>
           <div class="token-meta" id="tokenMeta"></div>
           <div class="json-view" id="jsonView"></div>
         </div>
@@ -2488,6 +2514,7 @@ function showPreviewEmpty(main, sub) {
   $('previewEmpty').classList.remove('hidden')
   $('previewEmptyMain').textContent = main || 'No tokens loaded yet'
   $('previewEmptySub').textContent = sub || 'Drop or paste a tokens.json to see it here'
+  renderPlanNotice($('previewPlanNotice'), null)
 }
 
 function showTokenPreview(t) {
@@ -2535,11 +2562,13 @@ function showTokenPreview(t) {
 
   $('previewEmpty').classList.add('hidden')
   $('previewLoaded').classList.remove('hidden')
+  renderPlanNotice($('previewPlanNotice'), t)
 }
 
 function showAgentPreview(t) {
   $('tokenMeta').classList.add('hidden')
   $('tokenMeta').innerHTML = ''
+  renderPlanNotice($('previewPlanNotice'), null)
   fillCodeView(agentMarkdownFor(t))
   $('previewEmpty').classList.add('hidden')
   $('previewLoaded').classList.remove('hidden')
@@ -2630,6 +2659,66 @@ function renderReview() {
         <small>${on ? escapeHtml(desc) : 'Skipped'}</small>
       </span>
     </div>`).join('')
+  renderPlanNotice($('reviewPlanNotice'), parsedTokens)
+}
+
+// How many Color Semantics columns this payload will ask Figma to create.
+// Same intersection importVariables uses: themeOrder ∩ themes, then the
+// architecture's own present keys when there is one.
+function themeColumnCount(t) {
+  if (!t || !t.colors) return 0
+  const themes = t.colors.themes && typeof t.colors.themes === 'object' ? t.colors.themes : null
+  const order = Array.isArray(t.colors.themeOrder) ? t.colors.themeOrder : []
+  let themeNames
+  if (themes && Object.keys(themes).length) {
+    const ordered = order.filter((name) => themes[name])
+    // themeOrder is the selection. Keys that only exist on the map are
+    // not columns — same rule as columnsFrom in code.ts.
+    themeNames = ordered.length ? ordered : Object.keys(themes)
+  } else {
+    themeNames = []
+    if (t.colors.semantic && Object.keys(t.colors.semantic).length) themeNames.push('light')
+    if (t.colors.semanticDark && Object.keys(t.colors.semanticDark).length) themeNames.push('dark')
+  }
+  const arch = t.colors.architecture
+  const kind = arch && arch.kind
+  if (kind === 'tonal' || kind === 'vibrancy') return 2
+  if (kind === 'carbon') return 4
+  const groups = arch && arch.tokens && typeof arch.tokens === 'object' ? arch.tokens : null
+  if (groups) {
+    const present = {}
+    Object.keys(groups).forEach((groupKey) => {
+      const group = groups[groupKey]
+      if (!group || typeof group !== 'object') return
+      Object.keys(group).forEach((nodeKey) => {
+        const node = group[nodeKey]
+        if (!node || typeof node !== 'object' || Array.isArray(node)) return
+        Object.keys(node).forEach((mode) => { present[mode] = true })
+      })
+    })
+    const presentKeys = Object.keys(present)
+    if (presentKeys.length) {
+      const ordered = themeNames.filter((name) => present[name])
+      return (ordered.length ? ordered : themeNames).length
+    }
+  }
+  return themeNames.length
+}
+
+const PLAN_NOTICE_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.25"/><path d="M8 7.25V11.25" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/><circle cx="8" cy="4.75" r="0.75" fill="currentColor"/></svg>'
+
+function renderPlanNotice(el, tokens) {
+  if (!el) return
+  const n = themeColumnCount(tokens)
+  if (n <= 2) {
+    el.classList.add('hidden')
+    el.replaceChildren()
+    return
+  }
+  el.classList.remove('hidden')
+  el.innerHTML = PLAN_NOTICE_ICON + '<div><b></b><p></p></div>'
+  el.querySelector('b').textContent = n + ' theme columns'
+  el.querySelector('p').textContent = 'How many of them appear in the file depends on your Figma plan — Starter shows 1, Professional and Organization show 4, Enterprise shows up to 40. The rest are skipped in order.'
 }
 
 // ─── Overview ─────────────────────────────────────────────────────────────────
@@ -2847,6 +2936,7 @@ function renderHome() {
     .map((e) => `<span class="color-dot" title="${e.f}" style="background:${escapeHtml(e.hex)}"></span>`)
     .join('') || '<span style="font-size:var(--text-caption);color:var(--fg-faint)">—</span>'
 
+  renderPlanNotice($('ovPlanNotice'), t)
   renderAssets()
 }
 

@@ -129,7 +129,7 @@
     const byTheme = tokens.gradientsByTheme;
     if (!byTheme || Object.keys(byTheme).length === 0) return { light: rootLight, dark: rootDark };
     const order = (_c = tokens.colors.themeOrder) != null ? _c : [];
-    const keys = [...order.filter((k) => byTheme[k]), ...Object.keys(byTheme).filter((k) => !order.includes(k))];
+    const keys = columnsFrom(order, byTheme);
     if (keys.length === 0) return { light: rootLight, dark: rootDark };
     const baseOf = (k) => k.includes("::") ? k.slice(0, k.indexOf("::")) : k;
     const appearanceOf = (k) => k.includes("::") ? k.slice(k.indexOf("::") + 2).toLowerCase() : "";
@@ -498,6 +498,12 @@
   function uniqueThemeForFamily(family, tokens = namingCtx) {
     const hits = themesUsingFamily(family, tokens);
     return hits.length === 1 ? hits[0] : void 0;
+  }
+  function columnsFrom(order, present) {
+    if (!present) return [];
+    const listed = (order != null ? order : []).filter((key) => present[key] != null);
+    if (listed.length) return listed;
+    return Object.keys(present);
   }
   function shippedThemeLabel(key, tokens = namingCtx) {
     var _a, _b;
@@ -1159,7 +1165,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T;
     namingCtx = tokens;
     let count = 0;
     semanticsRebuilt = false;
@@ -1280,15 +1286,20 @@
     function pruneModes(col, wanted, collLabel) {
       const stale = col.modes.filter((m) => m.modeId !== col.defaultModeId && !wanted.has(m.name));
       const removed = [];
+      const stuck = [];
       for (const m of stale) {
         try {
           col.removeMode(m.modeId);
           removed.push(m.name);
         } catch (e) {
+          stuck.push(m.name);
         }
       }
       if (removed.length > 0) {
         log(`Removed ${removed.length} stale ${collLabel} theme column${removed.length > 1 ? "s" : ""} (${removed.join(", ")}) \u2014 not in the system any more`);
+      }
+      if (stuck.length > 0) {
+        log(`\u26A0 Could not remove ${stuck.length} stale ${collLabel} column${stuck.length > 1 ? "s" : ""} (${stuck.join(", ")}). They are still in the file \u2014 delete them in Figma if this sync did not ask for them.`);
       }
     }
     function pruneVars(cache, written, collLabel) {
@@ -1308,13 +1319,7 @@
         log(`Removed ${removed.length} stale ${collLabel} token${removed.length > 1 ? "s" : ""} (${removed.slice(0, 6).join(", ")}${removed.length > 6 ? `, +${removed.length - 6} more` : ""}) \u2014 not in the system any more`);
       }
     }
-    const foundationThemes = (() => {
-      var _a2;
-      const fb = tokens.foundationsByTheme;
-      if (!fb) return [];
-      const order = (_a2 = tokens.colors.themeOrder) != null ? _a2 : [];
-      return [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))];
-    })();
+    const foundationThemes = columnsFrom(tokens.colors.themeOrder, tokens.foundationsByTheme);
     const capFoundationTheme = (key) => shippedThemeLabel(key, tokens);
     function themeMapsDiffer(pick, root) {
       var _a2;
@@ -1746,8 +1751,7 @@
     const themes = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({
       light: tokens.colors.semantic || {}
     }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const ordered = ((_M = tokens.colors.themeOrder) != null ? _M : []).filter((t) => themes[t]);
-    const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))];
+    const themeNames = columnsFrom(tokens.colors.themeOrder, themes);
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const arch = tokens.colors.architecture;
     const themeLabels = tokens.colors.themeLabels && typeof tokens.colors.themeLabels === "object" ? tokens.colors.themeLabels : {};
@@ -1759,6 +1763,9 @@
       var _a2;
       return [t, ((_a2 = themeLabels[t]) == null ? void 0 : _a2.trim()) || cap(t)];
     });
+    if (modeSpec.length > 0) {
+      log(`Color Semantics: ${modeSpec.length} theme column${modeSpec.length === 1 ? "" : "s"} (${modeSpec.map(([, label]) => label).join(", ")})`);
+    }
     const modeIdOf = {};
     const skippedModes = [];
     try {
@@ -1809,7 +1816,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_N = tok.byMode[modeKey]) != null ? _N : "", lookup);
+            const rgba = archValueRgba((_M = tok.byMode[modeKey]) != null ? _M : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -1891,7 +1898,7 @@
     }
     const modeNames = modeSpec.map(([, label]) => label).join(", ");
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_O = ARCH_LABEL[arch.kind]) != null ? _O : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_N = ARCH_LABEL[arch.kind]) != null ? _N : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -1967,10 +1974,10 @@
       var _a2, _b2, _c2, _d2, _e2;
       const roles = (_c2 = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[theme]) == null ? void 0 : _b2.radiusRoles) != null ? _c2 : tokens.radiusRoles;
       return `${capFoundationTheme(theme)} boxes=${(_d2 = roles == null ? void 0 : roles.container) != null ? _d2 : "?"} fields=${(_e2 = roles == null ? void 0 : roles.action) != null ? _e2 : "?"}`;
-    }).join(", ") : `boxes=${(_Q = (_P = previewRad.radiusRoles) == null ? void 0 : _P.container) != null ? _Q : "?"} fields=${(_S = (_R = previewRad.radiusRoles) == null ? void 0 : _R.action) != null ? _S : "?"}`;
+    }).join(", ") : `boxes=${(_P = (_O = previewRad.radiusRoles) == null ? void 0 : _O.container) != null ? _P : "?"} fields=${(_R = (_Q = previewRad.radiusRoles) == null ? void 0 : _Q.action) != null ? _R : "?"}`;
     log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""} \u2014 ${shownRoles}`);
     const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_T = tokens.borders) == null ? void 0 : _T.width;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_S = tokens.borders) == null ? void 0 : _S.width;
     if (strokeMap) {
       const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
       emitCollection(
@@ -2068,7 +2075,7 @@
       );
       log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_U = tokens.icons) == null ? void 0 : _U.library) {
+    if ((_T = tokens.icons) == null ? void 0 : _T.library) {
       emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
     }
     if (tokens.copy) {
@@ -6710,7 +6717,7 @@
     return builtVariants;
   }
   async function importDocumentation(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
     namingCtx = tokens;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
@@ -6775,9 +6782,8 @@
       if (typoColVars) for (const [n, v] of typoColVars) typoBind.set(n, v);
     }
     const themesMap = tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0 ? tokens.colors.themes : __spreadValues({ light: sem }, tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {});
-    const themeOrdered = ((_b = tokens.colors.themeOrder) != null ? _b : []).filter((t) => themesMap[t]);
-    const themeNames = [...themeOrdered, ...Object.keys(themesMap).filter((t) => !themeOrdered.includes(t))];
-    const lightTheme = (_c = themesMap[themeNames[0]]) != null ? _c : {};
+    const themeNames = columnsFrom(tokens.colors.themeOrder, themesMap);
+    const lightTheme = (_b = themesMap[themeNames[0]]) != null ? _b : {};
     const darkThemeName = themesMap.dark ? "dark" : themeNames[1];
     const darkTheme = darkThemeName && darkThemeName !== themeNames[0] ? themesMap[darkThemeName] : void 0;
     const docArch = tokens.colors.architecture;
@@ -6790,7 +6796,7 @@
       if (v && !primByHex.has(normHex(hex))) primByHex.set(normHex(hex), v);
       if (!primKeyByHex.has(normHex(hex))) primKeyByHex.set(normHex(hex), key);
     }
-    const fontFamily = ((_d = tokens.typography) == null ? void 0 : _d.fontFamily) || "Inter";
+    const fontFamily = ((_c = tokens.typography) == null ? void 0 : _c.fontFamily) || "Inter";
     const loadedStyles = /* @__PURE__ */ new Set();
     for (const style of ["Regular", "Medium", "Semi Bold", "Bold"]) {
       try {
@@ -6982,7 +6988,7 @@
       for (const key of Object.keys(tokens.colors.primitive)) {
         const dash = key.lastIndexOf("-");
         const fam = dash === -1 ? key : key.slice(0, dash);
-        famTones.set(fam, ((_e = famTones.get(fam)) != null ? _e : 0) + 1);
+        famTones.set(fam, ((_d = famTones.get(fam)) != null ? _d : 0) + 1);
       }
       const steps = Math.max(0, ...famTones.values());
       const cover = autoFrame("cover", "VERTICAL", 0);
@@ -7413,7 +7419,7 @@
           ]
         }
       ];
-      const docSections = (_f = archSections2()) != null ? _f : flatSections;
+      const docSections = (_e = archSections2()) != null ? _e : flatSections;
       const W = { name: 190, prim: 180, hex: 160, dark: 180, gap: 12, pad: 16 };
       for (const s of docSections) {
         const cards = s.cards.filter((c) => c.entries.length > 0);
@@ -7436,14 +7442,14 @@
         spec.fontSize = px;
         const sv = bestVar(COLLECTIONS.typography, `size/${key}`);
         if (sv) bindField(spec, "fontSize", sv);
-        const lh = (_g = tokens.typography.lineHeights) == null ? void 0 : _g[key];
+        const lh = (_f = tokens.typography.lineHeights) == null ? void 0 : _f[key];
         if (lh) spec.lineHeight = { value: pxToFloat(lh), unit: "PIXELS" };
         const lhv = bestVar(COLLECTIONS.typography, `line-height/${key}`);
         if (lhv) bindField(spec, "lineHeight", lhv);
         typeSpecimenRow(body, key, 150, `${key} \xB7 ${px}px`, spec);
       }
       const wRow = autoFrame("weights", "HORIZONTAL", 32);
-      for (const [wKey, wVal] of Object.entries((_h = tokens.typography.weights) != null ? _h : {})) {
+      for (const [wKey, wVal] of Object.entries((_g = tokens.typography.weights) != null ? _g : {})) {
         const cell = autoFrame(wKey, "VERTICAL", 4);
         const style = wVal >= 700 ? "Bold" : wVal >= 600 ? "Semi Bold" : wVal >= 500 ? "Medium" : "Regular";
         const s = mkText("Ag", { size: 28, style, colorVar: textVar });
@@ -7464,7 +7470,7 @@
         for (const [key, modes] of Object.entries(typeRoles)) {
           const d = modes == null ? void 0 : modes.desktop;
           if (!d) continue;
-          const px = pxToFloat((_i = tokens.typography.sizes[d.size]) != null ? _i : "");
+          const px = pxToFloat((_h = tokens.typography.sizes[d.size]) != null ? _h : "");
           if (!px) continue;
           const spec = mkText("Almost before we knew it, we had left the ground.", {
             style: weightStyle(d.weight),
@@ -7499,14 +7505,14 @@
           bar.resize(Math.max(px, 2), 14);
           bar.cornerRadius = 3;
           bar.fills = [boundFill(accentVar, accentHex, 0.9)];
-          bindField(bar, "width", (_j = findVar(COLLECTIONS.spacing, figmaVarName(key))) != null ? _j : findVar(COLLECTIONS.spacing, key));
+          bindField(bar, "width", (_i = findVar(COLLECTIONS.spacing, figmaVarName(key))) != null ? _i : findVar(COLLECTIONS.spacing, key));
           row.appendChild(bar);
           body.appendChild(row);
         }
         const spacingRoles = tokens.spacingRoles;
         if (spacingRoles) {
           for (const [role, step] of Object.entries(spacingRoles)) {
-            const px = pxToFloat((_k = tokens.spacing[step]) != null ? _k : "");
+            const px = pxToFloat((_j = tokens.spacing[step]) != null ? _j : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7527,7 +7533,7 @@
       }
     }
     {
-      const entries = Object.entries((_l = tokens.radius) != null ? _l : {});
+      const entries = Object.entries((_k = tokens.radius) != null ? _k : {});
       if (entries.length > 0) {
         await newBoard("Border Radius");
         root.appendChild(sectionBar("Border Radius"));
@@ -7560,7 +7566,7 @@
         if (radiusRoles) {
           const roleRow = autoFrame("radius-roles", "HORIZONTAL", 24);
           for (const [role, step] of Object.entries(radiusRoles)) {
-            const px = pxToFloat((_m = tokens.radius[step]) != null ? _m : "");
+            const px = pxToFloat((_l = tokens.radius[step]) != null ? _l : "");
             const cell = autoFrame(`role-${role}`, "VERTICAL", 8);
             cell.counterAxisAlignItems = "CENTER";
             const sq = figma.createFrame();
@@ -7570,7 +7576,7 @@
             sq.fills = [boundFill(cardVar, cardHex)];
             sq.strokes = [boundFill(accentVar, accentHex, 0.7)];
             sq.strokeWeight = 2;
-            const rv = (_n = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`))) != null ? _n : findVar(COLLECTIONS.radius, step);
+            const rv = (_m = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`))) != null ? _m : findVar(COLLECTIONS.radius, step);
             if ((rv == null ? void 0 : rv.resolvedType) === "FLOAT") {
               sq.setBoundVariable("topLeftRadius", rv);
               sq.setBoundVariable("topRightRadius", rv);
@@ -7588,7 +7594,7 @@
       }
     }
     {
-      const strokeMap = tokens.stroke && Object.keys(tokens.stroke).length > 0 ? tokens.stroke : (_o = tokens.borders) == null ? void 0 : _o.width;
+      const strokeMap = tokens.stroke && Object.keys(tokens.stroke).length > 0 ? tokens.stroke : (_n = tokens.borders) == null ? void 0 : _n.width;
       const entries = Object.entries(strokeMap != null ? strokeMap : {});
       if (entries.length > 0) {
         await newBoard("Stroke");
@@ -7608,13 +7614,13 @@
           line.strokes = [boundFill(textVar, textHex, 0.85)];
           line.strokeWeight = px;
           line.cornerRadius = 4;
-          bindField(line, "strokeWeight", (_p = findVar(COLLECTIONS.border, key)) != null ? _p : findVar(COLLECTIONS.border, `width/${key}`));
+          bindField(line, "strokeWeight", (_o = findVar(COLLECTIONS.border, key)) != null ? _o : findVar(COLLECTIONS.border, `width/${key}`));
           row.appendChild(line);
           body.appendChild(row);
         }
         if (tokens.strokeRoles) {
           for (const [role, step] of Object.entries(tokens.strokeRoles)) {
-            const px = pxToFloat((_q = (strokeMap != null ? strokeMap : {})[step]) != null ? _q : "");
+            const px = pxToFloat((_p = (strokeMap != null ? strokeMap : {})[step]) != null ? _p : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7637,7 +7643,7 @@
       }
     }
     {
-      const entries = Object.entries((_r = tokens.opacity) != null ? _r : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
+      const entries = Object.entries((_q = tokens.opacity) != null ? _q : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
       if (entries.length > 0) {
         await newBoard("Opacity");
         root.appendChild(sectionBar("Opacity"));
@@ -7663,7 +7669,7 @@
       }
     }
     {
-      const entries = Object.entries((_s = tokens.shadows) != null ? _s : {});
+      const entries = Object.entries((_r = tokens.shadows) != null ? _r : {});
       if (entries.length > 0) {
         await newBoard("Shadows");
         root.appendChild(sectionBar("Shadows"));
@@ -7690,9 +7696,9 @@
       }
     }
     {
-      const grid = (_t = tokens.grid) != null ? _t : {};
-      const sizes = Object.entries((_u = tokens.sizes) != null ? _u : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
-      const selectors = Object.entries((_v = tokens.selector) != null ? _v : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      const grid = (_s = tokens.grid) != null ? _s : {};
+      const sizes = Object.entries((_t = tokens.sizes) != null ? _t : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      const selectors = Object.entries((_u = tokens.selector) != null ? _u : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
       if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
         await newBoard("Grid & Sizes");
         root.appendChild(sectionBar("Grid & Sizes"));
@@ -7720,7 +7726,7 @@
         }
         if (tokens.sizeRoles) {
           for (const [role, step] of Object.entries(tokens.sizeRoles)) {
-            const px = pxToFloat((_x = (_w = tokens.sizes) == null ? void 0 : _w[step]) != null ? _x : "");
+            const px = pxToFloat((_w = (_v = tokens.sizes) == null ? void 0 : _v[step]) != null ? _w : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7756,7 +7762,7 @@
           }
           if (tokens.selectorRoles) {
             for (const [role, step] of Object.entries(tokens.selectorRoles)) {
-              const px = pxToFloat((_z = (_y = tokens.selector) == null ? void 0 : _y[step]) != null ? _z : "");
+              const px = pxToFloat((_y = (_x = tokens.selector) == null ? void 0 : _x[step]) != null ? _y : "");
               const row = autoFrame(`role-selector-${role}`, "HORIZONTAL", 16);
               row.counterAxisAlignItems = "CENTER";
               const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7784,7 +7790,7 @@
         await newBoard("Gradients");
         root.appendChild(sectionBar("Gradients"));
         const { card, body } = section("Gradients", 'Named gradients from the configurator, resolved against the previewed accent ramp. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
-        const assigned = (_A = tokens.gradientAssignments) != null ? _A : {};
+        const assigned = (_z = tokens.gradientAssignments) != null ? _z : {};
         const paintStylesByName = new Map(
           (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s])
         );
@@ -8649,7 +8655,7 @@
     return true;
   }
   async function importCover(tokens) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e;
     namingCtx = tokens;
     const project = tokens.project || "Design System";
     const coverType = previewTypography(tokens);
@@ -8796,11 +8802,11 @@
     title.resize(1600 - 192, title.height);
     title.textAutoResize = "HEIGHT";
     mid.appendChild(title);
-    const themeCount = Object.keys((_d = tokens.colors.themes) != null ? _d : {}).length || (tokens.colors.semanticDark ? 2 : 1);
+    const themeCount = columnsFrom(tokens.colors.themeOrder, tokens.colors.themes).length || (tokens.colors.semanticDark ? 2 : 1);
     const famCount = new Set(
       Object.keys(prim).map((k) => k.includes("-") ? k.slice(0, k.lastIndexOf("-")) : k)
     ).size;
-    const atoms = (_f = (_e = tokens.atoms) != null ? _e : tokens.components) != null ? _f : [];
+    const atoms = (_e = (_d = tokens.atoms) != null ? _d : tokens.components) != null ? _e : [];
     const sub = text(
       `${famCount} color families \xB7 ${themeCount} theme${themeCount === 1 ? "" : "s"} \xB7 ${atoms.length} components \u2014 synced from the configurator`,
       bodyFont,

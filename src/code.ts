@@ -327,7 +327,7 @@ function previewGradients(tokens: DesignTokens): { light: Record<string, string>
   const byTheme = tokens.gradientsByTheme
   if (!byTheme || Object.keys(byTheme).length === 0) return { light: rootLight, dark: rootDark }
   const order = tokens.colors.themeOrder ?? []
-  const keys = [...order.filter((k) => byTheme[k]), ...Object.keys(byTheme).filter((k) => !order.includes(k))]
+  const keys = columnsFrom(order, byTheme)
   if (keys.length === 0) return { light: rootLight, dark: rootDark }
   // Sync ships one key per `theme::appearance`; an un-flattened My-theme ships
   // a bare theme key and carries only the one appearance it is.
@@ -834,6 +834,22 @@ function themesUsingFamily(family: string, tokens = namingCtx): string[] {
 function uniqueThemeForFamily(family: string, tokens = namingCtx): string | undefined {
   const hits = themesUsingFamily(family, tokens)
   return hits.length === 1 ? hits[0] : undefined
+}
+
+/** Column keys this payload asked Figma to create.
+ *  `themeOrder` is the File & modes selection. When it names keys that
+ *  exist on `present`, those are the columns — a key that only sits on
+ *  `themes`, `themeModes`, or `foundationsByTheme` is not one. An
+ *  unchecked Light/Dark used to come back because every key on the map
+ *  was appended after `themeOrder`. */
+function columnsFrom(
+  order: readonly string[] | undefined,
+  present: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!present) return []
+  const listed = (order ?? []).filter((key) => present[key] != null)
+  if (listed.length) return listed
+  return Object.keys(present)
 }
 
 function shippedThemeLabel(key: string, tokens = namingCtx): string {
@@ -1966,12 +1982,16 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     // mid-import. Leaving a wrongly-named default column is the mild failure.
     const stale = col.modes.filter((m) => m.modeId !== col.defaultModeId && !wanted.has(m.name))
     const removed: string[] = []
+    const stuck: string[] = []
     for (const m of stale) {
       try { col.removeMode(m.modeId); removed.push(m.name) }
-      catch (e) { /* in use or last mode — leave it rather than fail the import */ }
+      catch (e) { stuck.push(m.name) }
     }
     if (removed.length > 0) {
       log(`Removed ${removed.length} stale ${collLabel} theme column${removed.length > 1 ? 's' : ''} (${removed.join(', ')}) — not in the system any more`)
+    }
+    if (stuck.length > 0) {
+      log(`⚠ Could not remove ${stuck.length} stale ${collLabel} column${stuck.length > 1 ? 's' : ''} (${stuck.join(', ')}). They are still in the file — delete them in Figma if this sync did not ask for them.`)
     }
   }
 
@@ -2001,12 +2021,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
 
   // Emit a single-mode collection from a flat token map. Returns undefined (and
   // creates nothing) when there are no entries.
-  const foundationThemes: string[] = (() => {
-    const fb = tokens.foundationsByTheme
-    if (!fb) return []
-    const order = tokens.colors.themeOrder ?? []
-    return [...order.filter((k) => fb[k]), ...Object.keys(fb).filter((k) => !order.includes(k))]
-  })()
+  const foundationThemes: string[] = columnsFrom(tokens.colors.themeOrder, tokens.foundationsByTheme)
   // Same labels Color Semantics uses — Sync flattens to `theme::light`
   // keys, and `cap()` of that string is not a column name anyone can read.
   // This helper went missing in an edit and every one of its three call sites
@@ -2547,12 +2562,12 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   // exactly as before.
   const semCol = findOrCreateCollection(COLLECTIONS.semantics)
   const semCache = cacheFor(semCol)
-  // Color Semantics columns follow `colors.themes` + `themeOrder`.
-  // Sync may flatten those keys to `theme::light` / `theme::dark` so a
-  // selected theme ships both appearances as Figma modes. `themeModes`
-  // stays the canonical per-theme map for other consumers — do not rebuild
-  // columns from `{ light, dark }` of themeOrder[0] (that dropped every
-  // extra library theme).
+  // Color Semantics columns are `themeOrder` when it names real theme
+  // keys. Sync flattens those to `theme::light` / `theme::dark`, one mode
+  // per checked appearance. Do not append keys that are only on `themes`
+  // or `themeModes`, and do not rebuild columns from `{ light, dark }` of
+  // themeOrder[0] — the first drops an unchecked appearance back in, the
+  // second dropped every extra library theme.
   const themes: Record<string, Record<string, string>> =
     tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0
       ? tokens.colors.themes
@@ -2560,8 +2575,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
           light: tokens.colors.semantic || {},
           ...(tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {}),
         }
-  const ordered = (tokens.colors.themeOrder ?? []).filter((t) => themes[t])
-  const themeNames = [...ordered, ...Object.keys(themes).filter((t) => !ordered.includes(t))]
+  const themeNames = columnsFrom(tokens.colors.themeOrder, themes)
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
   const arch = tokens.colors.architecture
@@ -2581,6 +2595,9 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   const modeSpec: [string, string][] = norm
     ? norm.modes
     : themeNames.map((t) => [t, themeLabels[t]?.trim() || cap(t)] as [string, string])
+  if (modeSpec.length > 0) {
+    log(`Color Semantics: ${modeSpec.length} theme column${modeSpec.length === 1 ? '' : 's'} (${modeSpec.map(([, label]) => label).join(', ')})`)
+  }
   const modeIdOf: Record<string, string> = {}
   const skippedModes: string[] = []
   try { semCol.renameMode(semCol.defaultModeId, modeSpec[0][1]) } catch (e) { /* not allowed */ }
@@ -8505,8 +8522,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     tokens.colors.themes && Object.keys(tokens.colors.themes).length > 0
       ? tokens.colors.themes
       : { light: sem, ...(tokens.colors.semanticDark ? { dark: tokens.colors.semanticDark } : {}) }
-  const themeOrdered = (tokens.colors.themeOrder ?? []).filter((t) => themesMap[t])
-  const themeNames = [...themeOrdered, ...Object.keys(themesMap).filter((t) => !themeOrdered.includes(t))]
+  const themeNames = columnsFrom(tokens.colors.themeOrder, themesMap)
   const lightTheme = themesMap[themeNames[0]] ?? {}
   const darkThemeName = themesMap.dark ? 'dark' : themeNames[1]
   const darkTheme = darkThemeName && darkThemeName !== themeNames[0] ? themesMap[darkThemeName] : undefined
@@ -10743,7 +10759,7 @@ async function importCover(tokens: DesignTokens): Promise<boolean> {
   title.resize(1600 - 192, title.height)
   title.textAutoResize = 'HEIGHT'
   mid.appendChild(title)
-  const themeCount = Object.keys(tokens.colors.themes ?? {}).length ||
+  const themeCount = columnsFrom(tokens.colors.themeOrder, tokens.colors.themes).length ||
     (tokens.colors.semanticDark ? 2 : 1)
   const famCount = new Set(
     Object.keys(prim).map((k) => (k.includes('-') ? k.slice(0, k.lastIndexOf('-')) : k)),
