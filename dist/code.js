@@ -58,6 +58,33 @@
     const first = trimmed.split(",")[0].trim().replace(/^['"]|['"]$/g, "");
     return first || "Inter";
   }
+  async function preloadSystemFonts(tokens) {
+    var _a;
+    const wanted = collectSystemFontFamilies(tokens);
+    const loaded = /* @__PURE__ */ new Set();
+    const stylesByFamily = /* @__PURE__ */ new Map();
+    try {
+      for (const f of await figma.listAvailableFontsAsync()) {
+        let styles = stylesByFamily.get(f.fontName.family);
+        if (!styles) {
+          styles = /* @__PURE__ */ new Set();
+          stylesByFamily.set(f.fontName.family, styles);
+        }
+        styles.add(f.fontName.style);
+      }
+    } catch (e) {
+    }
+    for (const family of wanted) {
+      const have = stylesByFamily.get(family);
+      const style = have ? (_a = STYLE_PREF.Regular.find((candidate) => have.has(candidate))) != null ? _a : [...have][0] : "Regular";
+      try {
+        await figma.loadFontAsync({ family, style });
+        loaded.add(family);
+      } catch (e) {
+      }
+    }
+    return loaded;
+  }
   function collectSystemFontFamilies(tokens) {
     var _a, _b, _c, _d, _e;
     const out = [];
@@ -361,12 +388,11 @@
     return `${names.length}:${(h >>> 0).toString(36)}`;
   }
   function collectionPanelOrder(tokens) {
-    var _a, _b;
+    var _a;
     const rest = [
       { name: COLLECTIONS.border, include: !!(tokens.stroke || ((_a = tokens.borders) == null ? void 0 : _a.width)) },
       { name: COLLECTIONS.copy, include: !!tokens.copy },
       { name: COLLECTIONS.grid, include: !!tokens.grid },
-      { name: COLLECTIONS.icons, include: !!((_b = tokens.icons) == null ? void 0 : _b.library) },
       { name: COLLECTIONS.opacity, include: !!tokens.opacity },
       { name: COLLECTIONS.radius, include: true },
       { name: COLLECTIONS.selector, include: !!tokens.selector },
@@ -1165,7 +1191,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S;
     namingCtx = tokens;
     let count = 0;
     semanticsRebuilt = false;
@@ -1455,6 +1481,27 @@
       let typoVar2 = function(name, type, value) {
         const variable = upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name));
         setDefault(typoCol, variable, value);
+      }, familyMatches2 = function(variable, modeId, family) {
+        const raw = variable.valuesByMode[modeId];
+        return typeof raw === "string" && normalizeFontFamilyName(raw) === family;
+      }, warnUnavailableFamily2 = function(name, family, where) {
+        if (warnedFamilies.has(family)) return;
+        warnedFamilies.add(family);
+        const place = where ? ` (${where})` : "";
+        log(`\u26A0 Typography/${name}${place} left unchanged \u2014 "${family}" is not available in this Figma file. Enable it in Figma, then sync again.`);
+      }, writeFamilyValue2 = function(variable, modeId, family, name, where) {
+        if (!loadedFamilies.has(family)) {
+          warnUnavailableFamily2(name, family, where);
+          return false;
+        }
+        try {
+          variable.setValueForMode(modeId, family);
+          return true;
+        } catch (e) {
+          const m = e instanceof Error ? e.message : String(e);
+          log(`\u26A0 Typography/${name}${where ? ` (${where})` : ""} could not be set to "${family}": ${m}`);
+          return false;
+        }
       }, migrateLegacyFamilyName2 = function(legacy, canonical) {
         const legacyVar = typoCache.get(legacy);
         if (!legacyVar || typoCache.has(canonical)) return;
@@ -1465,20 +1512,29 @@
         } catch (e) {
         }
       };
-      var typoVar = typoVar2, migrateLegacyFamilyName = migrateLegacyFamilyName2;
+      var typoVar = typoVar2, familyMatches = familyMatches2, warnUnavailableFamily = warnUnavailableFamily2, writeFamilyValue = writeFamilyValue2, migrateLegacyFamilyName = migrateLegacyFamilyName2;
       const typoCol = findOrCreateCollection(COLLECTIONS.typography);
       const typoCache = cacheFor(typoCol);
+      const loadedFamilies = await preloadSystemFonts(tokens);
+      const warnedFamilies = /* @__PURE__ */ new Set();
       async function writeFontFamily(name, family) {
         const variable = upsertVarIn(typoCol, typoCache, name, "STRING", scopesForCollection(COLLECTIONS.typography, name));
-        setDefault(typoCol, variable, family);
+        let wrote = false;
+        for (const mode of typoCol.modes) {
+          if (writeFamilyValue2(variable, mode.modeId, family, name)) wrote = true;
+        }
+        if (!wrote) return;
         const verify = async () => {
+          await yieldToUI();
           const current = await figma.variables.getVariableByIdAsync(variable.id);
           if (!current) return false;
-          return typoCol.modes.every((mode) => current.valuesByMode[mode.modeId] === family);
+          return typoCol.modes.every((mode) => familyMatches2(current, mode.modeId, family));
         };
         if (await verify()) return;
         const fresh = await figma.variables.getVariableByIdAsync(variable.id);
-        if (fresh) setDefault(typoCol, fresh, family);
+        if (fresh) {
+          for (const mode of typoCol.modes) writeFamilyValue2(fresh, mode.modeId, family, name);
+        }
         if (!await verify()) throw new Error(`Figma kept a stale value for Typography/${name}; expected "${family}"`);
       }
       Object.entries(tokens.typography.sizes).forEach(([key, val]) => typoVar2(`size/${key}`, "FLOAT", pxToFloat(val)));
@@ -1510,8 +1566,9 @@
           );
           const mid = modeIdOf2[theme];
           if (!mid) continue;
-          bodyVar.setValueForMode(mid, body);
-          displayVar.setValueForMode(mid, heading);
+          const column = capFoundationTheme(theme);
+          writeFamilyValue2(bodyVar, mid, body, TYPOGRAPHY_FAMILY_VARS.body, column);
+          writeFamilyValue2(displayVar, mid, heading, TYPOGRAPHY_FAMILY_VARS.display, column);
           for (const [key, val] of Object.entries((_i = f == null ? void 0 : f.sizes) != null ? _i : tokens.typography.sizes)) {
             const v = (_j = typoCache.get(figmaVarName(`size/${key}`))) != null ? _j : upsertVarIn(typoCol, typoCache, `size/${key}`, "FLOAT", scopesForCollection(COLLECTIONS.typography, `size/${key}`));
             v.setValueForMode(mid, pxToFloat(val));
@@ -1537,13 +1594,17 @@
           const heading = normalizeFontFamilyName(
             (_x = (_w = (_v = f == null ? void 0 : f.headingFontFamily) != null ? _v : f == null ? void 0 : f.fontFamily) != null ? _w : tokens.typography.headingFontFamily) != null ? _x : tokens.typography.fontFamily
           );
+          const column = capFoundationTheme(theme);
           const verifyMode = async (variable, expected, name) => {
+            if (!loadedFamilies.has(expected)) return;
+            await yieldToUI();
             const current = await figma.variables.getVariableByIdAsync(variable.id);
-            if ((current == null ? void 0 : current.valuesByMode[mid]) === expected) return;
-            variable.setValueForMode(mid, expected);
+            if (current && familyMatches2(current, mid, expected)) return;
+            writeFamilyValue2(variable, mid, expected, name, column);
+            await yieldToUI();
             const again = await figma.variables.getVariableByIdAsync(variable.id);
-            if ((again == null ? void 0 : again.valuesByMode[mid]) !== expected) {
-              throw new Error(`Figma kept a stale value for Typography/${name} (${capFoundationTheme(theme)}); expected "${expected}"`);
+            if (!again || !familyMatches2(again, mid, expected)) {
+              throw new Error(`Figma kept a stale value for Typography/${name} (${column}); expected "${expected}"`);
             }
           };
           await verifyMode(bodyVar, body, TYPOGRAPHY_FAMILY_VARS.body);
@@ -1554,7 +1615,7 @@
           for (const theme of foundationThemes) {
             const mid = modeIdOf2[theme];
             const f = (_z = (_y = tokens.foundationsByTheme) == null ? void 0 : _y[theme]) == null ? void 0 : _z.typography;
-            if (mid) leg.setValueForMode(mid, normalizeFontFamilyName((_A = f == null ? void 0 : f.fontFamily) != null ? _A : bodyFamily));
+            if (mid) writeFamilyValue2(leg, mid, normalizeFontFamilyName((_A = f == null ? void 0 : f.fontFamily) != null ? _A : bodyFamily), TYPOGRAPHY_FAMILY_VARS.legacyBody, capFoundationTheme(theme));
           }
         }
         if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
@@ -1563,9 +1624,9 @@
             const mid = modeIdOf2[theme];
             const f = (_C = (_B = tokens.foundationsByTheme) == null ? void 0 : _B[theme]) == null ? void 0 : _C.typography;
             if (mid) {
-              leg.setValueForMode(mid, normalizeFontFamilyName(
+              writeFamilyValue2(leg, mid, normalizeFontFamilyName(
                 (_E = (_D = f == null ? void 0 : f.headingFontFamily) != null ? _D : f == null ? void 0 : f.fontFamily) != null ? _E : headingFamily
-              ));
+              ), TYPOGRAPHY_FAMILY_VARS.legacyDisplay, capFoundationTheme(theme));
             }
           }
         }
@@ -1584,10 +1645,12 @@
         await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily);
         await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily);
         if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
-          setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody), bodyFamily);
+          const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody);
+          for (const mode of typoCol.modes) writeFamilyValue2(leg, mode.modeId, bodyFamily, TYPOGRAPHY_FAMILY_VARS.legacyBody);
         }
         if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
-          setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay), headingFamily);
+          const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay);
+          for (const mode of typoCol.modes) writeFamilyValue2(leg, mode.modeId, headingFamily, TYPOGRAPHY_FAMILY_VARS.legacyDisplay);
         }
         const familyNow = (() => {
           const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body);
@@ -2075,8 +2138,21 @@
       );
       log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
     }
-    if ((_T = tokens.icons) == null ? void 0 : _T.library) {
-      emitCollection(COLLECTIONS.icons, [["library", tokens.icons.name || tokens.icons.library]], "STRING", (v) => v);
+    {
+      const iconsCol = existingCollections.find((c) => c.name === COLLECTIONS.icons);
+      if (iconsCol) {
+        try {
+          iconsCol.remove();
+          const i = existingCollections.indexOf(iconsCol);
+          if (i !== -1) existingCollections.splice(i, 1);
+          for (let n = allVars.length - 1; n >= 0; n--) {
+            if (allVars[n].variableCollectionId === iconsCol.id) allVars.splice(n, 1);
+          }
+          log("\u2713 Removed the Icons variable collection \u2014 icon sets stay on the \u2B21 Icons page");
+        } catch (e) {
+          log('\u26A0 Could not remove the Icons collection. A layer still uses its "library" variable \u2014 unbind it, then sync again.');
+        }
+      }
     }
     if (tokens.copy) {
       emitCollection(COLLECTIONS.copy, Object.entries(tokens.copy), "STRING", (v) => v);
@@ -8294,7 +8370,7 @@
     docBullet(
       specs,
       `Library \u2014 ${libName || "custom only"}`,
-      ((_t = tokens.icons) == null ? void 0 : _t.package) ? `Ships as ${tokens.icons.package} in code, so design and engineering draw from the same set.` : "Selected in the configurator and stored as the Icons/library variable."
+      ((_t = tokens.icons) == null ? void 0 : _t.package) ? `Ships as ${tokens.icons.package} in code, so design and engineering draw from the same set.` : "Selected in the configurator. The glyphs on this page are the library; there is no Icons variable."
     );
     if (libCount > 0) {
       docBullet(

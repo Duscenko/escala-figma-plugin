@@ -242,6 +242,36 @@ function normalizeFontFamilyName(raw: string | undefined | null): string {
   return first || 'Inter'
 }
 
+/** Load every family this payload names before any FONT_FAMILY variable is
+ *  written. Figma keeps the previous string when `setValueForMode` runs
+ *  against a family that has not been loaded in this plugin session — the
+ *  write looks successful and the Variables panel stays on the old face.
+ *  Retrying the same payload does not fix it, because the next attempt
+ *  also writes before the load. Returns the families that actually loaded. */
+async function preloadSystemFonts(tokens: DesignTokens): Promise<Set<string>> {
+  const wanted = collectSystemFontFamilies(tokens)
+  const loaded = new Set<string>()
+  const stylesByFamily = new Map<string, Set<string>>()
+  try {
+    for (const f of await figma.listAvailableFontsAsync()) {
+      let styles = stylesByFamily.get(f.fontName.family)
+      if (!styles) { styles = new Set(); stylesByFamily.set(f.fontName.family, styles) }
+      styles.add(f.fontName.style)
+    }
+  } catch { /* loadFontAsync below still tries Regular */ }
+  for (const family of wanted) {
+    const have = stylesByFamily.get(family)
+    const style = have
+      ? (STYLE_PREF.Regular.find((candidate) => have.has(candidate)) ?? [...have][0])
+      : 'Regular'
+    try {
+      await figma.loadFontAsync({ family, style })
+      loaded.add(family)
+    } catch { /* unavailable — the write path warns and does not abort the import */ }
+  }
+  return loaded
+}
+
 function collectSystemFontFamilies(tokens: DesignTokens): string[] {
   const out: string[] = []
   const add = (raw?: string | null) => {
@@ -685,7 +715,6 @@ function collectionPanelOrder(tokens: DesignTokens): string[] {
     { name: COLLECTIONS.border, include: !!(tokens.stroke || tokens.borders?.width) },
     { name: COLLECTIONS.copy, include: !!tokens.copy },
     { name: COLLECTIONS.grid, include: !!tokens.grid },
-    { name: COLLECTIONS.icons, include: !!tokens.icons?.library },
     { name: COLLECTIONS.opacity, include: !!tokens.opacity },
     { name: COLLECTIONS.radius, include: true },
     { name: COLLECTIONS.selector, include: !!tokens.selector },
@@ -2176,28 +2205,60 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   try {
     const typoCol = findOrCreateCollection(COLLECTIONS.typography)
     const typoCache = cacheFor(typoCol)
+    // Must run before any font-family setValueForMode. See preloadSystemFonts.
+    const loadedFamilies = await preloadSystemFonts(tokens)
     function typoVar(name: string, type: VariableResolvedDataType, value: VariableValue) {
       const variable = upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name))
       setDefault(typoCol, variable, value)
     }
-    // FONT_FAMILY values are the point of the typography sync. Do not treat a
-    // successful fetch as proof that Figma accepted the write: re-read the
-    // exact variable object after writing every collection mode. This turns a
-    // silent stale value (the UI says Roboto while Variables still says
-    // Montserrat) into a failed sync that is retried on the next Live Sync tick.
+    function familyMatches(variable: Variable, modeId: string, family: string): boolean {
+      const raw = variable.valuesByMode[modeId]
+      return typeof raw === 'string' && normalizeFontFamilyName(raw) === family
+    }
+    // A family Figma does not have cannot be written. Warn and continue so
+    // sizes, weights and every other collection still sync — throwing here
+    // used to abort the whole Variables phase on a font update.
+    const warnedFamilies = new Set<string>()
+    function warnUnavailableFamily(name: string, family: string, where?: string) {
+      if (warnedFamilies.has(family)) return
+      warnedFamilies.add(family)
+      const place = where ? ` (${where})` : ''
+      log(`⚠ Typography/${name}${place} left unchanged — "${family}" is not available in this Figma file. Enable it in Figma, then sync again.`)
+    }
+    function writeFamilyValue(variable: Variable, modeId: string, family: string, name: string, where?: string): boolean {
+      if (!loadedFamilies.has(family)) {
+        warnUnavailableFamily(name, family, where)
+        return false
+      }
+      try {
+        variable.setValueForMode(modeId, family)
+        return true
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e)
+        log(`⚠ Typography/${name}${where ? ` (${where})` : ''} could not be set to "${family}": ${m}`)
+        return false
+      }
+    }
+    // Re-read after a yield. A fetch in the same turn can still show the
+    // previous string even when Figma accepted the write.
     async function writeFontFamily(name: string, family: string): Promise<void> {
       const variable = upsertVarIn(typoCol, typoCache, name, 'STRING', scopesForCollection(COLLECTIONS.typography, name))
-      setDefault(typoCol, variable, family)
+      let wrote = false
+      for (const mode of typoCol.modes) {
+        if (writeFamilyValue(variable, mode.modeId, family, name)) wrote = true
+      }
+      if (!wrote) return
       const verify = async () => {
+        await yieldToUI()
         const current = await figma.variables.getVariableByIdAsync(variable.id)
         if (!current) return false
-        return typoCol.modes.every((mode) => current.valuesByMode[mode.modeId] === family)
+        return typoCol.modes.every((mode) => familyMatches(current, mode.modeId, family))
       }
       if (await verify()) return
-      // One retry uses a freshly fetched Variable object rather than the
-      // import cache, which can be stale after a Figma-side edit.
       const fresh = await figma.variables.getVariableByIdAsync(variable.id)
-      if (fresh) setDefault(typoCol, fresh, family)
+      if (fresh) {
+        for (const mode of typoCol.modes) writeFamilyValue(fresh, mode.modeId, family, name)
+      }
       if (!await verify()) throw new Error(`Figma kept a stale value for Typography/${name}; expected "${family}"`)
     }
     Object.entries(tokens.typography.sizes).forEach(([key, val]) => typoVar(`size/${key}`, 'FLOAT', pxToFloat(val)))
@@ -2247,8 +2308,9 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         )
         const mid = modeIdOf[theme]
         if (!mid) continue
-        bodyVar.setValueForMode(mid, body)
-        displayVar.setValueForMode(mid, heading)
+        const column = capFoundationTheme(theme)
+        writeFamilyValue(bodyVar, mid, body, TYPOGRAPHY_FAMILY_VARS.body, column)
+        writeFamilyValue(displayVar, mid, heading, TYPOGRAPHY_FAMILY_VARS.display, column)
         for (const [key, val] of Object.entries(f?.sizes ?? tokens.typography.sizes)) {
           const v = typoCache.get(figmaVarName(`size/${key}`))
             ?? upsertVarIn(typoCol, typoCache, `size/${key}`, 'FLOAT', scopesForCollection(COLLECTIONS.typography, `size/${key}`))
@@ -2278,13 +2340,17 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         const heading = normalizeFontFamilyName(
           f?.headingFontFamily ?? f?.fontFamily ?? tokens.typography.headingFontFamily ?? tokens.typography.fontFamily,
         )
+        const column = capFoundationTheme(theme)
         const verifyMode = async (variable: Variable, expected: string, name: string) => {
+          if (!loadedFamilies.has(expected)) return
+          await yieldToUI()
           const current = await figma.variables.getVariableByIdAsync(variable.id)
-          if (current?.valuesByMode[mid] === expected) return
-          variable.setValueForMode(mid, expected)
+          if (current && familyMatches(current, mid, expected)) return
+          writeFamilyValue(variable, mid, expected, name, column)
+          await yieldToUI()
           const again = await figma.variables.getVariableByIdAsync(variable.id)
-          if (again?.valuesByMode[mid] !== expected) {
-            throw new Error(`Figma kept a stale value for Typography/${name} (${capFoundationTheme(theme)}); expected "${expected}"`)
+          if (!again || !familyMatches(again, mid, expected)) {
+            throw new Error(`Figma kept a stale value for Typography/${name} (${column}); expected "${expected}"`)
           }
         }
         await verifyMode(bodyVar, body, TYPOGRAPHY_FAMILY_VARS.body)
@@ -2295,7 +2361,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         for (const theme of foundationThemes) {
           const mid = modeIdOf[theme]
           const f = tokens.foundationsByTheme?.[theme]?.typography
-          if (mid) leg.setValueForMode(mid, normalizeFontFamilyName(f?.fontFamily ?? bodyFamily))
+          if (mid) writeFamilyValue(leg, mid, normalizeFontFamilyName(f?.fontFamily ?? bodyFamily), TYPOGRAPHY_FAMILY_VARS.legacyBody, capFoundationTheme(theme))
         }
       }
       if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
@@ -2304,9 +2370,9 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
           const mid = modeIdOf[theme]
           const f = tokens.foundationsByTheme?.[theme]?.typography
           if (mid) {
-            leg.setValueForMode(mid, normalizeFontFamilyName(
+            writeFamilyValue(leg, mid, normalizeFontFamilyName(
               f?.headingFontFamily ?? f?.fontFamily ?? headingFamily,
-            ))
+            ), TYPOGRAPHY_FAMILY_VARS.legacyDisplay, capFoundationTheme(theme))
           }
         }
       }
@@ -2324,10 +2390,12 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.body, bodyFamily)
       await writeFontFamily(TYPOGRAPHY_FAMILY_VARS.display, headingFamily)
       if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyBody)) {
-        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)!, bodyFamily)
+        const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)!
+        for (const mode of typoCol.modes) writeFamilyValue(leg, mode.modeId, bodyFamily, TYPOGRAPHY_FAMILY_VARS.legacyBody)
       }
       if (typoCache.has(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) {
-        setDefault(typoCol, typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)!, headingFamily)
+        const leg = typoCache.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)!
+        for (const mode of typoCol.modes) writeFamilyValue(leg, mode.modeId, headingFamily, TYPOGRAPHY_FAMILY_VARS.legacyDisplay)
       }
       const familyNow = (() => {
         const v = typoCache.get(TYPOGRAPHY_FAMILY_VARS.body)
@@ -2930,8 +2998,24 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     log(`✓ Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` · ${bpRoleCount} breakpoint roles` : ''})`)
   }
 
-  if (tokens.icons?.library) {
-    emitCollection(COLLECTIONS.icons, [['library', tokens.icons.name || tokens.icons.library]], 'STRING', (v) => v)
+  // Icons are components on the ⬡ Icons page, not a variable. Older imports
+  // created a one-row "Icons" collection (`library` = "Phosphor Icons") that
+  // nothing binds. Drop it so the Variables panel stops listing it.
+  {
+    const iconsCol = existingCollections.find((c) => c.name === COLLECTIONS.icons)
+    if (iconsCol) {
+      try {
+        iconsCol.remove()
+        const i = existingCollections.indexOf(iconsCol)
+        if (i !== -1) existingCollections.splice(i, 1)
+        for (let n = allVars.length - 1; n >= 0; n--) {
+          if (allVars[n].variableCollectionId === iconsCol.id) allVars.splice(n, 1)
+        }
+        log('✓ Removed the Icons variable collection — icon sets stay on the ⬡ Icons page')
+      } catch {
+        log('⚠ Could not remove the Icons collection. A layer still uses its "library" variable — unbind it, then sync again.')
+      }
+    }
   }
 
   if (tokens.copy) {
@@ -10240,7 +10324,7 @@ async function importIcons(tokens: DesignTokens): Promise<number> {
   docBullet(specs, `Library — ${libName || 'custom only'}`,
     tokens.icons?.package
       ? `Ships as ${tokens.icons.package} in code, so design and engineering draw from the same set.`
-      : 'Selected in the configurator and stored as the Icons/library variable.')
+      : 'Selected in the configurator. The glyphs on this page are the library; there is no Icons variable.')
   if (libCount > 0) {
     docBullet(specs, `${libCount} core UI glyphs`,
       'Navigation, actions, forms, status, commerce, media and device icons — insert as icon/<library>/<name>. Missing concepts in a set are skipped gracefully.')
@@ -11638,8 +11722,8 @@ figma.ui.onmessage = async (msg: {
     // Icons used to ride on `importComponents`, so asking for the sample sheet
     // also meant generating 117 icon sets × 3 sizes = 351 SVG components plus
     // an Iconify network fetch. It has its own flag now, OFF by default (see
-    // ui.html's scope cards) — the `icons.library` token still ships as a
-    // variable either way, this only controls generating the components.
+    // ui.html's scope cards). The old Icons variable collection is not
+    // recreated — icon sets live on the ⬡ Icons page, not in Variables.
     // Each falls back to the combined importDocs flag when its own is absent,
     // so a caller that never heard of importCover/importDocumentation (the
     // Import panel) still gets its old all-or-nothing behavior.

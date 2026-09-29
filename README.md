@@ -78,15 +78,15 @@ primitives and semantics.
 | `selector` + `selectorRoles` | **Selector** | Checkbox / radio / switch glyph sizes (`xs`–`xl`) + `role/{control,compact,indicator}` aliases |
 | `grid` + `breakpointRoles` | **Grid** | `{key}` FLOAT variables (+ a column Grid Style); breakpoint roles alias `breakpoint-{step}` |
 | `shadows` (+ `shadowsDark`) | — | Effect Styles (multi-layer drop shadows); a differing dark CSS becomes `… (Dark)` |
-| `icons.library` | **Icons** | `library` STRING variable, **plus** the library's core UI glyphs (~95 across navigation, actions, communication, people, media, files, status, commerce, security, tech and layout) fetched from the Iconify API and generated as `icon/<library>/<name>` **variant sets — Size: Large 24 / Medium 20 / Small 16** — on "⬡ Icons", tinted with the `text/primary` variable so they re-theme. Works for Lucide, Heroicons, Phosphor, Radix and Material Symbols; needs network access to `api.iconify.design` (declared in the manifest) — without it, the import logs a warning and continues. Loose single-component icons from older imports upgrade in place to the Large variant. |
+| `icons.library` | — | No variable collection. The name only chooses which glyph set the opt-in Icons phase builds: the library's core UI glyphs (~95 across navigation, actions, communication, people, media, files, status, commerce, security, tech and layout) fetched from the Iconify API and generated as `icon/<library>/<name>` **variant sets — Size: Large 24 / Medium 20 / Small 16** — on "⬡ Icons", tinted with the `text/primary` variable so they re-theme. Works for Lucide, Heroicons, Phosphor, Radix and Material Symbols; needs network access to `api.iconify.design` (declared in the manifest) — without it, the import logs a warning and continues. Loose single-component icons from older imports upgrade in place to the Large variant. A leftover **Icons** collection (`library` = the set name) from older plugin builds is removed on the next sync. |
 | `icons.custom` | — | Components on the "⬡ Icons" page (kept untinted — brand marks may be multicolor) |
 
 > **The icon components are OFF by default.** They have their own "Icon
 > library" tick in the import scope, unchecked. Generating them is 117 sets ×
 > 3 sizes = 351 SVG components plus an Iconify network fetch — the second
 > slowest phase after the old component catalogue, and it used to be forced on
-> by the Components tick. The `icons.library` token still ships as a variable
-> either way; the checkbox only controls generating the components.
+> by the Components tick. The checkbox only controls generating the components.
+> There is no Icons variable.
 
 The "⬡ Icons" page is laid out like the Components Overview boards: an editorial doc
 panel (breadcrumb, intro, SPECS, FEATURES, insert hint) wrapped in a
