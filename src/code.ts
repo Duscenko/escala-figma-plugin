@@ -59,11 +59,15 @@ interface DesignTokens {
     lineHeights?: Record<string, string>     // px or unitless ratio
     letterSpacings?: Record<string, string>  // px or em
     // v6: semantic type roles. Each aliases a family + size + weight primitive
-    // (desktop / mobile). The plugin materializes desktop as role/{key}/* and
-    // mobile size as role/{key}/size-mobile. Text styles: Type/{key} stays
-    // desktop (component bindings); Type/{key} (Mobile) is additive.
+    // (desktop / tablet / mobile). The plugin materializes desktop as
+    // role/{key}/*, and tablet / mobile sizes as role/{key}/size-tablet and
+    // role/{key}/size-mobile. Text styles: Type/{key} stays desktop (component
+    // bindings); Type/{key} (Tablet) and (Mobile) are additive.
+    // `tablet` is additive too (configurator store v75, no schemaVersion bump):
+    // a payload without it imports exactly as before, no size-tablet variable.
     roles?: Record<string, {
       desktop: { family: string; size: string; weight: string }
+      tablet?: { family: string; size: string; weight: string }
       mobile?: { family: string; size: string; weight: string }
     }>
   }
@@ -111,6 +115,7 @@ interface DesignTokens {
   grid?: Record<string, string>              // columns/gutter/margin/container/breakpoint-*
   gridFrame?: {
     desktop?: { columns?: string; gutter?: string; margin?: string; container?: string }
+    tablet?: { columns?: string; gutter?: string; margin?: string; container?: string }
     mobile?: { columns?: string; gutter?: string; margin?: string; container?: string }
   }
   breakpointRoles?: Record<string, string>
@@ -826,7 +831,7 @@ function scopesForCollection(collName: string, varName: string): VariableScope[]
     case COLLECTIONS.opacity: return ['OPACITY']
     case COLLECTIONS.grid:    return ['WIDTH_HEIGHT']
     case COLLECTIONS.typography: {
-      if (varName.startsWith('size/') || varName.endsWith('/size') || varName.endsWith('/size-mobile')) return ['FONT_SIZE']
+      if (varName.startsWith('size/') || varName.endsWith('/size') || varName.endsWith('/size-tablet') || varName.endsWith('/size-mobile')) return ['FONT_SIZE']
       if (varName.startsWith('weight/') || varName.endsWith('/weight')) return ['FONT_WEIGHT']
       if (varName.startsWith('line-height/')) return ['LINE_HEIGHT']
       if (varName.startsWith('letter-spacing/')) return ['LETTER_SPACING']
@@ -2484,7 +2489,8 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         (t ? tokens.foundationsByTheme?.[t]?.typography?.roles : undefined) ?? tokens.typography.roles
       const rolesDiffer = themeMapsDiffer((t) => rolesFor(t), typeRoles)
       const modeIdOf = rolesDiffer ? ensureNamedModes(typoCol, foundationThemes) : undefined
-      const aliasSize = (modes: { desktop?: { size: string }; mobile?: { size: string } } | undefined, vp: 'desktop' | 'mobile') => {
+      type RoleCut = 'desktop' | 'tablet' | 'mobile'
+      const aliasSize = (modes: { desktop?: { size: string }; tablet?: { size: string }; mobile?: { size: string } } | undefined, vp: RoleCut) => {
         const step = modes?.[vp]?.size
         if (!step) return undefined
         const prim = typoCache.get(figmaVarName(`size/${step}`))
@@ -2521,19 +2527,27 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         return true
       }
       let roleCount = 0
+      let tabletCount = 0
       let mobileCount = 0
       const keys = new Set(Object.keys(typeRoles))
       if (rolesDiffer) {
         for (const t of foundationThemes) Object.keys(rolesFor(t) ?? {}).forEach((k) => keys.add(k))
       }
+      // Only a payload that actually carries tablet aliases gets size-tablet
+      // variables. `writeRoleVar` upserts before it knows whether there is a
+      // value, so an older payload would otherwise leave empty variables.
+      const hasTablet = [typeRoles, ...(rolesDiffer ? foundationThemes.map((t) => rolesFor(t)) : [])]
+        .some((map) => Object.values(map ?? {}).some((m) => Boolean(m?.tablet)))
       for (const key of keys) {
         if (writeRoleVar(`role/${key}/size`, 'FLOAT', (t) => aliasSize(rolesFor(t)?.[key], 'desktop'))) roleCount++
         writeRoleVar(`role/${key}/weight`, 'FLOAT', (t) => aliasWeight(rolesFor(t)?.[key], 'desktop'))
         writeRoleVar(`role/${key}/family`, 'STRING', (t) => aliasFamily(rolesFor(t)?.[key], 'desktop'))
+        if (hasTablet && writeRoleVar(`role/${key}/size-tablet`, 'FLOAT', (t) => aliasSize(rolesFor(t)?.[key], 'tablet'))) tabletCount++
         if (writeRoleVar(`role/${key}/size-mobile`, 'FLOAT', (t) => aliasSize(rolesFor(t)?.[key], 'mobile'))) mobileCount++
       }
       if (roleCount > 0) {
-        log(`✓ Typography roles (${roleCount} desktop aliases${mobileCount ? ` · ${mobileCount} size-mobile` : ''})`)
+        const extra = [tabletCount ? `${tabletCount} size-tablet` : '', mobileCount ? `${mobileCount} size-mobile` : ''].filter(Boolean)
+        log(`✓ Typography roles (${roleCount} desktop aliases${extra.length ? ` · ${extra.join(' · ')}` : ''})`)
       }
     }
     const sizeCount = Object.keys(tokens.typography.sizes).length
@@ -3532,7 +3546,10 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
   }
 
   // Semantic type roles — Type/{key} is desktop (what components bind).
-  // Type/{key} (Mobile) is additive; Figma has no @media on text styles.
+  // Type/{key} (Tablet) and (Mobile) are additive; Figma has no @media on text
+  // styles. A tablet style is only made where tablet differs from desktop —
+  // body and control roles hold one size, and an identical "(Tablet)" twin of
+  // each would just be noise in the styles picker.
   const typeRoles = tokens.typography.roles
   if (typeRoles) {
     const upsertRoleStyle = (
@@ -3578,17 +3595,26 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
       return true
     }
     let roleStyles = 0
+    let tabletStyles = 0
     let mobileStyles = 0
     for (const [key, modes] of Object.entries(typeRoles)) {
       const d = modes?.desktop
       if (!d) continue
       if (upsertRoleStyle(`Type/${key}`, key, d, typoVars.get(`role/${key}/size`) ?? typoVars.get(`size/${d.size}`))) roleStyles++
+      const tb = modes?.tablet
+      if (tb && (tb.size !== d.size || tb.weight !== d.weight || tb.family !== d.family)
+        && upsertRoleStyle(`Type/${key} (Tablet)`, key, tb, typoVars.get(`role/${key}/size-tablet`) ?? typoVars.get(`size/${tb.size}`))) {
+        tabletStyles++
+      }
       const m = modes?.mobile
       if (m && upsertRoleStyle(`Type/${key} (Mobile)`, key, m, typoVars.get(`role/${key}/size-mobile`) ?? typoVars.get(`size/${m.size}`))) {
         mobileStyles++
       }
     }
-    if (roleStyles > 0) log(`✓ Text styles (${roleStyles} semantic roles${mobileStyles ? ` · ${mobileStyles} mobile` : ''})`)
+    if (roleStyles > 0) {
+      const extra = [tabletStyles ? `${tabletStyles} tablet` : '', mobileStyles ? `${mobileStyles} mobile` : ''].filter(Boolean)
+      log(`✓ Text styles (${roleStyles} semantic roles${extra.length ? ` · ${extra.join(' · ')}` : ''})`)
+    }
   }
 
   // ── Effect styles: shadows ──────────────────────────────────────────────
@@ -9529,7 +9555,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     if (typeRoles && Object.keys(typeRoles).length > 0) {
       const { card: roleCard, body: roleBody } = section(
         'Type roles',
-        'Semantic text roles — desktop binds to role/*/size (what components use). Mobile is role/*/size-mobile and the Type/{role} (Mobile) text style. Figma has no @media; pick the Mobile style in a prototype.',
+        'Semantic text roles — desktop binds to role/*/size (what components use). Tablet and mobile are role/*/size-tablet and role/*/size-mobile, plus the Type/{role} (Tablet) and (Mobile) text styles. Only display and headings step; body and controls keep one size. Figma has no @media; pick the style for the frame you are designing.',
       )
       for (const [key, modes] of Object.entries(typeRoles)) {
         const d = modes?.desktop
@@ -9547,22 +9573,25 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         bindField(spec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`))
         bindField(spec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body))
         typeSpecimenRow(roleBody, `role-${key}`, 220, `${key}  →  ${d.size} / ${d.weight}`, spec)
-        const m = modes.mobile
-        if (m) {
+        // Tablet only where it steps (display, heading XL); mobile always, as
+        // before. Same specimen, bound to that cut's size variable.
+        for (const cut of ['tablet', 'mobile'] as const) {
+          const m = modes[cut]
+          if (!m) continue
+          if (cut === 'tablet' && m.size === d.size) continue
           const mpx = pxToFloat(tokens.typography.sizes[m.size] ?? '')
-          if (mpx) {
-            const mspec = mkText('Almost before we knew it, we had left the ground.', {
-              style: weightStyle(m.weight),
-              colorVar: textVar,
-              colorHex: textHex,
-            })
-            mspec.fontSize = mpx
-            mspec.lineHeight = { value: 120, unit: 'PERCENT' }
-            bindField(mspec, 'fontSize', bestVar(COLLECTIONS.typography, `role/${key}/size-mobile`, `size/${m.size}`))
-            bindField(mspec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${m.weight}`))
-            bindField(mspec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, m.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body))
-            typeSpecimenRow(roleBody, `role-${key}-mobile`, 220, `${key}  mobile  →  ${m.size} / ${m.weight}`, mspec)
-          }
+          if (!mpx) continue
+          const mspec = mkText('Almost before we knew it, we had left the ground.', {
+            style: weightStyle(m.weight),
+            colorVar: textVar,
+            colorHex: textHex,
+          })
+          mspec.fontSize = mpx
+          mspec.lineHeight = { value: 120, unit: 'PERCENT' }
+          bindField(mspec, 'fontSize', bestVar(COLLECTIONS.typography, `role/${key}/size-${cut}`, `size/${m.size}`))
+          bindField(mspec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${m.weight}`))
+          bindField(mspec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, m.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body))
+          typeSpecimenRow(roleBody, `role-${key}-${cut}`, 220, `${key}  ${cut}  →  ${m.size} / ${m.weight}`, mspec)
         }
       }
       root.appendChild(roleCard)

@@ -50,7 +50,7 @@
     return parseFloat(val.replace("px", "").replace("rem", "")) || 0;
   }
   function pluginGridFrame(tokens, viewport, theme) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     const fb = theme ? (_a = tokens.foundationsByTheme) == null ? void 0 : _a[theme] : void 0;
     const spacing = (_b = fb == null ? void 0 : fb.spacing) != null ? _b : tokens.spacing;
     const grid = (_d = (_c = fb == null ? void 0 : fb.grid) != null ? _c : tokens.grid) != null ? _d : {};
@@ -64,16 +64,27 @@
           container: !grid.container || grid.container === "none" ? 0 : pxToFloat(grid.container)
         };
       }
+      if (viewport === "tablet") {
+        return {
+          columns: 8,
+          gutter: pxToFloat((_i = spacing == null ? void 0 : spacing["6"]) != null ? _i : "24px"),
+          margin: pxToFloat((_j = spacing == null ? void 0 : spacing["6"]) != null ? _j : "24px"),
+          container: 0
+        };
+      }
       return {
         columns: 4,
-        gutter: pxToFloat((_i = spacing == null ? void 0 : spacing["4"]) != null ? _i : "16px"),
-        margin: pxToFloat((_j = spacing == null ? void 0 : spacing["4"]) != null ? _j : "16px"),
+        gutter: pxToFloat((_k = spacing == null ? void 0 : spacing["4"]) != null ? _k : "16px"),
+        margin: pxToFloat((_l = spacing == null ? void 0 : spacing["4"]) != null ? _l : "16px"),
         container: 0
       };
     }
-    const columns = Math.max(1, parseInt(alias.columns || (viewport === "mobile" ? "4" : "12"), 10) || 12);
-    const gutter = pxToFloat(alias.gutter && (spacing == null ? void 0 : spacing[alias.gutter]) || grid.gutter || (viewport === "mobile" ? "16px" : "24px"));
-    const margin = pxToFloat(alias.margin && (spacing == null ? void 0 : spacing[alias.margin]) || grid.margin || (viewport === "mobile" ? "16px" : "32px"));
+    const fallbackCols = viewport === "mobile" ? "4" : viewport === "tablet" ? "8" : "12";
+    const columns = Math.max(1, parseInt(alias.columns || fallbackCols, 10) || 12);
+    const fallbackGut = viewport === "mobile" ? "16px" : "24px";
+    const fallbackMar = viewport === "mobile" ? "16px" : viewport === "tablet" ? "24px" : "32px";
+    const gutter = pxToFloat(alias.gutter && (spacing == null ? void 0 : spacing[alias.gutter]) || grid.gutter || fallbackGut);
+    const margin = pxToFloat(alias.margin && (spacing == null ? void 0 : spacing[alias.margin]) || grid.margin || fallbackMar);
     let container = 0;
     if (alias.container && alias.container !== "none") {
       container = pxToFloat(grid[`breakpoint-${alias.container}`] || "0");
@@ -475,7 +486,7 @@
       case COLLECTIONS.grid:
         return ["WIDTH_HEIGHT"];
       case COLLECTIONS.typography: {
-        if (varName.startsWith("size/") || varName.endsWith("/size") || varName.endsWith("/size-mobile")) return ["FONT_SIZE"];
+        if (varName.startsWith("size/") || varName.endsWith("/size") || varName.endsWith("/size-tablet") || varName.endsWith("/size-mobile")) return ["FONT_SIZE"];
         if (varName.startsWith("weight/") || varName.endsWith("/weight")) return ["FONT_WEIGHT"];
         if (varName.startsWith("line-height/")) return ["LINE_HEIGHT"];
         if (varName.startsWith("letter-spacing/")) return ["LETTER_SPACING"];
@@ -1758,11 +1769,13 @@
           return true;
         };
         let roleCount = 0;
+        let tabletCount = 0;
         let mobileCount = 0;
         const keys = new Set(Object.keys(typeRoles));
         if (rolesDiffer) {
           for (const t of foundationThemes) Object.keys((_J = rolesFor(t)) != null ? _J : {}).forEach((k) => keys.add(k));
         }
+        const hasTablet = [typeRoles, ...rolesDiffer ? foundationThemes.map((t) => rolesFor(t)) : []].some((map) => Object.values(map != null ? map : {}).some((m) => Boolean(m == null ? void 0 : m.tablet)));
         for (const key of keys) {
           if (writeRoleVar(`role/${key}/size`, "FLOAT", (t) => {
             var _a2;
@@ -1776,13 +1789,18 @@
             var _a2;
             return aliasFamily((_a2 = rolesFor(t)) == null ? void 0 : _a2[key], "desktop");
           });
+          if (hasTablet && writeRoleVar(`role/${key}/size-tablet`, "FLOAT", (t) => {
+            var _a2;
+            return aliasSize((_a2 = rolesFor(t)) == null ? void 0 : _a2[key], "tablet");
+          })) tabletCount++;
           if (writeRoleVar(`role/${key}/size-mobile`, "FLOAT", (t) => {
             var _a2;
             return aliasSize((_a2 = rolesFor(t)) == null ? void 0 : _a2[key], "mobile");
           })) mobileCount++;
         }
         if (roleCount > 0) {
-          log(`\u2713 Typography roles (${roleCount} desktop aliases${mobileCount ? ` \xB7 ${mobileCount} size-mobile` : ""})`);
+          const extra = [tabletCount ? `${tabletCount} size-tablet` : "", mobileCount ? `${mobileCount} size-mobile` : ""].filter(Boolean);
+          log(`\u2713 Typography roles (${roleCount} desktop aliases${extra.length ? ` \xB7 ${extra.join(" \xB7 ")}` : ""})`);
         }
       }
       const sizeCount = Object.keys(tokens.typography.sizes).length;
@@ -2223,20 +2241,22 @@
         const v = upsertVarIn(gridCol, gridCache, `desktop/${k}`, "FLOAT", scopesForCollection(COLLECTIONS.grid, `desktop/${k}`));
         setDefault(gridCol, v, figma.variables.createVariableAlias(prim));
       }
-      const mobileRoot = pluginGridFrame(tokens, "mobile");
-      const mobileDiffer = themeMapsDiffer((t) => pluginGridFrame(tokens, "mobile", t), mobileRoot);
-      const gridModeIdOf = mobileDiffer ? ensureNamedModes(gridCol, foundationThemes) : void 0;
-      for (const k of ["columns", "gutter", "margin", "container"]) {
-        const v = upsertVarIn(gridCol, gridCache, `mobile/${k}`, "FLOAT", scopesForCollection(COLLECTIONS.grid, `mobile/${k}`));
-        if (gridModeIdOf) {
-          const byTheme = {};
-          for (const th of foundationThemes) byTheme[th] = pluginGridFrame(tokens, "mobile", th)[k];
-          writeByTheme(v, byTheme, gridModeIdOf);
-        } else {
-          setDefault(gridCol, v, mobileRoot[k]);
+      for (const vp of ["tablet", "mobile"]) {
+        const root = pluginGridFrame(tokens, vp);
+        const differ = themeMapsDiffer((t) => pluginGridFrame(tokens, vp, t), root);
+        const gridModeIdOf = differ ? ensureNamedModes(gridCol, foundationThemes) : void 0;
+        for (const k of ["columns", "gutter", "margin", "container"]) {
+          const v = upsertVarIn(gridCol, gridCache, `${vp}/${k}`, "FLOAT", scopesForCollection(COLLECTIONS.grid, `${vp}/${k}`));
+          if (gridModeIdOf) {
+            const byTheme = {};
+            for (const th of foundationThemes) byTheme[th] = pluginGridFrame(tokens, vp, th)[k];
+            writeByTheme(v, byTheme, gridModeIdOf);
+          } else {
+            setDefault(gridCol, v, root[k]);
+          }
         }
       }
-      log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""} \xB7 desktop/* + mobile/* frames)`);
+      log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""} \xB7 desktop/* + tablet/* + mobile/* frames)`);
     }
     {
       const iconsCol = existingCollections.find((c) => c.name === COLLECTIONS.icons);
@@ -2426,7 +2446,7 @@
     return paintForNamedGradient(tokens, slug, css, "light");
   }
   async function importStyles(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
     let count = 0;
     const previewType = previewTypography(tokens);
     const fontFamily = normalizeFontFamilyName(previewType.fontFamily);
@@ -2596,17 +2616,25 @@
         return true;
       };
       let roleStyles = 0;
+      let tabletStyles = 0;
       let mobileStyles = 0;
       for (const [key, modes] of Object.entries(typeRoles)) {
         const d = modes == null ? void 0 : modes.desktop;
         if (!d) continue;
         if (upsertRoleStyle(`Type/${key}`, key, d, (_k = typoVars.get(`role/${key}/size`)) != null ? _k : typoVars.get(`size/${d.size}`))) roleStyles++;
+        const tb = modes == null ? void 0 : modes.tablet;
+        if (tb && (tb.size !== d.size || tb.weight !== d.weight || tb.family !== d.family) && upsertRoleStyle(`Type/${key} (Tablet)`, key, tb, (_l = typoVars.get(`role/${key}/size-tablet`)) != null ? _l : typoVars.get(`size/${tb.size}`))) {
+          tabletStyles++;
+        }
         const m = modes == null ? void 0 : modes.mobile;
-        if (m && upsertRoleStyle(`Type/${key} (Mobile)`, key, m, (_l = typoVars.get(`role/${key}/size-mobile`)) != null ? _l : typoVars.get(`size/${m.size}`))) {
+        if (m && upsertRoleStyle(`Type/${key} (Mobile)`, key, m, (_m = typoVars.get(`role/${key}/size-mobile`)) != null ? _m : typoVars.get(`size/${m.size}`))) {
           mobileStyles++;
         }
       }
-      if (roleStyles > 0) log(`\u2713 Text styles (${roleStyles} semantic roles${mobileStyles ? ` \xB7 ${mobileStyles} mobile` : ""})`);
+      if (roleStyles > 0) {
+        const extra = [tabletStyles ? `${tabletStyles} tablet` : "", mobileStyles ? `${mobileStyles} mobile` : ""].filter(Boolean);
+        log(`\u2713 Text styles (${roleStyles} semantic roles${extra.length ? ` \xB7 ${extra.join(" \xB7 ")}` : ""})`);
+      }
     }
     if (tokens.shadows && Object.keys(tokens.shadows).length > 0) {
       const effectByName = new Map(
@@ -2631,7 +2659,7 @@
       for (const [key, css] of Object.entries(tokens.shadows)) {
         if (upsertEffect(`Shadow/${key}`, css)) made++;
         else unparsed.push(key);
-        const darkCss = (_m = tokens.shadowsDark) == null ? void 0 : _m[key];
+        const darkCss = (_n = tokens.shadowsDark) == null ? void 0 : _n[key];
         if (darkCss && darkCss !== css) {
           if (upsertEffect(`Shadow/${key} (Dark)`, darkCss)) darkMade++;
         }
@@ -2643,7 +2671,7 @@
         log(`\u26A0 ${unparsed.length} shadow${unparsed.length > 1 ? "s" : ""} couldn't be converted to a Figma effect (${unparsed.join(", ")}) \u2014 unsupported CSS box-shadow form`);
       }
     }
-    if ((_n = tokens.grid) == null ? void 0 : _n.columns) {
+    if ((_o = tokens.grid) == null ? void 0 : _o.columns) {
       const gridByName = new Map(
         (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s])
       );
@@ -7658,7 +7686,7 @@
       if (typeRoles && Object.keys(typeRoles).length > 0) {
         const { card: roleCard, body: roleBody } = section(
           "Type roles",
-          "Semantic text roles \u2014 desktop binds to role/*/size (what components use). Mobile is role/*/size-mobile and the Type/{role} (Mobile) text style. Figma has no @media; pick the Mobile style in a prototype."
+          "Semantic text roles \u2014 desktop binds to role/*/size (what components use). Tablet and mobile are role/*/size-tablet and role/*/size-mobile, plus the Type/{role} (Tablet) and (Mobile) text styles. Only display and headings step; body and controls keep one size. Figma has no @media; pick the style for the frame you are designing."
         );
         for (const [key, modes] of Object.entries(typeRoles)) {
           const d = modes == null ? void 0 : modes.desktop;
@@ -7676,22 +7704,23 @@
           bindField(spec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`));
           bindField(spec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body));
           typeSpecimenRow(roleBody, `role-${key}`, 220, `${key}  \u2192  ${d.size} / ${d.weight}`, spec);
-          const m = modes.mobile;
-          if (m) {
+          for (const cut of ["tablet", "mobile"]) {
+            const m = modes[cut];
+            if (!m) continue;
+            if (cut === "tablet" && m.size === d.size) continue;
             const mpx = pxToFloat((_i = tokens.typography.sizes[m.size]) != null ? _i : "");
-            if (mpx) {
-              const mspec = mkText("Almost before we knew it, we had left the ground.", {
-                style: weightStyle(m.weight),
-                colorVar: textVar,
-                colorHex: textHex
-              });
-              mspec.fontSize = mpx;
-              mspec.lineHeight = { value: 120, unit: "PERCENT" };
-              bindField(mspec, "fontSize", bestVar(COLLECTIONS.typography, `role/${key}/size-mobile`, `size/${m.size}`));
-              bindField(mspec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${m.weight}`));
-              bindField(mspec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, m.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body));
-              typeSpecimenRow(roleBody, `role-${key}-mobile`, 220, `${key}  mobile  \u2192  ${m.size} / ${m.weight}`, mspec);
-            }
+            if (!mpx) continue;
+            const mspec = mkText("Almost before we knew it, we had left the ground.", {
+              style: weightStyle(m.weight),
+              colorVar: textVar,
+              colorHex: textHex
+            });
+            mspec.fontSize = mpx;
+            mspec.lineHeight = { value: 120, unit: "PERCENT" };
+            bindField(mspec, "fontSize", bestVar(COLLECTIONS.typography, `role/${key}/size-${cut}`, `size/${m.size}`));
+            bindField(mspec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${m.weight}`));
+            bindField(mspec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, m.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body));
+            typeSpecimenRow(roleBody, `role-${key}-${cut}`, 220, `${key}  ${cut}  \u2192  ${m.size} / ${m.weight}`, mspec);
           }
         }
         root.appendChild(roleCard);
