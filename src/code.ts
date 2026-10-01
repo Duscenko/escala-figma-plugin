@@ -59,8 +59,9 @@ interface DesignTokens {
     lineHeights?: Record<string, string>     // px or unitless ratio
     letterSpacings?: Record<string, string>  // px or em
     // v6: semantic type roles. Each aliases a family + size + weight primitive
-    // (desktop / mobile). The plugin materializes desktop as role/{key}/*
-    // variables and one text style per role.
+    // (desktop / mobile). The plugin materializes desktop as role/{key}/* and
+    // mobile size as role/{key}/size-mobile. Text styles: Type/{key} stays
+    // desktop (component bindings); Type/{key} (Mobile) is additive.
     roles?: Record<string, {
       desktop: { family: string; size: string; weight: string }
       mobile?: { family: string; size: string; weight: string }
@@ -226,6 +227,55 @@ function rgbaToHex8(c: RGBA): string {
 
 function pxToFloat(val: string): number {
   return parseFloat(val.replace('px', '').replace('rem', '')) || 0
+}
+
+/** Named layout frame as Figma floats. Root `grid.columns` etc. stay the
+ *  desktop recipe; `desktop/*` aliases those, `tablet/*` and `mobile/*` are
+ *  the other window recipes. */
+function pluginGridFrame(
+  tokens: DesignTokens,
+  viewport: 'desktop' | 'tablet' | 'mobile',
+  theme?: string,
+): { columns: number; gutter: number; margin: number; container: number } {
+  const fb = theme ? tokens.foundationsByTheme?.[theme] : undefined
+  const spacing = fb?.spacing ?? tokens.spacing
+  const grid = fb?.grid ?? tokens.grid ?? {}
+  const alias = (fb?.gridFrame ?? tokens.gridFrame)?.[viewport]
+  if (!alias) {
+    if (viewport === 'desktop') {
+      return {
+        columns: parseInt(grid.columns, 10) || 12,
+        gutter: pxToFloat(grid.gutter ?? '24px'),
+        margin: pxToFloat(grid.margin ?? '32px'),
+        container: !grid.container || grid.container === 'none' ? 0 : pxToFloat(grid.container),
+      }
+    }
+    if (viewport === 'tablet') {
+      return {
+        columns: 8,
+        gutter: pxToFloat(spacing?.['6'] ?? '24px'),
+        margin: pxToFloat(spacing?.['6'] ?? '24px'),
+        container: 0,
+      }
+    }
+    return {
+      columns: 4,
+      gutter: pxToFloat(spacing?.['4'] ?? '16px'),
+      margin: pxToFloat(spacing?.['4'] ?? '16px'),
+      container: 0,
+    }
+  }
+  const fallbackCols = viewport === 'mobile' ? '4' : viewport === 'tablet' ? '8' : '12'
+  const columns = Math.max(1, parseInt(alias.columns || fallbackCols, 10) || 12)
+  const fallbackGut = viewport === 'mobile' ? '16px' : '24px'
+  const fallbackMar = viewport === 'mobile' ? '16px' : viewport === 'tablet' ? '24px' : '32px'
+  const gutter = pxToFloat((alias.gutter && spacing?.[alias.gutter]) || grid.gutter || fallbackGut)
+  const margin = pxToFloat((alias.margin && spacing?.[alias.margin]) || grid.margin || fallbackMar)
+  let container = 0
+  if (alias.container && alias.container !== 'none') {
+    container = pxToFloat(grid[`breakpoint-${alias.container}`] || '0')
+  }
+  return { columns, gutter, margin, container }
 }
 
 // Figma font-family variables want a plain family name ("DM Sans"), not a CSS
@@ -776,7 +826,7 @@ function scopesForCollection(collName: string, varName: string): VariableScope[]
     case COLLECTIONS.opacity: return ['OPACITY']
     case COLLECTIONS.grid:    return ['WIDTH_HEIGHT']
     case COLLECTIONS.typography: {
-      if (varName.startsWith('size/') || varName.endsWith('/size')) return ['FONT_SIZE']
+      if (varName.startsWith('size/') || varName.endsWith('/size') || varName.endsWith('/size-mobile')) return ['FONT_SIZE']
       if (varName.startsWith('weight/') || varName.endsWith('/weight')) return ['FONT_WEIGHT']
       if (varName.startsWith('line-height/')) return ['LINE_HEIGHT']
       if (varName.startsWith('letter-spacing/')) return ['LETTER_SPACING']
@@ -2430,26 +2480,61 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     }
     const typeRoles = tokens.typography.roles
     if (typeRoles) {
-      let roleCount = 0
-      for (const [key, modes] of Object.entries(typeRoles)) {
-        const d = modes?.desktop
-        if (!d) continue
-        const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`))
-        const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`))
-        const familyName = d.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body
-        const familyPrim = typoCache.get(figmaVarName(familyName))
-        if (sizePrim) {
-          typoVar(`role/${key}/size`, 'FLOAT', figma.variables.createVariableAlias(sizePrim))
-          roleCount++
-        }
-        if (weightPrim) {
-          typoVar(`role/${key}/weight`, 'FLOAT', figma.variables.createVariableAlias(weightPrim))
-        }
-        if (familyPrim) {
-          typoVar(`role/${key}/family`, 'STRING', figma.variables.createVariableAlias(familyPrim))
-        }
+      const rolesFor = (t?: string) =>
+        (t ? tokens.foundationsByTheme?.[t]?.typography?.roles : undefined) ?? tokens.typography.roles
+      const rolesDiffer = themeMapsDiffer((t) => rolesFor(t), typeRoles)
+      const modeIdOf = rolesDiffer ? ensureNamedModes(typoCol, foundationThemes) : undefined
+      const aliasSize = (modes: { desktop?: { size: string }; mobile?: { size: string } } | undefined, vp: 'desktop' | 'mobile') => {
+        const step = modes?.[vp]?.size
+        if (!step) return undefined
+        const prim = typoCache.get(figmaVarName(`size/${step}`))
+        return prim ? figma.variables.createVariableAlias(prim) : undefined
       }
-      if (roleCount > 0) log(`✓ Typography roles (${roleCount} aliased to size/weight/family)`)
+      const aliasWeight = (modes: { desktop?: { weight: string }; mobile?: { weight: string } } | undefined, vp: 'desktop' | 'mobile') => {
+        const step = modes?.[vp]?.weight
+        if (!step) return undefined
+        const prim = typoCache.get(figmaVarName(`weight/${step}`))
+        return prim ? figma.variables.createVariableAlias(prim) : undefined
+      }
+      const aliasFamily = (modes: { desktop?: { family: string }; mobile?: { family: string } } | undefined, vp: 'desktop' | 'mobile') => {
+        const fam = modes?.[vp]?.family
+        if (!fam) return undefined
+        const name = fam === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body
+        const prim = typoCache.get(figmaVarName(name))
+        return prim ? figma.variables.createVariableAlias(prim) : undefined
+      }
+      const writeRoleVar = (
+        name: string,
+        type: VariableResolvedDataType,
+        aliasOf: (t?: string) => VariableValue | undefined,
+      ) => {
+        const variable = upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name))
+        if (modeIdOf) {
+          const byTheme: Record<string, VariableValue | undefined> = {}
+          for (const t of foundationThemes) byTheme[t] = aliasOf(t)
+          writeByTheme(variable, byTheme, modeIdOf)
+          return foundationThemes.some((t) => byTheme[t] !== undefined)
+        }
+        const val = aliasOf()
+        if (!val) return false
+        setDefault(typoCol, variable, val)
+        return true
+      }
+      let roleCount = 0
+      let mobileCount = 0
+      const keys = new Set(Object.keys(typeRoles))
+      if (rolesDiffer) {
+        for (const t of foundationThemes) Object.keys(rolesFor(t) ?? {}).forEach((k) => keys.add(k))
+      }
+      for (const key of keys) {
+        if (writeRoleVar(`role/${key}/size`, 'FLOAT', (t) => aliasSize(rolesFor(t)?.[key], 'desktop'))) roleCount++
+        writeRoleVar(`role/${key}/weight`, 'FLOAT', (t) => aliasWeight(rolesFor(t)?.[key], 'desktop'))
+        writeRoleVar(`role/${key}/family`, 'STRING', (t) => aliasFamily(rolesFor(t)?.[key], 'desktop'))
+        if (writeRoleVar(`role/${key}/size-mobile`, 'FLOAT', (t) => aliasSize(rolesFor(t)?.[key], 'mobile'))) mobileCount++
+      }
+      if (roleCount > 0) {
+        log(`✓ Typography roles (${roleCount} desktop aliases${mobileCount ? ` · ${mobileCount} size-mobile` : ''})`)
+      }
     }
     const sizeCount = Object.keys(tokens.typography.sizes).length
     if (sizeCount > 0) log(`✓ Typography sizes (${sizeCount} steps — change them on the web and sync updates size/* here)`)
@@ -2995,7 +3080,30 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
       COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`,
       (t) => tokens.foundationsByTheme?.[t]?.breakpointRoles,
     )
-    log(`✓ Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` · ${bpRoleCount} breakpoint roles` : ''})`)
+    const gridCol = findOrCreateCollection(COLLECTIONS.grid)
+    const gridCache = cacheFor(gridCol)
+    for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
+      const prim = gridCache.get(k)
+      if (!prim) continue
+      const v = upsertVarIn(gridCol, gridCache, `desktop/${k}`, 'FLOAT', scopesForCollection(COLLECTIONS.grid, `desktop/${k}`))
+      setDefault(gridCol, v, figma.variables.createVariableAlias(prim))
+    }
+    for (const vp of ['tablet', 'mobile'] as const) {
+      const root = pluginGridFrame(tokens, vp)
+      const differ = themeMapsDiffer((t) => pluginGridFrame(tokens, vp, t), root)
+      const gridModeIdOf = differ ? ensureNamedModes(gridCol, foundationThemes) : undefined
+      for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
+        const v = upsertVarIn(gridCol, gridCache, `${vp}/${k}`, 'FLOAT', scopesForCollection(COLLECTIONS.grid, `${vp}/${k}`))
+        if (gridModeIdOf) {
+          const byTheme: Record<string, VariableValue | undefined> = {}
+          for (const th of foundationThemes) byTheme[th] = pluginGridFrame(tokens, vp, th)[k]
+          writeByTheme(v, byTheme, gridModeIdOf)
+        } else {
+          setDefault(gridCol, v, root[k])
+        }
+      }
+    }
+    log(`✓ Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` · ${bpRoleCount} breakpoint roles` : ''} · desktop/* + tablet/* + mobile/* frames)`)
   }
 
   // Icons are components on the ⬡ Icons page, not a variable. Older imports
@@ -3423,25 +3531,26 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     log(`✓ Text styles (${Object.keys(tokens.typography.sizes).length} sizes)`)
   }
 
-  // Semantic type roles — one style per role, bound to role/{key}/* so the
-  // style tracks the alias (heading-lg → display-md / semibold), not a raw px.
+  // Semantic type roles — Type/{key} is desktop (what components bind).
+  // Type/{key} (Mobile) is additive; Figma has no @media on text styles.
   const typeRoles = tokens.typography.roles
   if (typeRoles) {
-    let roleStyles = 0
-    for (const [key, modes] of Object.entries(typeRoles)) {
-      const d = modes?.desktop
-      if (!d) continue
-      const sizeVal = tokens.typography.sizes[d.size]
+    const upsertRoleStyle = (
+      styleName: string,
+      key: string,
+      alias: { family: string; size: string; weight: string },
+      sizeVar: Variable | undefined,
+    ) => {
+      const sizeVal = tokens.typography.sizes[alias.size]
       const sizePx = sizeVal ? pxToFloat(sizeVal) : 0
-      if (!sizePx) continue
-      const styleName = `Type/${key}`
+      if (!sizePx) return false
       const existing = textByName.get(styleName)
       const ts = existing ?? figma.createTextStyle()
       if (!existing) { count++; textByName.set(styleName, ts) }
       ts.name = styleName
-      const isHeading = d.family === 'display'
+      const isHeading = alias.family === 'display'
       const wantedFamily = isHeading ? headingFamily : fontFamily
-      const fontStyle = resolvedStyle(d.weight)
+      const fontStyle = resolvedStyle(alias.weight)
       const resolved = fontForStyle(fontStyle, isHeading)
       try {
         ts.fontName = loadedFamilies.has(wantedFamily) ? resolved : { family: 'Inter', style: resolved.style }
@@ -3449,11 +3558,11 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
         ts.fontName = { family: 'Inter', style: fontStyle }
       }
       ts.fontSize = sizePx
-      const lhVal = tokens.typography.lineHeights?.[d.size]
+      const lhVal = tokens.typography.lineHeights?.[alias.size]
       ts.lineHeight = lhVal
         ? { value: pxToFloat(lhVal), unit: 'PIXELS' }
         : { unit: 'AUTO' }
-      const lsVal = tokens.typography.letterSpacings?.[d.size]
+      const lsVal = tokens.typography.letterSpacings?.[alias.size]
       ts.letterSpacing = lsVal
         ? { value: pxToFloat(lsVal), unit: 'PIXELS' }
         : { value: 0, unit: 'PIXELS' }
@@ -3462,13 +3571,24 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
           ?? (isHeading ? (typoVars.get(TYPOGRAPHY_FAMILY_VARS.display) ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay)) : undefined)
           ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)
           ?? typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody))
-      bindTextStyle(ts, 'fontSize', typoVars.get(`role/${key}/size`) ?? typoVars.get(`size/${d.size}`))
-      bindTextStyle(ts, 'fontWeight', typoVars.get(`role/${key}/weight`) ?? typoVars.get(`weight/${d.weight}`))
-      bindTextStyle(ts, 'lineHeight', typoVars.get(`line-height/${d.size}`))
-      bindTextStyle(ts, 'letterSpacing', typoVars.get(`letter-spacing/${d.size}`))
-      roleStyles++
+      bindTextStyle(ts, 'fontSize', sizeVar ?? typoVars.get(`size/${alias.size}`))
+      bindTextStyle(ts, 'fontWeight', typoVars.get(`role/${key}/weight`) ?? typoVars.get(`weight/${alias.weight}`))
+      bindTextStyle(ts, 'lineHeight', typoVars.get(`line-height/${alias.size}`))
+      bindTextStyle(ts, 'letterSpacing', typoVars.get(`letter-spacing/${alias.size}`))
+      return true
     }
-    if (roleStyles > 0) log(`✓ Text styles (${roleStyles} semantic roles)`)
+    let roleStyles = 0
+    let mobileStyles = 0
+    for (const [key, modes] of Object.entries(typeRoles)) {
+      const d = modes?.desktop
+      if (!d) continue
+      if (upsertRoleStyle(`Type/${key}`, key, d, typoVars.get(`role/${key}/size`) ?? typoVars.get(`size/${d.size}`))) roleStyles++
+      const m = modes?.mobile
+      if (m && upsertRoleStyle(`Type/${key} (Mobile)`, key, m, typoVars.get(`role/${key}/size-mobile`) ?? typoVars.get(`size/${m.size}`))) {
+        mobileStyles++
+      }
+    }
+    if (roleStyles > 0) log(`✓ Text styles (${roleStyles} semantic roles${mobileStyles ? ` · ${mobileStyles} mobile` : ''})`)
   }
 
   // ── Effect styles: shadows ──────────────────────────────────────────────
@@ -3505,24 +3625,30 @@ async function importStyles(tokens: DesignTokens): Promise<number> {
     }
   }
 
-  // ── Grid style: column grid from grid tokens ────────────────────────────
+  // ── Grid styles: desktop keeps the historic name; mobile is additive ────
   if (tokens.grid?.columns) {
-    const name = `Grid/${tokens.grid.columns} columns`
     const gridByName = new Map(
       (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s] as const),
     )
-    const existing = gridByName.get(name)
-    const style = existing ?? figma.createGridStyle()
-    if (!existing) count++
-    style.name = name
-    style.layoutGrids = [{
-      pattern: 'COLUMNS',
-      alignment: 'STRETCH',
-      count: parseInt(tokens.grid.columns) || 12,
-      gutterSize: pxToFloat(tokens.grid.gutter ?? '24px'),
-      offset: pxToFloat(tokens.grid.margin ?? '32px'),
-    }]
-    log(`✓ Grid style (${name})`)
+    const writeGridStyle = (name: string, frame: { columns: number; gutter: number; margin: number }) => {
+      const existing = gridByName.get(name)
+      const style = existing ?? figma.createGridStyle()
+      if (!existing) { count++; gridByName.set(name, style) }
+      style.name = name
+      style.layoutGrids = [{
+        pattern: 'COLUMNS',
+        alignment: 'STRETCH',
+        count: frame.columns,
+        gutterSize: frame.gutter,
+        offset: frame.margin,
+      }]
+    }
+    const desktop = pluginGridFrame(tokens, 'desktop')
+    const mobile = pluginGridFrame(tokens, 'mobile')
+    const desktopName = `Grid/${desktop.columns} columns`
+    writeGridStyle(desktopName, desktop)
+    writeGridStyle('Grid/Mobile', mobile)
+    log(`✓ Grid styles (${desktopName} · Grid/Mobile)`)
   }
 
   return count
@@ -9403,16 +9529,13 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     if (typeRoles && Object.keys(typeRoles).length > 0) {
       const { card: roleCard, body: roleBody } = section(
         'Type roles',
-        'Semantic text roles — each line aliases a size, weight and family primitive (desktop). Bound to Typography role/* variables.',
+        'Semantic text roles — desktop binds to role/*/size (what components use). Mobile is role/*/size-mobile and the Type/{role} (Mobile) text style. Figma has no @media; pick the Mobile style in a prototype.',
       )
       for (const [key, modes] of Object.entries(typeRoles)) {
         const d = modes?.desktop
         if (!d) continue
         const px = pxToFloat(tokens.typography.sizes[d.size] ?? '')
         if (!px) continue
-        // A row here spans display-2xl (72px) down to helper (12px). The
-        // specimen fills the remaining width and wraps (`typeSpecimenRow`) —
-        // WIDTH_AND_HEIGHT on a HUG row cropped the sentence at the card edge.
         const spec = mkText('Almost before we knew it, we had left the ground.', {
           style: weightStyle(d.weight),
           colorVar: textVar,
@@ -9424,6 +9547,23 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         bindField(spec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`))
         bindField(spec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body))
         typeSpecimenRow(roleBody, `role-${key}`, 220, `${key}  →  ${d.size} / ${d.weight}`, spec)
+        const m = modes.mobile
+        if (m) {
+          const mpx = pxToFloat(tokens.typography.sizes[m.size] ?? '')
+          if (mpx) {
+            const mspec = mkText('Almost before we knew it, we had left the ground.', {
+              style: weightStyle(m.weight),
+              colorVar: textVar,
+              colorHex: textHex,
+            })
+            mspec.fontSize = mpx
+            mspec.lineHeight = { value: 120, unit: 'PERCENT' }
+            bindField(mspec, 'fontSize', bestVar(COLLECTIONS.typography, `role/${key}/size-mobile`, `size/${m.size}`))
+            bindField(mspec, 'fontWeight', bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${m.weight}`))
+            bindField(mspec, 'fontFamily', bestVar(COLLECTIONS.typography, `role/${key}/family`, m.family === 'display' ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body))
+            typeSpecimenRow(roleBody, `role-${key}-mobile`, 220, `${key}  mobile  →  ${m.size} / ${m.weight}`, mspec)
+          }
+        }
       }
       root.appendChild(roleCard)
       sections++
@@ -9668,10 +9808,14 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
       await newBoard('Grid & Sizes')
       root.appendChild(sectionBar('Grid & Sizes'))
-      const { card, body } = section('Grid & Sizes', 'Layout grid settings, component heights, and selector glyph sizes.')
+      const { card, body } = section('Grid & Sizes', 'Layout grid settings (root keys = desktop; desktop/* aliases them; mobile/* is the 4-col recipe), component heights, and selector glyph sizes.')
       if (Object.keys(grid).length > 0) {
-        const spec = Object.entries(grid).map(([k, v]) => `${k} ${v}`).join('   ·   ')
-        body.appendChild(mkText(spec, { size: 12, colorVar: textVar, opacity: 0.9 }))
+        const desktop = pluginGridFrame(tokens, 'desktop')
+        const mobile = pluginGridFrame(tokens, 'mobile')
+        const fmt = (f: { columns: number; gutter: number; margin: number; container: number }) =>
+          `${f.columns} col · ${f.gutter}px gutter · ${f.margin}px margin · ${f.container ? `${f.container}px container` : 'fluid'}`
+        body.appendChild(mkText(`Desktop  ${fmt(desktop)}`, { size: 12, colorVar: textVar, opacity: 0.9 }))
+        body.appendChild(mkText(`Mobile  ${fmt(mobile)}`, { size: 12, colorVar: textVar, opacity: 0.9 }))
       }
       for (const [key, px] of sizes) {
         const row = autoFrame(key, 'HORIZONTAL', 16)
@@ -10644,7 +10788,7 @@ async function importGettingStarted(tokens: DesignTokens): Promise<boolean> {
     divider(body)
     bullet(body, 'Primitives — 1 to 12', 'Every colour family is a 12-step Radix ramp: accent-1 … accent-12. Step 9 is the anchor (your input hex); 11–12 are the accessible text tones. Never referenced by a component directly.')
     bullet(body, 'Semantics — by role', 'Surface/page, Content/primary, Action/primary/default, Border/control — a role names what a value is for. Components bind here.')
-    bullet(body, 'One collection per category', 'Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid — each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme.')
+    bullet(body, 'One collection per category', 'Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid — each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme. Type roles add size-mobile beside the desktop size; Grid adds desktop/* and mobile/* next to the existing columns/gutter keys. Components stay bound to desktop.')
   })
 
   // 7 · How this file is organized ──────────────────────────────────────────

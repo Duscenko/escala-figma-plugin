@@ -49,6 +49,37 @@
   function pxToFloat(val) {
     return parseFloat(val.replace("px", "").replace("rem", "")) || 0;
   }
+  function pluginGridFrame(tokens, viewport, theme) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    const fb = theme ? (_a = tokens.foundationsByTheme) == null ? void 0 : _a[theme] : void 0;
+    const spacing = (_b = fb == null ? void 0 : fb.spacing) != null ? _b : tokens.spacing;
+    const grid = (_d = (_c = fb == null ? void 0 : fb.grid) != null ? _c : tokens.grid) != null ? _d : {};
+    const alias = (_f = (_e = fb == null ? void 0 : fb.gridFrame) != null ? _e : tokens.gridFrame) == null ? void 0 : _f[viewport];
+    if (!alias) {
+      if (viewport === "desktop") {
+        return {
+          columns: parseInt(grid.columns, 10) || 12,
+          gutter: pxToFloat((_g = grid.gutter) != null ? _g : "24px"),
+          margin: pxToFloat((_h = grid.margin) != null ? _h : "32px"),
+          container: !grid.container || grid.container === "none" ? 0 : pxToFloat(grid.container)
+        };
+      }
+      return {
+        columns: 4,
+        gutter: pxToFloat((_i = spacing == null ? void 0 : spacing["4"]) != null ? _i : "16px"),
+        margin: pxToFloat((_j = spacing == null ? void 0 : spacing["4"]) != null ? _j : "16px"),
+        container: 0
+      };
+    }
+    const columns = Math.max(1, parseInt(alias.columns || (viewport === "mobile" ? "4" : "12"), 10) || 12);
+    const gutter = pxToFloat(alias.gutter && (spacing == null ? void 0 : spacing[alias.gutter]) || grid.gutter || (viewport === "mobile" ? "16px" : "24px"));
+    const margin = pxToFloat(alias.margin && (spacing == null ? void 0 : spacing[alias.margin]) || grid.margin || (viewport === "mobile" ? "16px" : "32px"));
+    let container = 0;
+    if (alias.container && alias.container !== "none") {
+      container = pxToFloat(grid[`breakpoint-${alias.container}`] || "0");
+    }
+    return { columns, gutter, margin, container };
+  }
   function normalizeFontFamilyName(raw) {
     if (!raw || typeof raw !== "string") return "Inter";
     const trimmed = raw.trim();
@@ -444,7 +475,7 @@
       case COLLECTIONS.grid:
         return ["WIDTH_HEIGHT"];
       case COLLECTIONS.typography: {
-        if (varName.startsWith("size/") || varName.endsWith("/size")) return ["FONT_SIZE"];
+        if (varName.startsWith("size/") || varName.endsWith("/size") || varName.endsWith("/size-mobile")) return ["FONT_SIZE"];
         if (varName.startsWith("weight/") || varName.endsWith("/weight")) return ["FONT_WEIGHT"];
         if (varName.startsWith("line-height/")) return ["LINE_HEIGHT"];
         if (varName.startsWith("letter-spacing/")) return ["LETTER_SPACING"];
@@ -1191,7 +1222,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T;
     namingCtx = tokens;
     let count = 0;
     semanticsRebuilt = false;
@@ -1685,26 +1716,74 @@
       }
       const typeRoles = tokens.typography.roles;
       if (typeRoles) {
+        const rolesFor = (t) => {
+          var _a2, _b2, _c2, _d2;
+          return (_d2 = t ? (_c2 = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.typography) == null ? void 0 : _c2.roles : void 0) != null ? _d2 : tokens.typography.roles;
+        };
+        const rolesDiffer = themeMapsDiffer((t) => rolesFor(t), typeRoles);
+        const modeIdOf2 = rolesDiffer ? ensureNamedModes(typoCol, foundationThemes) : void 0;
+        const aliasSize = (modes, vp) => {
+          var _a2;
+          const step = (_a2 = modes == null ? void 0 : modes[vp]) == null ? void 0 : _a2.size;
+          if (!step) return void 0;
+          const prim = typoCache.get(figmaVarName(`size/${step}`));
+          return prim ? figma.variables.createVariableAlias(prim) : void 0;
+        };
+        const aliasWeight = (modes, vp) => {
+          var _a2;
+          const step = (_a2 = modes == null ? void 0 : modes[vp]) == null ? void 0 : _a2.weight;
+          if (!step) return void 0;
+          const prim = typoCache.get(figmaVarName(`weight/${step}`));
+          return prim ? figma.variables.createVariableAlias(prim) : void 0;
+        };
+        const aliasFamily = (modes, vp) => {
+          var _a2;
+          const fam = (_a2 = modes == null ? void 0 : modes[vp]) == null ? void 0 : _a2.family;
+          if (!fam) return void 0;
+          const name = fam === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body;
+          const prim = typoCache.get(figmaVarName(name));
+          return prim ? figma.variables.createVariableAlias(prim) : void 0;
+        };
+        const writeRoleVar = (name, type, aliasOf) => {
+          const variable = upsertVarIn(typoCol, typoCache, name, type, scopesForCollection(COLLECTIONS.typography, name));
+          if (modeIdOf2) {
+            const byTheme = {};
+            for (const t of foundationThemes) byTheme[t] = aliasOf(t);
+            writeByTheme(variable, byTheme, modeIdOf2);
+            return foundationThemes.some((t) => byTheme[t] !== void 0);
+          }
+          const val = aliasOf();
+          if (!val) return false;
+          setDefault(typoCol, variable, val);
+          return true;
+        };
         let roleCount = 0;
-        for (const [key, modes] of Object.entries(typeRoles)) {
-          const d = modes == null ? void 0 : modes.desktop;
-          if (!d) continue;
-          const sizePrim = typoCache.get(figmaVarName(`size/${d.size}`));
-          const weightPrim = typoCache.get(figmaVarName(`weight/${d.weight}`));
-          const familyName = d.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body;
-          const familyPrim = typoCache.get(figmaVarName(familyName));
-          if (sizePrim) {
-            typoVar2(`role/${key}/size`, "FLOAT", figma.variables.createVariableAlias(sizePrim));
-            roleCount++;
-          }
-          if (weightPrim) {
-            typoVar2(`role/${key}/weight`, "FLOAT", figma.variables.createVariableAlias(weightPrim));
-          }
-          if (familyPrim) {
-            typoVar2(`role/${key}/family`, "STRING", figma.variables.createVariableAlias(familyPrim));
-          }
+        let mobileCount = 0;
+        const keys = new Set(Object.keys(typeRoles));
+        if (rolesDiffer) {
+          for (const t of foundationThemes) Object.keys((_J = rolesFor(t)) != null ? _J : {}).forEach((k) => keys.add(k));
         }
-        if (roleCount > 0) log(`\u2713 Typography roles (${roleCount} aliased to size/weight/family)`);
+        for (const key of keys) {
+          if (writeRoleVar(`role/${key}/size`, "FLOAT", (t) => {
+            var _a2;
+            return aliasSize((_a2 = rolesFor(t)) == null ? void 0 : _a2[key], "desktop");
+          })) roleCount++;
+          writeRoleVar(`role/${key}/weight`, "FLOAT", (t) => {
+            var _a2;
+            return aliasWeight((_a2 = rolesFor(t)) == null ? void 0 : _a2[key], "desktop");
+          });
+          writeRoleVar(`role/${key}/family`, "STRING", (t) => {
+            var _a2;
+            return aliasFamily((_a2 = rolesFor(t)) == null ? void 0 : _a2[key], "desktop");
+          });
+          if (writeRoleVar(`role/${key}/size-mobile`, "FLOAT", (t) => {
+            var _a2;
+            return aliasSize((_a2 = rolesFor(t)) == null ? void 0 : _a2[key], "mobile");
+          })) mobileCount++;
+        }
+        if (roleCount > 0) {
+          log(`\u2713 Typography roles (${roleCount} desktop aliases${mobileCount ? ` \xB7 ${mobileCount} size-mobile` : ""})`);
+        }
       }
       const sizeCount = Object.keys(tokens.typography.sizes).length;
       if (sizeCount > 0) log(`\u2713 Typography sizes (${sizeCount} steps \u2014 change them on the web and sync updates size/* here)`);
@@ -1743,7 +1822,7 @@
       const to = primitiveVarName(key);
       for (const from of previousPrimitiveVarNames(key)) renamePrimitive(from, to);
     }
-    for (const key of Object.keys((_J = tokens.colors.primitiveAlpha) != null ? _J : {})) {
+    for (const key of Object.keys((_K = tokens.colors.primitiveAlpha) != null ? _K : {})) {
       const to = primitiveAlphaVarName(key);
       for (const from of previousPrimitiveAlphaVarNames(key)) renamePrimitive(from, to);
     }
@@ -1773,7 +1852,7 @@
     for (const [key, hex] of Object.entries(tokens.colors.primitive)) {
       if (hex) writtenPrim.add(primitiveVarName(key));
     }
-    for (const [key, hex] of Object.entries((_K = tokens.colors.primitiveAlpha) != null ? _K : {})) {
+    for (const [key, hex] of Object.entries((_L = tokens.colors.primitiveAlpha) != null ? _L : {})) {
       if (hex) writtenPrim.add(primitiveAlphaVarName(key));
     }
     if (tokens.colors.background) writtenPrim.add("Background");
@@ -1803,7 +1882,7 @@
       if (v && !primByHex.has(norm2)) primByHex.set(norm2, v);
     }
     const primAlphaByHex = /* @__PURE__ */ new Map();
-    for (const [key, hex] of Object.entries((_L = tokens.colors.primitiveAlpha) != null ? _L : {})) {
+    for (const [key, hex] of Object.entries((_M = tokens.colors.primitiveAlpha) != null ? _M : {})) {
       if (!hex) continue;
       const v = primCache.get(primitiveAlphaVarName(key));
       const norm2 = rgbaToHex8(hexToRgba(hex));
@@ -1879,7 +1958,7 @@
           for (const [modeKey] of norm.modes) {
             const mid = modeIdOf[modeKey];
             if (!mid) continue;
-            const rgba = archValueRgba((_M = tok.byMode[modeKey]) != null ? _M : "", lookup);
+            const rgba = archValueRgba((_N = tok.byMode[modeKey]) != null ? _N : "", lookup);
             if (rgba && !base) base = rgba;
             resolved.push([mid, rgba]);
           }
@@ -1961,7 +2040,7 @@
     }
     const modeNames = modeSpec.map(([, label]) => label).join(", ");
     if (norm && arch) {
-      log(`\u2713 Semantic tokens \u2014 ${(_N = ARCH_LABEL[arch.kind]) != null ? _N : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
+      log(`\u2713 Semantic tokens \u2014 ${(_O = ARCH_LABEL[arch.kind]) != null ? _O : arch.kind} architecture (${plan.length} tokens \xB7 ${norm.groups.length} groups \xD7 ${allModeIds.length} mode${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${unresolvedCount > 0 ? `, ${unresolvedCount} unresolved` : ""})`);
     } else {
       log(`\u2713 Semantic tokens (${plan.length} roles \xD7 ${allModeIds.length} theme${allModeIds.length > 1 ? "s" : ""}: ${modeNames} \u2014 ${aliasedCount} linked to primitives${rawCount > 0 ? `, ${rawCount} raw` : ""})`);
     }
@@ -2037,10 +2116,10 @@
       var _a2, _b2, _c2, _d2, _e2;
       const roles = (_c2 = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[theme]) == null ? void 0 : _b2.radiusRoles) != null ? _c2 : tokens.radiusRoles;
       return `${capFoundationTheme(theme)} boxes=${(_d2 = roles == null ? void 0 : roles.container) != null ? _d2 : "?"} fields=${(_e2 = roles == null ? void 0 : roles.action) != null ? _e2 : "?"}`;
-    }).join(", ") : `boxes=${(_P = (_O = previewRad.radiusRoles) == null ? void 0 : _O.container) != null ? _P : "?"} fields=${(_R = (_Q = previewRad.radiusRoles) == null ? void 0 : _Q.action) != null ? _R : "?"}`;
+    }).join(", ") : `boxes=${(_Q = (_P = previewRad.radiusRoles) == null ? void 0 : _P.container) != null ? _Q : "?"} fields=${(_S = (_R = previewRad.radiusRoles) == null ? void 0 : _R.action) != null ? _S : "?"}`;
     log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""} \u2014 ${shownRoles}`);
     const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_S = tokens.borders) == null ? void 0 : _S.width;
+    const strokeMap = strokeFromV6 ? tokens.stroke : (_T = tokens.borders) == null ? void 0 : _T.width;
     if (strokeMap) {
       const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
       emitCollection(
@@ -2136,7 +2215,28 @@
           return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.breakpointRoles;
         }
       );
-      log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""})`);
+      const gridCol = findOrCreateCollection(COLLECTIONS.grid);
+      const gridCache = cacheFor(gridCol);
+      for (const k of ["columns", "gutter", "margin", "container"]) {
+        const prim = gridCache.get(k);
+        if (!prim) continue;
+        const v = upsertVarIn(gridCol, gridCache, `desktop/${k}`, "FLOAT", scopesForCollection(COLLECTIONS.grid, `desktop/${k}`));
+        setDefault(gridCol, v, figma.variables.createVariableAlias(prim));
+      }
+      const mobileRoot = pluginGridFrame(tokens, "mobile");
+      const mobileDiffer = themeMapsDiffer((t) => pluginGridFrame(tokens, "mobile", t), mobileRoot);
+      const gridModeIdOf = mobileDiffer ? ensureNamedModes(gridCol, foundationThemes) : void 0;
+      for (const k of ["columns", "gutter", "margin", "container"]) {
+        const v = upsertVarIn(gridCol, gridCache, `mobile/${k}`, "FLOAT", scopesForCollection(COLLECTIONS.grid, `mobile/${k}`));
+        if (gridModeIdOf) {
+          const byTheme = {};
+          for (const th of foundationThemes) byTheme[th] = pluginGridFrame(tokens, "mobile", th)[k];
+          writeByTheme(v, byTheme, gridModeIdOf);
+        } else {
+          setDefault(gridCol, v, mobileRoot[k]);
+        }
+      }
+      log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""} \xB7 desktop/* + mobile/* frames)`);
     }
     {
       const iconsCol = existingCollections.find((c) => c.name === COLLECTIONS.icons);
@@ -2326,7 +2426,7 @@
     return paintForNamedGradient(tokens, slug, css, "light");
   }
   async function importStyles(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     let count = 0;
     const previewType = previewTypography(tokens);
     const fontFamily = normalizeFontFamilyName(previewType.fontFamily);
@@ -2458,14 +2558,11 @@
     }
     const typeRoles = tokens.typography.roles;
     if (typeRoles) {
-      let roleStyles = 0;
-      for (const [key, modes] of Object.entries(typeRoles)) {
-        const d = modes == null ? void 0 : modes.desktop;
-        if (!d) continue;
-        const sizeVal = tokens.typography.sizes[d.size];
+      const upsertRoleStyle = (styleName, key, alias, sizeVar) => {
+        var _a2, _b2, _c2, _d2, _e2, _f2, _g2;
+        const sizeVal = tokens.typography.sizes[alias.size];
         const sizePx = sizeVal ? pxToFloat(sizeVal) : 0;
-        if (!sizePx) continue;
-        const styleName = `Type/${key}`;
+        if (!sizePx) return false;
         const existing = textByName.get(styleName);
         const ts = existing != null ? existing : figma.createTextStyle();
         if (!existing) {
@@ -2473,9 +2570,9 @@
           textByName.set(styleName, ts);
         }
         ts.name = styleName;
-        const isHeading = d.family === "display";
+        const isHeading = alias.family === "display";
         const wantedFamily = isHeading ? headingFamily : fontFamily;
-        const fontStyle = resolvedStyle(d.weight);
+        const fontStyle = resolvedStyle(alias.weight);
         const resolved = fontForStyle(fontStyle, isHeading);
         try {
           ts.fontName = loadedFamilies.has(wantedFamily) ? resolved : { family: "Inter", style: resolved.style };
@@ -2483,22 +2580,33 @@
           ts.fontName = { family: "Inter", style: fontStyle };
         }
         ts.fontSize = sizePx;
-        const lhVal = (_k = tokens.typography.lineHeights) == null ? void 0 : _k[d.size];
+        const lhVal = (_a2 = tokens.typography.lineHeights) == null ? void 0 : _a2[alias.size];
         ts.lineHeight = lhVal ? { value: pxToFloat(lhVal), unit: "PIXELS" } : { unit: "AUTO" };
-        const lsVal = (_l = tokens.typography.letterSpacings) == null ? void 0 : _l[d.size];
+        const lsVal = (_b2 = tokens.typography.letterSpacings) == null ? void 0 : _b2[alias.size];
         ts.letterSpacing = lsVal ? { value: pxToFloat(lsVal), unit: "PIXELS" } : { value: 0, unit: "PIXELS" };
         bindTextStyle(
           ts,
           "fontFamily",
-          (_p = (_o = (_n = typoVars.get(`role/${key}/family`)) != null ? _n : isHeading ? (_m = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _m : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _o : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _p : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
+          (_f2 = (_e2 = (_d2 = typoVars.get(`role/${key}/family`)) != null ? _d2 : isHeading ? (_c2 = typoVars.get(TYPOGRAPHY_FAMILY_VARS.display)) != null ? _c2 : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyDisplay) : void 0) != null ? _e2 : typoVars.get(TYPOGRAPHY_FAMILY_VARS.body)) != null ? _f2 : typoVars.get(TYPOGRAPHY_FAMILY_VARS.legacyBody)
         );
-        bindTextStyle(ts, "fontSize", (_q = typoVars.get(`role/${key}/size`)) != null ? _q : typoVars.get(`size/${d.size}`));
-        bindTextStyle(ts, "fontWeight", (_r = typoVars.get(`role/${key}/weight`)) != null ? _r : typoVars.get(`weight/${d.weight}`));
-        bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${d.size}`));
-        bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${d.size}`));
-        roleStyles++;
+        bindTextStyle(ts, "fontSize", sizeVar != null ? sizeVar : typoVars.get(`size/${alias.size}`));
+        bindTextStyle(ts, "fontWeight", (_g2 = typoVars.get(`role/${key}/weight`)) != null ? _g2 : typoVars.get(`weight/${alias.weight}`));
+        bindTextStyle(ts, "lineHeight", typoVars.get(`line-height/${alias.size}`));
+        bindTextStyle(ts, "letterSpacing", typoVars.get(`letter-spacing/${alias.size}`));
+        return true;
+      };
+      let roleStyles = 0;
+      let mobileStyles = 0;
+      for (const [key, modes] of Object.entries(typeRoles)) {
+        const d = modes == null ? void 0 : modes.desktop;
+        if (!d) continue;
+        if (upsertRoleStyle(`Type/${key}`, key, d, (_k = typoVars.get(`role/${key}/size`)) != null ? _k : typoVars.get(`size/${d.size}`))) roleStyles++;
+        const m = modes == null ? void 0 : modes.mobile;
+        if (m && upsertRoleStyle(`Type/${key} (Mobile)`, key, m, (_l = typoVars.get(`role/${key}/size-mobile`)) != null ? _l : typoVars.get(`size/${m.size}`))) {
+          mobileStyles++;
+        }
       }
-      if (roleStyles > 0) log(`\u2713 Text styles (${roleStyles} semantic roles)`);
+      if (roleStyles > 0) log(`\u2713 Text styles (${roleStyles} semantic roles${mobileStyles ? ` \xB7 ${mobileStyles} mobile` : ""})`);
     }
     if (tokens.shadows && Object.keys(tokens.shadows).length > 0) {
       const effectByName = new Map(
@@ -2523,7 +2631,7 @@
       for (const [key, css] of Object.entries(tokens.shadows)) {
         if (upsertEffect(`Shadow/${key}`, css)) made++;
         else unparsed.push(key);
-        const darkCss = (_s = tokens.shadowsDark) == null ? void 0 : _s[key];
+        const darkCss = (_m = tokens.shadowsDark) == null ? void 0 : _m[key];
         if (darkCss && darkCss !== css) {
           if (upsertEffect(`Shadow/${key} (Dark)`, darkCss)) darkMade++;
         }
@@ -2535,23 +2643,32 @@
         log(`\u26A0 ${unparsed.length} shadow${unparsed.length > 1 ? "s" : ""} couldn't be converted to a Figma effect (${unparsed.join(", ")}) \u2014 unsupported CSS box-shadow form`);
       }
     }
-    if ((_t = tokens.grid) == null ? void 0 : _t.columns) {
-      const name = `Grid/${tokens.grid.columns} columns`;
+    if ((_n = tokens.grid) == null ? void 0 : _n.columns) {
       const gridByName = new Map(
         (await figma.getLocalGridStylesAsync()).map((s) => [s.name, s])
       );
-      const existing = gridByName.get(name);
-      const style = existing != null ? existing : figma.createGridStyle();
-      if (!existing) count++;
-      style.name = name;
-      style.layoutGrids = [{
-        pattern: "COLUMNS",
-        alignment: "STRETCH",
-        count: parseInt(tokens.grid.columns) || 12,
-        gutterSize: pxToFloat((_u = tokens.grid.gutter) != null ? _u : "24px"),
-        offset: pxToFloat((_v = tokens.grid.margin) != null ? _v : "32px")
-      }];
-      log(`\u2713 Grid style (${name})`);
+      const writeGridStyle = (name, frame) => {
+        const existing = gridByName.get(name);
+        const style = existing != null ? existing : figma.createGridStyle();
+        if (!existing) {
+          count++;
+          gridByName.set(name, style);
+        }
+        style.name = name;
+        style.layoutGrids = [{
+          pattern: "COLUMNS",
+          alignment: "STRETCH",
+          count: frame.columns,
+          gutterSize: frame.gutter,
+          offset: frame.margin
+        }];
+      };
+      const desktop = pluginGridFrame(tokens, "desktop");
+      const mobile = pluginGridFrame(tokens, "mobile");
+      const desktopName = `Grid/${desktop.columns} columns`;
+      writeGridStyle(desktopName, desktop);
+      writeGridStyle("Grid/Mobile", mobile);
+      log(`\u2713 Grid styles (${desktopName} \xB7 Grid/Mobile)`);
     }
     return count;
   }
@@ -6793,7 +6910,7 @@
     return builtVariants;
   }
   async function importDocumentation(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A;
     namingCtx = tokens;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
@@ -7541,7 +7658,7 @@
       if (typeRoles && Object.keys(typeRoles).length > 0) {
         const { card: roleCard, body: roleBody } = section(
           "Type roles",
-          "Semantic text roles \u2014 each line aliases a size, weight and family primitive (desktop). Bound to Typography role/* variables."
+          "Semantic text roles \u2014 desktop binds to role/*/size (what components use). Mobile is role/*/size-mobile and the Type/{role} (Mobile) text style. Figma has no @media; pick the Mobile style in a prototype."
         );
         for (const [key, modes] of Object.entries(typeRoles)) {
           const d = modes == null ? void 0 : modes.desktop;
@@ -7559,6 +7676,23 @@
           bindField(spec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${d.weight}`));
           bindField(spec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, d.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body));
           typeSpecimenRow(roleBody, `role-${key}`, 220, `${key}  \u2192  ${d.size} / ${d.weight}`, spec);
+          const m = modes.mobile;
+          if (m) {
+            const mpx = pxToFloat((_i = tokens.typography.sizes[m.size]) != null ? _i : "");
+            if (mpx) {
+              const mspec = mkText("Almost before we knew it, we had left the ground.", {
+                style: weightStyle(m.weight),
+                colorVar: textVar,
+                colorHex: textHex
+              });
+              mspec.fontSize = mpx;
+              mspec.lineHeight = { value: 120, unit: "PERCENT" };
+              bindField(mspec, "fontSize", bestVar(COLLECTIONS.typography, `role/${key}/size-mobile`, `size/${m.size}`));
+              bindField(mspec, "fontWeight", bestVar(COLLECTIONS.typography, `role/${key}/weight`, `weight/${m.weight}`));
+              bindField(mspec, "fontFamily", bestVar(COLLECTIONS.typography, `role/${key}/family`, m.family === "display" ? TYPOGRAPHY_FAMILY_VARS.display : TYPOGRAPHY_FAMILY_VARS.body));
+              typeSpecimenRow(roleBody, `role-${key}-mobile`, 220, `${key}  mobile  \u2192  ${m.size} / ${m.weight}`, mspec);
+            }
+          }
         }
         root.appendChild(roleCard);
         sections++;
@@ -7581,14 +7715,14 @@
           bar.resize(Math.max(px, 2), 14);
           bar.cornerRadius = 3;
           bar.fills = [boundFill(accentVar, accentHex, 0.9)];
-          bindField(bar, "width", (_i = findVar(COLLECTIONS.spacing, figmaVarName(key))) != null ? _i : findVar(COLLECTIONS.spacing, key));
+          bindField(bar, "width", (_j = findVar(COLLECTIONS.spacing, figmaVarName(key))) != null ? _j : findVar(COLLECTIONS.spacing, key));
           row.appendChild(bar);
           body.appendChild(row);
         }
         const spacingRoles = tokens.spacingRoles;
         if (spacingRoles) {
           for (const [role, step] of Object.entries(spacingRoles)) {
-            const px = pxToFloat((_j = tokens.spacing[step]) != null ? _j : "");
+            const px = pxToFloat((_k = tokens.spacing[step]) != null ? _k : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7609,7 +7743,7 @@
       }
     }
     {
-      const entries = Object.entries((_k = tokens.radius) != null ? _k : {});
+      const entries = Object.entries((_l = tokens.radius) != null ? _l : {});
       if (entries.length > 0) {
         await newBoard("Border Radius");
         root.appendChild(sectionBar("Border Radius"));
@@ -7642,7 +7776,7 @@
         if (radiusRoles) {
           const roleRow = autoFrame("radius-roles", "HORIZONTAL", 24);
           for (const [role, step] of Object.entries(radiusRoles)) {
-            const px = pxToFloat((_l = tokens.radius[step]) != null ? _l : "");
+            const px = pxToFloat((_m = tokens.radius[step]) != null ? _m : "");
             const cell = autoFrame(`role-${role}`, "VERTICAL", 8);
             cell.counterAxisAlignItems = "CENTER";
             const sq = figma.createFrame();
@@ -7652,7 +7786,7 @@
             sq.fills = [boundFill(cardVar, cardHex)];
             sq.strokes = [boundFill(accentVar, accentHex, 0.7)];
             sq.strokeWeight = 2;
-            const rv = (_m = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`))) != null ? _m : findVar(COLLECTIONS.radius, step);
+            const rv = (_n = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`))) != null ? _n : findVar(COLLECTIONS.radius, step);
             if ((rv == null ? void 0 : rv.resolvedType) === "FLOAT") {
               sq.setBoundVariable("topLeftRadius", rv);
               sq.setBoundVariable("topRightRadius", rv);
@@ -7670,7 +7804,7 @@
       }
     }
     {
-      const strokeMap = tokens.stroke && Object.keys(tokens.stroke).length > 0 ? tokens.stroke : (_n = tokens.borders) == null ? void 0 : _n.width;
+      const strokeMap = tokens.stroke && Object.keys(tokens.stroke).length > 0 ? tokens.stroke : (_o = tokens.borders) == null ? void 0 : _o.width;
       const entries = Object.entries(strokeMap != null ? strokeMap : {});
       if (entries.length > 0) {
         await newBoard("Stroke");
@@ -7690,13 +7824,13 @@
           line.strokes = [boundFill(textVar, textHex, 0.85)];
           line.strokeWeight = px;
           line.cornerRadius = 4;
-          bindField(line, "strokeWeight", (_o = findVar(COLLECTIONS.border, key)) != null ? _o : findVar(COLLECTIONS.border, `width/${key}`));
+          bindField(line, "strokeWeight", (_p = findVar(COLLECTIONS.border, key)) != null ? _p : findVar(COLLECTIONS.border, `width/${key}`));
           row.appendChild(line);
           body.appendChild(row);
         }
         if (tokens.strokeRoles) {
           for (const [role, step] of Object.entries(tokens.strokeRoles)) {
-            const px = pxToFloat((_p = (strokeMap != null ? strokeMap : {})[step]) != null ? _p : "");
+            const px = pxToFloat((_q = (strokeMap != null ? strokeMap : {})[step]) != null ? _q : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7719,7 +7853,7 @@
       }
     }
     {
-      const entries = Object.entries((_q = tokens.opacity) != null ? _q : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
+      const entries = Object.entries((_r = tokens.opacity) != null ? _r : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
       if (entries.length > 0) {
         await newBoard("Opacity");
         root.appendChild(sectionBar("Opacity"));
@@ -7745,7 +7879,7 @@
       }
     }
     {
-      const entries = Object.entries((_r = tokens.shadows) != null ? _r : {});
+      const entries = Object.entries((_s = tokens.shadows) != null ? _s : {});
       if (entries.length > 0) {
         await newBoard("Shadows");
         root.appendChild(sectionBar("Shadows"));
@@ -7772,16 +7906,19 @@
       }
     }
     {
-      const grid = (_s = tokens.grid) != null ? _s : {};
-      const sizes = Object.entries((_t = tokens.sizes) != null ? _t : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
-      const selectors = Object.entries((_u = tokens.selector) != null ? _u : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      const grid = (_t = tokens.grid) != null ? _t : {};
+      const sizes = Object.entries((_u = tokens.sizes) != null ? _u : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      const selectors = Object.entries((_v = tokens.selector) != null ? _v : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
       if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
         await newBoard("Grid & Sizes");
         root.appendChild(sectionBar("Grid & Sizes"));
-        const { card, body } = section("Grid & Sizes", "Layout grid settings, component heights, and selector glyph sizes.");
+        const { card, body } = section("Grid & Sizes", "Layout grid settings (root keys = desktop; desktop/* aliases them; mobile/* is the 4-col recipe), component heights, and selector glyph sizes.");
         if (Object.keys(grid).length > 0) {
-          const spec = Object.entries(grid).map(([k, v]) => `${k} ${v}`).join("   \xB7   ");
-          body.appendChild(mkText(spec, { size: 12, colorVar: textVar, opacity: 0.9 }));
+          const desktop = pluginGridFrame(tokens, "desktop");
+          const mobile = pluginGridFrame(tokens, "mobile");
+          const fmt = (f) => `${f.columns} col \xB7 ${f.gutter}px gutter \xB7 ${f.margin}px margin \xB7 ${f.container ? `${f.container}px container` : "fluid"}`;
+          body.appendChild(mkText(`Desktop  ${fmt(desktop)}`, { size: 12, colorVar: textVar, opacity: 0.9 }));
+          body.appendChild(mkText(`Mobile  ${fmt(mobile)}`, { size: 12, colorVar: textVar, opacity: 0.9 }));
         }
         for (const [key, px] of sizes) {
           const row = autoFrame(key, "HORIZONTAL", 16);
@@ -7802,7 +7939,7 @@
         }
         if (tokens.sizeRoles) {
           for (const [role, step] of Object.entries(tokens.sizeRoles)) {
-            const px = pxToFloat((_w = (_v = tokens.sizes) == null ? void 0 : _v[step]) != null ? _w : "");
+            const px = pxToFloat((_x = (_w = tokens.sizes) == null ? void 0 : _w[step]) != null ? _x : "");
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7838,7 +7975,7 @@
           }
           if (tokens.selectorRoles) {
             for (const [role, step] of Object.entries(tokens.selectorRoles)) {
-              const px = pxToFloat((_y = (_x = tokens.selector) == null ? void 0 : _x[step]) != null ? _y : "");
+              const px = pxToFloat((_z = (_y = tokens.selector) == null ? void 0 : _y[step]) != null ? _z : "");
               const row = autoFrame(`role-selector-${role}`, "HORIZONTAL", 16);
               row.counterAxisAlignItems = "CENTER";
               const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7866,7 +8003,7 @@
         await newBoard("Gradients");
         root.appendChild(sectionBar("Gradients"));
         const { card, body } = section("Gradients", 'Named gradients from the configurator, resolved against the previewed accent ramp. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
-        const assigned = (_z = tokens.gradientAssignments) != null ? _z : {};
+        const assigned = (_A = tokens.gradientAssignments) != null ? _A : {};
         const paintStylesByName = new Map(
           (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s])
         );
@@ -8708,7 +8845,7 @@
       divider(body);
       bullet(body, "Primitives \u2014 1 to 12", "Every colour family is a 12-step Radix ramp: accent-1 \u2026 accent-12. Step 9 is the anchor (your input hex); 11\u201312 are the accessible text tones. Never referenced by a component directly.");
       bullet(body, "Semantics \u2014 by role", "Surface/page, Content/primary, Action/primary/default, Border/control \u2014 a role names what a value is for. Components bind here.");
-      bullet(body, "One collection per category", "Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid \u2014 each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme.");
+      bullet(body, "One collection per category", "Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid \u2014 each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme. Type roles add size-mobile beside the desktop size; Grid adds desktop/* and mobile/* next to the existing columns/gutter keys. Components stay bound to desktop.");
     });
     board("How this file is organized", (body) => {
       h2(body, "How this file is organized");
