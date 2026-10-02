@@ -1888,7 +1888,10 @@ var EscalaAgent = (() => {
     return `${primitiveGroupFor(family, ctx)}/${padded}`;
   }
   function figmaSpacingName(key) {
-    return /^\d/.test(key) ? `step/${key}` : key;
+    return figmaDimensionName("Spacing", key);
+  }
+  function figmaDimensionName(group, key) {
+    return `${group}/${key}`;
   }
   function cap(s) {
     return s.charAt(0).toUpperCase() + s.slice(1);
@@ -1952,6 +1955,14 @@ var EscalaAgent = (() => {
     }
     return parts.join("\n");
   }
+  function primitiveOf(json, category, key) {
+    var _a, _b;
+    const ref = (_b = (_a = json.dimensionRefs) == null ? void 0 : _a[category]) == null ? void 0 : _b[key];
+    return ref ? `\`${ref.replace(/^\{|\}$/g, "")}\`` : "\u2014";
+  }
+  function lengthTable(json, category, map, name) {
+    return table(["Figma variable", "Value", "Primitive"], Object.entries(map).map(([k, v]) => [`\`${name(k)}\``, `\`${v}\``, primitiveOf(json, category, k)]));
+  }
   function buildFoundationsMd(json) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     const prefix = json.project || "SD";
@@ -1998,35 +2009,35 @@ var EscalaAgent = (() => {
         ])
       ),
       "",
-      "## Spacing (`Spacing` collection)",
+      ...json.dimensions && Object.keys(json.dimensions).length ? [
+        "## Dimension primitives (`Dimension Primitives` collection)",
+        "",
+        "One collection of lengths, named by value and identical in every theme (`dimension.16` = 16px, `dimension.3_5` = 3.5px). Every spacing, radius, size, selector, stroke and breakpoint step below aliases one of these \u2014 the **Primitive** column says which. Never use a px that is not here.",
+        "",
+        Object.keys(json.dimensions).map((k) => [k, Number(k.replace("_", "."))]).sort((a, b) => a[1] - b[1]).map(([k]) => `\`${k}\``).join(" \xB7 "),
+        ""
+      ] : [],
+      "## Spacing (`Dimension Semantics` \u2192 `Spacing/`)",
       "",
-      "Numeric steps cannot be a Figma variable name on their own \u2014 they nest under `step/`.",
-      "",
-      table(
-        ["Figma variable", "Value"],
-        Object.entries(json.spacing).map(([k, v]) => [`\`${figmaSpacingName(k)}\``, `\`${v}\``])
-      ),
+      lengthTable(json, "spacing", json.spacing, figmaSpacingName),
       ""
     ];
     if (json.padding && Object.keys(json.padding).length) {
       parts.push("### Padding", "");
-      parts.push(table(
-        ["Figma variable", "Value"],
-        Object.entries(json.padding).map(([k, v]) => [`\`padding/${k}\``, `\`${v}\``])
-      ), "");
+      parts.push(lengthTable(json, "padding", json.padding, (k) => figmaDimensionName("Spacing", `padding/${k}`)), "");
     }
     parts.push(
-      "## Radius (`Radius` collection)",
+      "## Radius (`Dimension Semantics` \u2192 `Radius/`)",
       "",
-      table(["Figma variable", "Value"], Object.entries(json.radius).map(([k, v]) => [`\`${k}\``, `\`${v}\``])),
+      lengthTable(json, "radius", json.radius, (k) => figmaDimensionName("Radius", k)),
       "",
-      "## Size (`Size` collection)",
+      "## Size (`Dimension Semantics` \u2192 `Size/`)",
       "",
-      table(["Figma variable", "Value"], Object.entries((_c = json.sizes) != null ? _c : {}).map(([k, v]) => [`\`${k}\``, `\`${v}\``])),
+      lengthTable(json, "sizes", (_c = json.sizes) != null ? _c : {}, (k) => figmaDimensionName("Size", k)),
       "",
-      "## Grid (`Grid` collection)",
+      "## Grid (`Dimension Semantics` \u2192 `Grid/`)",
       "",
-      table(["Figma variable", "Value"], Object.entries((_d = json.grid) != null ? _d : {}).map(([k, v]) => [`\`${k}\``, `\`${v}\``])),
+      lengthTable(json, "grid", (_d = json.grid) != null ? _d : {}, (k) => figmaDimensionName("Grid", k)),
       "",
       "## Shadows (effect styles \u2014 not variables)",
       "",

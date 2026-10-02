@@ -125,6 +125,11 @@ interface DesignTokens {
   // (control / compact / indicator). Additive; older payloads omit it.
   selector?: Record<string, string>
   selectorRoles?: Record<string, string>
+  // Dimension primitives (configurator `lib/dimensions.ts`): ONE global
+  // collection of lengths named by value — `16`, `-4`, `9999`, `3_5` (= 3.5px).
+  // Single mode. Additive; an older payload omits it and the plugin derives
+  // the same ladder from the lengths it finds. Key order is NOT numeric.
+  dimensions?: Record<string, string>
   // Per-library-theme foundation collections. Root fields above stay the
   // compatibility fallback; when a theme actually overrides radius/type/etc.
   // the plugin writes extra modes on those collections.
@@ -274,11 +279,11 @@ function pluginGridFrame(
   const columns = Math.max(1, parseInt(alias.columns || fallbackCols, 10) || 12)
   const fallbackGut = viewport === 'mobile' ? '16px' : '24px'
   const fallbackMar = viewport === 'mobile' ? '16px' : viewport === 'tablet' ? '24px' : '32px'
-  const gutter = pxToFloat((alias.gutter && spacing?.[alias.gutter]) || grid.gutter || fallbackGut)
-  const margin = pxToFloat((alias.margin && spacing?.[alias.margin]) || grid.margin || fallbackMar)
+  const gutter = pinnedDimension(alias.gutter) ?? pxToFloat((alias.gutter && spacing?.[alias.gutter]) || grid.gutter || fallbackGut)
+  const margin = pinnedDimension(alias.margin) ?? pxToFloat((alias.margin && spacing?.[alias.margin]) || grid.margin || fallbackMar)
   let container = 0
   if (alias.container && alias.container !== 'none') {
-    container = pxToFloat(grid[`breakpoint-${alias.container}`] || '0')
+    container = pinnedDimension(alias.container) ?? pxToFloat(grid[`breakpoint-${alias.container}`] || '0')
   }
   return { columns, gutter, margin, container }
 }
@@ -689,6 +694,15 @@ function checkSchema(tokens: DesignTokens) {
 const COLLECTIONS = {
   primitives: 'Color Primitives',
   semantics:  'Color Semantics',
+  // Every length in the system — one value each, single mode, named by value.
+  dimensionPrimitives: 'Dimension Primitives',
+  // Spacing / Radius / Stroke / Size / Selector / Grid as GROUPS of one
+  // collection, theme modes, every length an alias of a Dimension primitive.
+  dimensionSemantics: 'Dimension Semantics',
+  // The six below are no longer created. They remain as LOGICAL keys: every
+  // lookup `findVar(COLLECTIONS.radius, 'role/action')` is routed to
+  // `Dimension Semantics → Radius/role/action` (see `dimensionLookupName`), and
+  // as the names of the legacy collections an import removes.
   typography: 'Typography',
   spacing:    'Spacing',
   radius:     'Radius',
@@ -702,6 +716,54 @@ const COLLECTIONS = {
 } as const
 
 const PLUGIN_COLLECTION_NAMES = new Set<string>(Object.values(COLLECTIONS))
+
+// ── Dimensions ───────────────────────────────────────────────────────────────
+// Legacy per-foundation collection → its GROUP inside Dimension Semantics.
+// Stroke was the "Border" collection; the group says what it holds.
+const DIMENSION_GROUP: Record<string, string> = {
+  [COLLECTIONS.spacing]: 'Spacing',
+  [COLLECTIONS.radius]: 'Radius',
+  [COLLECTIONS.border]: 'Stroke',
+  [COLLECTIONS.size]: 'Size',
+  [COLLECTIONS.selector]: 'Selector',
+  [COLLECTIONS.grid]: 'Grid',
+}
+const LEGACY_DIMENSION_COLLECTIONS = Object.keys(DIMENSION_GROUP)
+
+/** `(Radius, role/action)` → `Radius/role/action`. Inside a group a numeric
+ *  step needs no `step/` shelter, so it's stripped (`step/4` → `Spacing/4`). */
+function dimensionLookupName(legacyCollection: string, name: string): string {
+  return `${DIMENSION_GROUP[legacyCollection]}/${name.replace(/^step\//, '')}`
+}
+
+/** A px length → number; `none`, rem, %, compound strings → null. */
+function parseDimension(raw: string | number | undefined | null): number | null {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? Math.round(raw * 1000) / 1000 : null
+  if (raw == null) return null
+  const m = /^\s*(-?(?:\d+\.?\d*|\.\d+))\s*(px)?\s*$/i.exec(String(raw))
+  return m ? Math.round(Number(m[1]) * 1000) / 1000 : null
+}
+
+/** The primitive's NAME — the value itself (`3.5` → `3_5`), same rule as the
+ *  configurator's `dimensionKey`. */
+function dimensionKey(n: number): string {
+  return String(Math.round(n * 1000) / 1000).replace('.', '_')
+}
+const dimensionFromKey = (key: string) => Number(key.replace('_', '.'))
+
+/** The px a role value resolves to in a scale — a pinned primitive, or a step. */
+function roleStepPx(step: string, scale: Record<string, string> | undefined): number {
+  return pinnedDimension(step) ?? pxToFloat(scale?.[step] ?? '')
+}
+
+/** A role (or Grid frame field) PINNED to a Dimension primitive: `dimension-16`,
+ *  `dimension-3_5`. Anything else is a step name of the family's scale. */
+function pinnedDimension(value: string | undefined | null): number | null {
+  if (typeof value !== 'string' || !value.startsWith('dimension-')) return null
+  const key = value.slice('dimension-'.length)
+  const n = dimensionFromKey(key)
+  return Number.isFinite(n) && n >= 0 && dimensionKey(n) === key ? n : null
+}
 
 // Styles used to be prefixed with the project name (`Jasdy/Type/…`). That
 // folder is what "Jasdy is still inherited" looks like after a switch — the
@@ -720,7 +782,9 @@ const INHERITED_STYLE_FOLDERS = ['Type', 'Shadow', 'Gradient', 'Grid', 'Scale', 
 //     in Overview's file checklist.
 // 11 — Empty `⬡ Components · …` shells no longer count as "present"; rebuild
 //     Components so per-category boards ship again after the icon-slot regression.
-const DOCS_REV = 11
+// 12 — Dimension Primitives + Dimension Semantics replace the six layout
+//     collections; every foundation board rebinds to the merged collection.
+const DOCS_REV = 12
 const FILE_DOCS_REV_KEY = 'sd-docs-rev'
 // One-time sweep: files created before primitives defaulted to hidden-from-
 // publishing (see upsertVarIn) never get that default applied retroactively —
@@ -767,14 +831,10 @@ function orderFingerprint(names: string[]): string {
  *  dropped and recreated (Semantics itself is kept, so color bindings survive). */
 function collectionPanelOrder(tokens: DesignTokens): string[] {
   const rest: { name: string; include: boolean }[] = [
-    { name: COLLECTIONS.border, include: !!(tokens.stroke || tokens.borders?.width) },
     { name: COLLECTIONS.copy, include: !!tokens.copy },
-    { name: COLLECTIONS.grid, include: !!tokens.grid },
+    { name: COLLECTIONS.dimensionPrimitives, include: true },
+    { name: COLLECTIONS.dimensionSemantics, include: true },
     { name: COLLECTIONS.opacity, include: !!tokens.opacity },
-    { name: COLLECTIONS.radius, include: true },
-    { name: COLLECTIONS.selector, include: !!tokens.selector },
-    { name: COLLECTIONS.size, include: !!tokens.sizes },
-    { name: COLLECTIONS.spacing, include: true },
     { name: COLLECTIONS.typography, include: true },
   ]
   rest.sort((a, b) => a.name.localeCompare(b.name))
@@ -823,13 +883,17 @@ function scopesForCollection(collName: string, varName: string): VariableScope[]
     // Ramps exist only to back aliases — empty scopes keeps them out of every
     // fill/stroke/effect picker. Semantics (above) stay ALL_SCOPES.
     case COLLECTIONS.primitives: return []
-    case COLLECTIONS.spacing: return ['GAP', 'WIDTH_HEIGHT']
-    case COLLECTIONS.radius:  return ['CORNER_RADIUS']
-    case COLLECTIONS.border:  return ['STROKE_FLOAT']
-    case COLLECTIONS.size:    return ['WIDTH_HEIGHT']
-    case COLLECTIONS.selector: return ['WIDTH_HEIGHT']
+    // Same rule for the numbers: consumed through Dimension Semantics.
+    case COLLECTIONS.dimensionPrimitives: return []
+    case COLLECTIONS.dimensionSemantics: {
+      const group = varName.split('/')[0]
+      if (group === 'Spacing') return ['GAP', 'WIDTH_HEIGHT']
+      if (group === 'Radius') return ['CORNER_RADIUS']
+      if (group === 'Stroke') return ['STROKE_FLOAT']
+      if (group === 'Size' || group === 'Selector' || group === 'Grid') return ['WIDTH_HEIGHT']
+      return undefined
+    }
     case COLLECTIONS.opacity: return ['OPACITY']
-    case COLLECTIONS.grid:    return ['WIDTH_HEIGHT']
     case COLLECTIONS.typography: {
       if (varName.startsWith('size/') || varName.endsWith('/size') || varName.endsWith('/size-tablet') || varName.endsWith('/size-mobile')) return ['FONT_SIZE']
       if (varName.startsWith('weight/') || varName.endsWith('/weight')) return ['FONT_WEIGHT']
@@ -1980,8 +2044,12 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     name: string,
     type: VariableResolvedDataType,
     scopes?: VariableScope[],
+    /** Write `name` as given. A Dimension primitive IS its number (`16`,
+     *  `-4`), so it must not be sheltered under `step/` the way a bare numeric
+     *  first segment is everywhere else. */
+    exactName = false,
   ): Variable {
-    const safe = figmaVarName(name)
+    const safe = exactName ? name : figmaVarName(name)
     let found = cache.get(safe)
     if (found) {
       // A wrong type can't be updated in place. An alias can: assigning a
@@ -2024,7 +2092,7 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     // re-hide a ramp the user has since exposed manually via Figma's own
     // "show hidden variables" toggle, or a manual override would get silently
     // reverted on the next sync.
-    if (collection.name === COLLECTIONS.primitives) {
+    if (collection.name === COLLECTIONS.primitives || collection.name === COLLECTIONS.dimensionPrimitives) {
       try { created.hiddenFromPublishing = true } catch { /* plan may reject this */ }
     }
     applyVarDescription(created, collection.name, safe)
@@ -2034,7 +2102,15 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   }
 
   function applyVarDescription(variable: Variable, collectionName: string, varName: string) {
-    const desc = tokens.descriptions?.[collectionName]?.[varName]
+    let desc = tokens.descriptions?.[collectionName]?.[varName]
+    // The configurator still keys layout descriptions by the legacy collection
+    // (`Radius` → `role/action`); a Dimension Semantics variable reads them
+    // through its group (`Radius/role/action`).
+    if (desc === undefined && collectionName === COLLECTIONS.dimensionSemantics) {
+      const slash = varName.indexOf('/')
+      const legacy = LEGACY_DIMENSION_COLLECTIONS.find((c) => DIMENSION_GROUP[c] === varName.slice(0, slash))
+      if (legacy) desc = tokens.descriptions?.[legacy]?.[varName.slice(slash + 1)]
+    }
     if (typeof desc !== 'string') return
     try {
       if (variable.description !== desc) variable.description = desc
@@ -2203,53 +2279,6 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         if (raw !== undefined) setDefault(col, v, transform(raw))
       }
     }
-  }
-
-  // Semantic layout roles alias a primitive in the SAME collection
-  // (`role/control` → `md`). Returns how many aliases were written.
-  function emitRoleAliases(
-    collName: string,
-    roles: Record<string, string> | undefined,
-    primitiveNameOf: (step: string) => string,
-    themeRolesOf?: (theme: string) => Record<string, string> | undefined,
-    forceModes = false,
-  ): number {
-    const rootRoles = roles ?? {}
-    const allRoles = new Set(Object.keys(rootRoles))
-    if (themeRolesOf) {
-      for (const t of foundationThemes) Object.keys(themeRolesOf(t) ?? {}).forEach((k) => allRoles.add(k))
-    }
-    if (allRoles.size === 0) return 0
-    const col = findOrCreateCollection(collName)
-    const cache = cacheFor(col)
-    const hasThemeMaps = !!(themeRolesOf && foundationThemes.length > 0)
-    const useModes = hasThemeMaps && (forceModes || themeMapsDiffer((t) => themeRolesOf!(t), rootRoles))
-    const modeIdOf = useModes ? ensureNamedModes(col, foundationThemes) : undefined
-    const preferred = (themeRolesOf && foundationThemes[0]) ? themeRolesOf(foundationThemes[0]) : undefined
-    let n = 0
-    for (const role of allRoles) {
-      const v = upsertVarIn(col, cache, `role/${role}`, 'FLOAT', scopesForCollection(collName, `role/${role}`))
-      if (modeIdOf && themeRolesOf) {
-        const byTheme: Record<string, VariableValue | undefined> = {}
-        for (const t of foundationThemes) {
-          const step = themeRolesOf(t)?.[role] ?? rootRoles[role]
-          if (typeof step !== 'string' || !step) continue
-          const prim = cache.get(figmaVarName(primitiveNameOf(step)))
-          if (!prim) continue
-          byTheme[t] = figma.variables.createVariableAlias(prim)
-        }
-        writeByTheme(v, byTheme, modeIdOf)
-        n++
-      } else {
-        const step = preferred?.[role] ?? rootRoles[role]
-        if (typeof step !== 'string' || !step) continue
-        const prim = cache.get(figmaVarName(primitiveNameOf(step)))
-        if (!prim) continue
-        setDefault(col, v, figma.variables.createVariableAlias(prim))
-        n++
-      }
-    }
-    return n
   }
 
   // ── Typography FIRST ───────────────────────────────────────────────────────
@@ -3003,35 +3032,212 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   }
 
   // ── Remaining single-mode categories ───────────────────────────────────────
-  emitCollection(
-    COLLECTIONS.spacing, Object.entries(tokens.spacing), 'FLOAT', pxToFloat, (k) => k,
-    (t) => tokens.foundationsByTheme?.[t]?.spacing,
-  )
-  const spacingRoleCount = emitRoleAliases(
-    COLLECTIONS.spacing, tokens.spacingRoles, (s) => s,
-    (t) => tokens.foundationsByTheme?.[t]?.spacingRoles,
-  )
-  log(`✓ Spacing tokens (${Object.keys(tokens.spacing).length} steps${spacingRoleCount ? ` · ${spacingRoleCount} roles` : ''})`)
+  // ── Dimension Primitives + Dimension Semantics ─────────────────────────────
+  // Every length in the system lives ONCE, named by value, in a single-mode
+  // collection; Spacing / Radius / Stroke / Size / Selector / Grid are GROUPS
+  // of one semantic collection whose modes are the library themes. A step
+  // (`Radius/lg`) aliases a primitive (`16`); a role (`Radius/role/action`)
+  // aliases a step. Same two tiers as Color Primitives → Color Semantics.
+  // Replaces six per-foundation collections (Spacing, Radius, Border, Size,
+  // Selector, Grid) — see design-plans/dimension-primitives.md in the
+  // configurator repo.
+  type ThemeFoundation = NonNullable<DesignTokens['foundationsByTheme']>[string]
+  const themeFoundation = (t: string): ThemeFoundation | undefined => tokens.foundationsByTheme?.[t]
+  const strokeFromV6 = !!(tokens.stroke && Object.keys(tokens.stroke).length > 0)
+  const strokeRoot = strokeFromV6 ? tokens.stroke : tokens.borders?.width
+  const strokeName = strokeFromV6 ? (k: string) => k : (k: string) => `width/${k}`
 
-  // Per-side surface padding nests inside Spacing as "padding/top…left".
-  if (tokens.padding && Object.keys(tokens.padding).length > 0) {
-    emitCollection(
-      COLLECTIONS.spacing, Object.entries(tokens.padding), 'FLOAT', pxToFloat, (k) => `padding/${k}`,
-      (t) => tokens.foundationsByTheme?.[t]?.padding,
-    )
-    log(`✓ Surface padding tokens (${Object.keys(tokens.padding).length} sides)`)
+  // Which entries of a grid map are counts, not lengths.
+  const isCount = (key: string) => key === 'columns'
+
+  // 1 · The primitive ladder: what the payload ships, plus every length the
+  //     payload actually uses (an older configurator ships no `dimensions`, and
+  //     a missing value would otherwise land as a raw float).
+  const dimValues = new Set<number>()
+  for (const key of Object.keys(tokens.dimensions ?? {})) {
+    const n = dimensionFromKey(key)
+    if (Number.isFinite(n)) dimValues.add(n)
+  }
+  const collectLengths = (map: Record<string, string> | undefined, skip?: (k: string) => boolean) => {
+    for (const [k, v] of Object.entries(map ?? {})) {
+      if (skip?.(k)) continue
+      const n = parseDimension(v)
+      if (n !== null) dimValues.add(n)
+    }
+  }
+  const lengthMapsOf = (f: Partial<ThemeFoundation> | DesignTokens) => {
+    collectLengths(f.spacing); collectLengths(f.padding); collectLengths(f.radius)
+    collectLengths(f.sizes); collectLengths(f.selector); collectLengths(f.grid, isCount)
+    collectLengths((f as ThemeFoundation).stroke ?? (f as DesignTokens).borders?.width)
+  }
+  lengthMapsOf(tokens)
+  for (const t of foundationThemes) { const f = themeFoundation(t); if (f) lengthMapsOf(f) }
+  // Roles pinned to a primitive (`dimension-21`) may name a length no scale
+  // step carries any more — the ladder has to keep it or the role detaches.
+  const pinRoles = (roles: Record<string, string> | undefined) => {
+    for (const v of Object.values(roles ?? {})) { const n = pinnedDimension(v); if (n !== null) dimValues.add(n) }
+  }
+  const pinAll = (f: { radiusRoles?: Record<string, string>; spacingRoles?: Record<string, string>; sizeRoles?: Record<string, string>; selectorRoles?: Record<string, string>; strokeRoles?: Record<string, string>; breakpointRoles?: Record<string, string> }) => {
+    pinRoles(f.radiusRoles); pinRoles(f.spacingRoles); pinRoles(f.sizeRoles)
+    pinRoles(f.selectorRoles); pinRoles(f.strokeRoles); pinRoles(f.breakpointRoles)
+  }
+  pinAll(tokens)
+  for (const t of foundationThemes) { const f = themeFoundation(t); if (f) pinAll(f) }
+  for (const vp of ['tablet', 'mobile'] as const) {
+    for (const th of [undefined, ...foundationThemes]) {
+      const fr = pluginGridFrame(tokens, vp, th)
+      for (const n of [fr.gutter, fr.margin, fr.container]) if (Number.isFinite(n)) dimValues.add(Math.round(n * 1000) / 1000)
+    }
   }
 
-  emitCollection(
-    COLLECTIONS.radius, Object.entries(tokens.radius), 'FLOAT', pxToFloat, (k) => k,
-    (t) => tokens.foundationsByTheme?.[t]?.radius,
-    true,
-  )
-  const radiusRoleCount = emitRoleAliases(
-    COLLECTIONS.radius, tokens.radiusRoles, (s) => s,
-    (t) => tokens.foundationsByTheme?.[t]?.radiusRoles,
-    true,
-  )
+  const dimPrimCol = findOrCreateCollection(COLLECTIONS.dimensionPrimitives)
+  const dimPrimCache = cacheFor(dimPrimCol)
+  const dimByValue = new Map<number, Variable>()
+  const dimPrimWritten = new Set<string>()
+  let dimNameRefused = 0
+  for (const n of [...dimValues].sort((a, b) => a - b)) {
+    const key = dimensionKey(n)
+    let v: Variable
+    try {
+      v = upsertVarIn(dimPrimCol, dimPrimCache, key, 'FLOAT', [], true)
+    } catch {
+      // Figma has refused names it documents as legal before. Never lose the
+      // value over a name: shelter it the way numeric steps always were.
+      dimNameRefused++
+      v = upsertVarIn(dimPrimCol, dimPrimCache, `value/${key}`, 'FLOAT', [], true)
+    }
+    setDefault(dimPrimCol, v, n)
+    dimByValue.set(n, v)
+    dimPrimWritten.add(v.name)
+  }
+  pruneVars(dimPrimCache, dimPrimWritten, COLLECTIONS.dimensionPrimitives)
+  log(`✓ Dimension primitives (${dimByValue.size} values${dimNameRefused ? ` · ${dimNameRefused} sheltered under value/ — Figma refused the bare name` : ''})`)
+
+  // 2 · The semantic collection. ONE set of theme modes for every group — the
+  //     reason to merge six collections is that a frame switches theme once.
+  const dimSemCol = findOrCreateCollection(COLLECTIONS.dimensionSemantics)
+  const dimSemCache = cacheFor(dimSemCol)
+  const dimModeIdOf = foundationThemes.length > 0 ? ensureNamedModes(dimSemCol, foundationThemes) : undefined
+  const dimSemWritten = new Set<string>()
+
+  // A length → an alias to its primitive; a count (`columns`) stays a number.
+  const lengthValue = (raw: string | number | undefined, count = false): VariableValue | undefined => {
+    if (raw === undefined || raw === null || raw === '') return undefined
+    if (count) {
+      const n = typeof raw === 'number' ? raw : parseFloat(raw)
+      return Number.isFinite(n) ? n : undefined
+    }
+    const n = parseDimension(raw)
+    if (n === null) return undefined
+    const prim = dimByValue.get(n)
+    return prim ? figma.variables.createVariableAlias(prim) : n
+  }
+
+  function writeDim(name: string, rootVal: VariableValue | undefined, themed: (t: string) => VariableValue | undefined): Variable | undefined {
+    if (rootVal === undefined && !foundationThemes.some((t) => themed(t) !== undefined)) return undefined
+    const v = upsertVarIn(dimSemCol, dimSemCache, name, 'FLOAT', scopesForCollection(COLLECTIONS.dimensionSemantics, name), true)
+    if (dimModeIdOf) {
+      const byTheme: Record<string, VariableValue | undefined> = {}
+      for (const t of foundationThemes) byTheme[t] = themed(t) ?? rootVal
+      writeByTheme(v, byTheme, dimModeIdOf)
+    } else if (rootVal !== undefined) {
+      setDefault(dimSemCol, v, rootVal)
+    }
+    dimSemWritten.add(name)
+    return v
+  }
+
+  /** A category's scale: `<Group>/<step>` → alias of the primitive. */
+  function emitDimScale(
+    group: string,
+    root: Record<string, string> | undefined,
+    themeMapOf: (t: string) => Record<string, string> | undefined,
+    nameOf: (key: string) => string = (k) => k,
+    count?: (key: string) => boolean,
+  ): number {
+    const keys = new Set(Object.keys(root ?? {}))
+    for (const t of foundationThemes) Object.keys(themeMapOf(t) ?? {}).forEach((k) => keys.add(k))
+    let n = 0
+    for (const key of keys) {
+      const isN = !!count?.(key)
+      const written = writeDim(
+        `${group}/${nameOf(key)}`,
+        lengthValue(root?.[key], isN),
+        (t) => lengthValue(themeMapOf(t)?.[key], isN),
+      )
+      if (written) n++
+    }
+    return n
+  }
+
+  /** `<Group>/role/<role>` → alias of the Dimension PRIMITIVE the role resolves
+   *  to (like a colour role aliasing its ramp tone), whether the role holds a
+   *  step of the group's scale or is pinned to a primitive (`dimension-16`).
+   *  A value that resolves to no length falls back to the step's own variable. */
+  function emitDimRoles(
+    group: string,
+    roots: Record<string, string> | undefined,
+    themeRolesOf: (t: string) => Record<string, string> | undefined,
+    stepName: (step: string) => string = (s) => s,
+    scaleOf: (t?: string) => Record<string, string> | undefined = () => undefined,
+  ): number {
+    const roles = new Set(Object.keys(roots ?? {}))
+    for (const t of foundationThemes) Object.keys(themeRolesOf(t) ?? {}).forEach((k) => roles.add(k))
+    const aliasOf = (step: string | undefined, theme?: string): VariableValue | undefined => {
+      if (typeof step !== 'string' || !step) return undefined
+      const scale = scaleOf(theme)
+      const px = pinnedDimension(step) ?? parseDimension(scale?.[stepName(step)])
+      const prim = px !== null ? dimByValue.get(px) : undefined
+      if (prim) return figma.variables.createVariableAlias(prim)
+      const target = dimSemCache.get(`${group}/${stepName(step)}`)
+      return target ? figma.variables.createVariableAlias(target) : undefined
+    }
+    let n = 0
+    for (const role of roles) {
+      const written = writeDim(`${group}/role/${role}`, aliasOf(roots?.[role]), (t) => aliasOf(themeRolesOf(t)?.[role], t))
+      if (written) n++
+    }
+    return n
+  }
+
+  const spacingSteps = emitDimScale('Spacing', tokens.spacing, (t) => themeFoundation(t)?.spacing)
+  const spacingRoleCount = emitDimRoles('Spacing', tokens.spacingRoles, (t) => themeFoundation(t)?.spacingRoles, (s) => s, (t) => (t ? themeFoundation(t)?.spacing : undefined) ?? tokens.spacing)
+  const paddingCount = emitDimScale('Spacing', tokens.padding, (t) => themeFoundation(t)?.padding, (k) => `padding/${k}`)
+
+  const radiusSteps = emitDimScale('Radius', tokens.radius, (t) => themeFoundation(t)?.radius)
+  const radiusRoleCount = emitDimRoles('Radius', tokens.radiusRoles, (t) => themeFoundation(t)?.radiusRoles, (s) => s, (t) => (t ? themeFoundation(t)?.radius : undefined) ?? tokens.radius)
+
+  const strokeSteps = emitDimScale('Stroke', strokeRoot, (t) => themeFoundation(t)?.stroke, strokeName)
+  const strokeRoleCount = emitDimRoles('Stroke', tokens.strokeRoles, (t) => themeFoundation(t)?.strokeRoles, strokeName, (t) => (t ? themeFoundation(t)?.stroke : undefined) ?? strokeRoot)
+
+  const sizeSteps = emitDimScale('Size', tokens.sizes, (t) => themeFoundation(t)?.sizes)
+  const sizeRoleCount = emitDimRoles('Size', tokens.sizeRoles, (t) => themeFoundation(t)?.sizeRoles, (s) => s, (t) => (t ? themeFoundation(t)?.sizes : undefined) ?? tokens.sizes)
+
+  const selectorSteps = emitDimScale('Selector', tokens.selector, (t) => themeFoundation(t)?.selector)
+  const selectorRoleCount = emitDimRoles('Selector', tokens.selectorRoles, (t) => themeFoundation(t)?.selectorRoles, (s) => s, (t) => (t ? themeFoundation(t)?.selector : undefined) ?? tokens.selector)
+
+  let gridCount = 0
+  if (tokens.grid) {
+    gridCount += emitDimScale('Grid', tokens.grid, (t) => themeFoundation(t)?.grid, (k) => k, isCount)
+    gridCount += emitDimRoles('Grid', tokens.breakpointRoles, (t) => themeFoundation(t)?.breakpointRoles, (s) => `breakpoint-${s}`, (t) => (t ? themeFoundation(t)?.grid : undefined) ?? tokens.grid)
+    // Desktop frame aliases the root grid steps.
+    for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
+      const target = dimSemCache.get(`Grid/${k}`)
+      if (!target) continue
+      if (writeDim(`Grid/desktop/${k}`, figma.variables.createVariableAlias(target), () => undefined)) gridCount++
+    }
+    // Tablet / mobile frames carry their own recipe per theme.
+    for (const vp of ['tablet', 'mobile'] as const) {
+      const root = pluginGridFrame(tokens, vp)
+      for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
+        const value = (fr: typeof root) => k === 'container' && !fr.container ? undefined : lengthValue(fr[k], k === 'columns')
+        if (writeDim(`Grid/${vp}/${k}`, value(root), (t) => value(pluginGridFrame(tokens, vp, t)))) gridCount++
+      }
+    }
+  }
+
+  pruneVars(dimSemCache, dimSemWritten, COLLECTIONS.dimensionSemantics)
+  log(`✓ Dimension semantics — Spacing ${spacingSteps}+${spacingRoleCount} roles${paddingCount ? ` · ${paddingCount} padding` : ''} · Radius ${radiusSteps}+${radiusRoleCount} · Stroke ${strokeSteps}+${strokeRoleCount} · Size ${sizeSteps}+${sizeRoleCount} · Selector ${selectorSteps}+${selectorRoleCount} · Grid ${gridCount}${dimModeIdOf ? ` × ${Object.keys(dimModeIdOf).length} theme modes` : ''}`)
   const previewRad = previewRadius(tokens)
   const shownRoles = foundationThemes.length
     ? foundationThemes.map((theme) => {
@@ -3039,85 +3245,33 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
         return `${capFoundationTheme(theme)} boxes=${roles?.container ?? '?'} fields=${roles?.action ?? '?'}`
       }).join(', ')
     : `boxes=${previewRad.radiusRoles?.container ?? '?'} fields=${previewRad.radiusRoles?.action ?? '?'}`
-  log(`✓ Radius tokens${radiusRoleCount ? ` · ${radiusRoleCount} roles` : ''} — ${shownRoles}`)
+  log(`  Radius roles — ${shownRoles}`)
 
-  const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0
-  const strokeMap = strokeFromV6 ? tokens.stroke : tokens.borders?.width
-  if (strokeMap) {
-    const nameOf = strokeFromV6 ? (k: string) => k : (k: string) => `width/${k}`
-    emitCollection(
-      COLLECTIONS.border, Object.entries(strokeMap), 'FLOAT', pxToFloat, nameOf,
-      (t) => tokens.foundationsByTheme?.[t]?.stroke,
-    )
-    const strokeRoleCount = emitRoleAliases(
-      COLLECTIONS.border, tokens.strokeRoles, (s) => s,
-      (t) => tokens.foundationsByTheme?.[t]?.strokeRoles,
-    )
-    log(`✓ Border width tokens (${Object.keys(strokeMap).length}${strokeRoleCount ? ` · ${strokeRoleCount} roles` : ''})`)
+  // 3 · The six collections this replaced. Their variables are what every
+  //     component was bound to, so removing them means redrawing the
+  //     components against Dimension Semantics — `foundationsRebuilt` asks the
+  //     import handler for exactly that pass. A collection another file still
+  //     consumes (published library) refuses removal; it is left in place and
+  //     said once, never retried into a rebuild loop.
+  for (const legacyName of LEGACY_DIMENSION_COLLECTIONS) {
+    const legacy = existingCollections.find((c) => c.name === legacyName)
+    if (!legacy) continue
+    try {
+      legacy.remove()
+      existingCollections.splice(existingCollections.indexOf(legacy), 1)
+      for (let i = allVars.length - 1; i >= 0; i--) {
+        if (allVars[i].variableCollectionId === legacy.id) allVars.splice(i, 1)
+      }
+      foundationsRebuilt = true
+      log(`Removed "${legacyName}" — merged into "${COLLECTIONS.dimensionSemantics}" (${DIMENSION_GROUP[legacyName]}/)`)
+    } catch {
+      log(`⚠ Could not remove "${legacyName}" — another file may still use it. Its values no longer sync; "${COLLECTIONS.dimensionSemantics}" is the live one.`)
+    }
   }
 
   if (tokens.opacity) {
     emitCollection(COLLECTIONS.opacity, Object.entries(tokens.opacity), 'FLOAT', (v) => (parseFloat(v) || 0) / 100)
     log(`✓ Opacity tokens (${Object.keys(tokens.opacity).length})`)
-  }
-
-  if (tokens.sizes) {
-    emitCollection(
-      COLLECTIONS.size, Object.entries(tokens.sizes), 'FLOAT', pxToFloat, (k) => k,
-      (t) => tokens.foundationsByTheme?.[t]?.sizes,
-    )
-    const sizeRoleCount = emitRoleAliases(
-      COLLECTIONS.size, tokens.sizeRoles, (s) => s,
-      (t) => tokens.foundationsByTheme?.[t]?.sizeRoles,
-    )
-    log(`✓ Size tokens (${Object.keys(tokens.sizes).length}${sizeRoleCount ? ` · ${sizeRoleCount} roles` : ''})`)
-  }
-
-  if (tokens.selector) {
-    emitCollection(
-      COLLECTIONS.selector, Object.entries(tokens.selector), 'FLOAT', pxToFloat, (k) => k,
-      (t) => tokens.foundationsByTheme?.[t]?.selector,
-    )
-    const selectorRoleCount = emitRoleAliases(
-      COLLECTIONS.selector, tokens.selectorRoles, (s) => s,
-      (t) => tokens.foundationsByTheme?.[t]?.selectorRoles,
-    )
-    log(`✓ Selector tokens (${Object.keys(tokens.selector).length}${selectorRoleCount ? ` · ${selectorRoleCount} roles` : ''})`)
-  }
-
-  if (tokens.grid) {
-    emitCollection(
-      COLLECTIONS.grid, Object.entries(tokens.grid), 'FLOAT', pxToFloat, (k) => k,
-      (t) => tokens.foundationsByTheme?.[t]?.grid,
-    )
-    const bpRoleCount = emitRoleAliases(
-      COLLECTIONS.grid, tokens.breakpointRoles, (s) => `breakpoint-${s}`,
-      (t) => tokens.foundationsByTheme?.[t]?.breakpointRoles,
-    )
-    const gridCol = findOrCreateCollection(COLLECTIONS.grid)
-    const gridCache = cacheFor(gridCol)
-    for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
-      const prim = gridCache.get(k)
-      if (!prim) continue
-      const v = upsertVarIn(gridCol, gridCache, `desktop/${k}`, 'FLOAT', scopesForCollection(COLLECTIONS.grid, `desktop/${k}`))
-      setDefault(gridCol, v, figma.variables.createVariableAlias(prim))
-    }
-    for (const vp of ['tablet', 'mobile'] as const) {
-      const root = pluginGridFrame(tokens, vp)
-      const differ = themeMapsDiffer((t) => pluginGridFrame(tokens, vp, t), root)
-      const gridModeIdOf = differ ? ensureNamedModes(gridCol, foundationThemes) : undefined
-      for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
-        const v = upsertVarIn(gridCol, gridCache, `${vp}/${k}`, 'FLOAT', scopesForCollection(COLLECTIONS.grid, `${vp}/${k}`))
-        if (gridModeIdOf) {
-          const byTheme: Record<string, VariableValue | undefined> = {}
-          for (const th of foundationThemes) byTheme[th] = pluginGridFrame(tokens, vp, th)[k]
-          writeByTheme(v, byTheme, gridModeIdOf)
-        } else {
-          setDefault(gridCol, v, root[k])
-        }
-      }
-    }
-    log(`✓ Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` · ${bpRoleCount} breakpoint roles` : ''} · desktop/* + tablet/* + mobile/* frames)`)
   }
 
   // Icons are components on the ⬡ Icons page, not a variable. Older imports
@@ -3859,7 +4013,16 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     if (!m) { m = new Map(); varsByCollection.set(cname, m) }
     if (!m.has(v.name)) m.set(v.name, v)
   }
-  const findVar = (coll: string, name: string) => varsByCollection.get(coll)?.get(name)
+  // A legacy per-foundation collection (Spacing, Radius, Border, Size,
+  // Selector, Grid) is now a GROUP of Dimension Semantics. Callers keep asking
+  // for `(COLLECTIONS.radius, 'role/action')`; this routes it. The legacy
+  // collection itself is the fallback, for a file whose variables haven't been
+  // re-imported yet.
+  const findVar = (coll: string, name: string) =>
+    (DIMENSION_GROUP[coll]
+      ? varsByCollection.get(COLLECTIONS.dimensionSemantics)?.get(dimensionLookupName(coll, name))
+      : undefined)
+    ?? varsByCollection.get(coll)?.get(name)
   function bestVar(coll: string, ...names: string[]): Variable | undefined {
     for (const n of names) { const v = findVar(coll, n); if (v) return v }
     return undefined
@@ -4038,6 +4201,8 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   const radiusXl = pxToFloat(radScale.xl ?? tokens.radius?.xl ?? '16px')
   const rolePx = (role: string, fallbackStep: string, fallbackPx: number) => {
     const step = radRoles?.[role] ?? fallbackStep
+    const pinned = pinnedDimension(step)
+    if (pinned !== null) return pinned
     const raw = radScale[step] ?? tokens.radius?.[step]
     return raw !== undefined ? pxToFloat(raw) : fallbackPx
   }
@@ -4089,14 +4254,36 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     }
   }
 
-  const spacingCol  = allCols.find((c) => c.name === COLLECTIONS.spacing)
-  const spacingVars = varsByCollection.get(COLLECTIONS.spacing)
+  // Spacing steps now live in Dimension Semantics as ALIASES (`Spacing/4` →
+  // Dimension Primitives `16`), so a step's number is read by following the
+  // alias. Only the scale steps are candidates — a role or a padding side
+  // happening to share the px is not what a gap should bind to.
+  const varById = new Map(allVars.map((v) => [v.id, v] as const))
+  const defaultModeOfCol = new Map(allCols.map((c) => [c.id, c.defaultModeId] as const))
+  function resolveFloat(v: Variable, depth = 0): number | undefined {
+    const mid = defaultModeOfCol.get(v.variableCollectionId)
+    const val = mid ? v.valuesByMode[mid] : undefined
+    if (typeof val === 'number') return val
+    if (val && typeof val === 'object' && 'type' in val && (val as VariableAlias).type === 'VARIABLE_ALIAS' && depth < 4) {
+      const target = varById.get((val as VariableAlias).id)
+      return target ? resolveFloat(target, depth + 1) : undefined
+    }
+    return undefined
+  }
+  const spacingSteps: Variable[] = []
+  for (const [name, v] of varsByCollection.get(COLLECTIONS.dimensionSemantics) ?? []) {
+    if (/^Spacing\/[^/]+$/.test(name) && v.resolvedType === 'FLOAT') spacingSteps.push(v)
+  }
+  // A file not re-imported since the merge still has the legacy collection.
+  if (spacingSteps.length === 0) {
+    for (const v of varsByCollection.get(COLLECTIONS.spacing)?.values() ?? []) {
+      if (v.resolvedType === 'FLOAT' && !v.name.startsWith('role/') && !v.name.startsWith('padding/')) spacingSteps.push(v)
+    }
+  }
   function closestSpacing(px: number): Variable | undefined {
-    if (!spacingCol || !spacingVars) return undefined
     let best: Variable | undefined, diff = Infinity
-    for (const v of spacingVars.values()) {
-      if (v.resolvedType !== 'FLOAT') continue
-      const val = v.valuesByMode[spacingCol.defaultModeId]
+    for (const v of spacingSteps) {
+      const val = resolveFloat(v)
       if (typeof val === 'number' && Math.abs(val - px) < diff) { diff = Math.abs(val - px); best = v }
     }
     return best
@@ -4111,7 +4298,9 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     tryBind(node, 'itemSpacing', closestSpacing(px))
   }
   function borderWidthVar(): Variable | undefined {
-    return bestVar(COLLECTIONS.border, 'width/default', 'width/sm', 'width/1')
+    // `role/control` is the v6 name (strokeRoles); `sm` the v6 step it
+    // aliases; `width/*` the v5 `borders.width` names.
+    return bestVar(COLLECTIONS.border, 'role/control', 'sm', 'width/default', 'width/sm', 'width/1')
   }
   // Universal focus ring: 3px halo in the component's accent color.
   function focusRing(node: Box, hex: string) {
@@ -8694,7 +8883,16 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     if (!m) { m = new Map(); varsByCollection.set(cname, m) }
     if (!m.has(v.name)) m.set(v.name, v)
   }
-  const findVar = (coll: string, name: string) => varsByCollection.get(coll)?.get(name)
+  // A legacy per-foundation collection (Spacing, Radius, Border, Size,
+  // Selector, Grid) is now a GROUP of Dimension Semantics. Callers keep asking
+  // for `(COLLECTIONS.radius, 'role/action')`; this routes it. The legacy
+  // collection itself is the fallback, for a file whose variables haven't been
+  // re-imported yet.
+  const findVar = (coll: string, name: string) =>
+    (DIMENSION_GROUP[coll]
+      ? varsByCollection.get(COLLECTIONS.dimensionSemantics)?.get(dimensionLookupName(coll, name))
+      : undefined)
+    ?? varsByCollection.get(coll)?.get(name)
   function bestVar(coll: string, ...names: string[]): Variable | undefined {
     for (const n of names) { const v = findVar(coll, n); if (v) return v }
     return undefined
@@ -9627,7 +9825,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       const spacingRoles = tokens.spacingRoles
       if (spacingRoles) {
         for (const [role, step] of Object.entries(spacingRoles)) {
-          const px = pxToFloat(tokens.spacing[step] ?? '')
+          const px = roleStepPx(step, tokens.spacing)
           const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
           row.counterAxisAlignItems = 'CENTER'
           const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
@@ -9683,7 +9881,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       if (radiusRoles) {
         const roleRow = autoFrame('radius-roles', 'HORIZONTAL', 24)
         for (const [role, step] of Object.entries(radiusRoles)) {
-          const px = pxToFloat(tokens.radius[step] ?? '')
+          const px = roleStepPx(step, tokens.radius)
           const cell = autoFrame(`role-${role}`, 'VERTICAL', 8)
           cell.counterAxisAlignItems = 'CENTER'
           const sq = figma.createFrame()
@@ -9741,7 +9939,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       }
       if (tokens.strokeRoles) {
         for (const [role, step] of Object.entries(tokens.strokeRoles)) {
-          const px = pxToFloat((strokeMap ?? {})[step] ?? '')
+          const px = roleStepPx(step, strokeMap)
           const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
           row.counterAxisAlignItems = 'CENTER'
           const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
@@ -9865,7 +10063,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
       }
       if (tokens.sizeRoles) {
         for (const [role, step] of Object.entries(tokens.sizeRoles)) {
-          const px = pxToFloat(tokens.sizes?.[step] ?? '')
+          const px = roleStepPx(step, tokens.sizes)
           const row = autoFrame(`role-${role}`, 'HORIZONTAL', 16)
           row.counterAxisAlignItems = 'CENTER'
           const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })
@@ -9901,7 +10099,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
         }
         if (tokens.selectorRoles) {
           for (const [role, step] of Object.entries(tokens.selectorRoles)) {
-            const px = pxToFloat(tokens.selector?.[step] ?? '')
+            const px = roleStepPx(step, tokens.selector)
             const row = autoFrame(`role-selector-${role}`, 'HORIZONTAL', 16)
             row.counterAxisAlignItems = 'CENTER'
             const label = mkText(`${role}  →  ${step}${px ? ` · ${px}px` : ''}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex })

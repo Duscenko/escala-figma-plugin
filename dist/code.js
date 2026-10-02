@@ -50,7 +50,7 @@
     return parseFloat(val.replace("px", "").replace("rem", "")) || 0;
   }
   function pluginGridFrame(tokens, viewport, theme) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
     const fb = theme ? (_a = tokens.foundationsByTheme) == null ? void 0 : _a[theme] : void 0;
     const spacing = (_b = fb == null ? void 0 : fb.spacing) != null ? _b : tokens.spacing;
     const grid = (_d = (_c = fb == null ? void 0 : fb.grid) != null ? _c : tokens.grid) != null ? _d : {};
@@ -83,11 +83,11 @@
     const columns = Math.max(1, parseInt(alias.columns || fallbackCols, 10) || 12);
     const fallbackGut = viewport === "mobile" ? "16px" : "24px";
     const fallbackMar = viewport === "mobile" ? "16px" : viewport === "tablet" ? "24px" : "32px";
-    const gutter = pxToFloat(alias.gutter && (spacing == null ? void 0 : spacing[alias.gutter]) || grid.gutter || fallbackGut);
-    const margin = pxToFloat(alias.margin && (spacing == null ? void 0 : spacing[alias.margin]) || grid.margin || fallbackMar);
+    const gutter = (_m = pinnedDimension(alias.gutter)) != null ? _m : pxToFloat(alias.gutter && (spacing == null ? void 0 : spacing[alias.gutter]) || grid.gutter || fallbackGut);
+    const margin = (_n = pinnedDimension(alias.margin)) != null ? _n : pxToFloat(alias.margin && (spacing == null ? void 0 : spacing[alias.margin]) || grid.margin || fallbackMar);
     let container = 0;
     if (alias.container && alias.container !== "none") {
-      container = pxToFloat(grid[`breakpoint-${alias.container}`] || "0");
+      container = (_o = pinnedDimension(alias.container)) != null ? _o : pxToFloat(grid[`breakpoint-${alias.container}`] || "0");
     }
     return { columns, gutter, margin, container };
   }
@@ -400,6 +400,15 @@
   var COLLECTIONS = {
     primitives: "Color Primitives",
     semantics: "Color Semantics",
+    // Every length in the system — one value each, single mode, named by value.
+    dimensionPrimitives: "Dimension Primitives",
+    // Spacing / Radius / Stroke / Size / Selector / Grid as GROUPS of one
+    // collection, theme modes, every length an alias of a Dimension primitive.
+    dimensionSemantics: "Dimension Semantics",
+    // The six below are no longer created. They remain as LOGICAL keys: every
+    // lookup `findVar(COLLECTIONS.radius, 'role/action')` is routed to
+    // `Dimension Semantics → Radius/role/action` (see `dimensionLookupName`), and
+    // as the names of the legacy collections an import removes.
     typography: "Typography",
     spacing: "Spacing",
     radius: "Radius",
@@ -412,9 +421,41 @@
     copy: "Copy"
   };
   var PLUGIN_COLLECTION_NAMES = new Set(Object.values(COLLECTIONS));
+  var DIMENSION_GROUP = {
+    [COLLECTIONS.spacing]: "Spacing",
+    [COLLECTIONS.radius]: "Radius",
+    [COLLECTIONS.border]: "Stroke",
+    [COLLECTIONS.size]: "Size",
+    [COLLECTIONS.selector]: "Selector",
+    [COLLECTIONS.grid]: "Grid"
+  };
+  var LEGACY_DIMENSION_COLLECTIONS = Object.keys(DIMENSION_GROUP);
+  function dimensionLookupName(legacyCollection, name) {
+    return `${DIMENSION_GROUP[legacyCollection]}/${name.replace(/^step\//, "")}`;
+  }
+  function parseDimension(raw) {
+    if (typeof raw === "number") return Number.isFinite(raw) ? Math.round(raw * 1e3) / 1e3 : null;
+    if (raw == null) return null;
+    const m = /^\s*(-?(?:\d+\.?\d*|\.\d+))\s*(px)?\s*$/i.exec(String(raw));
+    return m ? Math.round(Number(m[1]) * 1e3) / 1e3 : null;
+  }
+  function dimensionKey(n) {
+    return String(Math.round(n * 1e3) / 1e3).replace(".", "_");
+  }
+  var dimensionFromKey = (key) => Number(key.replace("_", "."));
+  function roleStepPx(step, scale) {
+    var _a, _b;
+    return (_b = pinnedDimension(step)) != null ? _b : pxToFloat((_a = scale == null ? void 0 : scale[step]) != null ? _a : "");
+  }
+  function pinnedDimension(value) {
+    if (typeof value !== "string" || !value.startsWith("dimension-")) return null;
+    const key = value.slice("dimension-".length);
+    const n = dimensionFromKey(key);
+    return Number.isFinite(n) && n >= 0 && dimensionKey(n) === key ? n : null;
+  }
   var PLUGIN_STYLE_ROOTS = /* @__PURE__ */ new Set(["Type", "Shadow", "Gradient", "Grid"]);
   var INHERITED_STYLE_FOLDERS = ["Type", "Shadow", "Gradient", "Grid", "Scale", "Semantic"];
-  var DOCS_REV = 11;
+  var DOCS_REV = 12;
   var FILE_DOCS_REV_KEY = "sd-docs-rev";
   var FILE_PRIMITIVES_HIDDEN_KEY = "sd-primitives-hidden-v1";
   var FILE_SEM_ORDER_STUCK_KEY = "sd-sem-order-stuck";
@@ -430,16 +471,11 @@
     return `${names.length}:${(h >>> 0).toString(36)}`;
   }
   function collectionPanelOrder(tokens) {
-    var _a;
     const rest = [
-      { name: COLLECTIONS.border, include: !!(tokens.stroke || ((_a = tokens.borders) == null ? void 0 : _a.width)) },
       { name: COLLECTIONS.copy, include: !!tokens.copy },
-      { name: COLLECTIONS.grid, include: !!tokens.grid },
+      { name: COLLECTIONS.dimensionPrimitives, include: true },
+      { name: COLLECTIONS.dimensionSemantics, include: true },
       { name: COLLECTIONS.opacity, include: !!tokens.opacity },
-      { name: COLLECTIONS.radius, include: true },
-      { name: COLLECTIONS.selector, include: !!tokens.selector },
-      { name: COLLECTIONS.size, include: !!tokens.sizes },
-      { name: COLLECTIONS.spacing, include: true },
       { name: COLLECTIONS.typography, include: true }
     ];
     rest.sort((a, b) => a.name.localeCompare(b.name));
@@ -471,20 +507,19 @@
       // fill/stroke/effect picker. Semantics (above) stay ALL_SCOPES.
       case COLLECTIONS.primitives:
         return [];
-      case COLLECTIONS.spacing:
-        return ["GAP", "WIDTH_HEIGHT"];
-      case COLLECTIONS.radius:
-        return ["CORNER_RADIUS"];
-      case COLLECTIONS.border:
-        return ["STROKE_FLOAT"];
-      case COLLECTIONS.size:
-        return ["WIDTH_HEIGHT"];
-      case COLLECTIONS.selector:
-        return ["WIDTH_HEIGHT"];
+      // Same rule for the numbers: consumed through Dimension Semantics.
+      case COLLECTIONS.dimensionPrimitives:
+        return [];
+      case COLLECTIONS.dimensionSemantics: {
+        const group = varName.split("/")[0];
+        if (group === "Spacing") return ["GAP", "WIDTH_HEIGHT"];
+        if (group === "Radius") return ["CORNER_RADIUS"];
+        if (group === "Stroke") return ["STROKE_FLOAT"];
+        if (group === "Size" || group === "Selector" || group === "Grid") return ["WIDTH_HEIGHT"];
+        return void 0;
+      }
       case COLLECTIONS.opacity:
         return ["OPACITY"];
-      case COLLECTIONS.grid:
-        return ["WIDTH_HEIGHT"];
       case COLLECTIONS.typography: {
         if (varName.startsWith("size/") || varName.endsWith("/size") || varName.endsWith("/size-tablet") || varName.endsWith("/size-mobile")) return ["FONT_SIZE"];
         if (varName.startsWith("weight/") || varName.endsWith("/weight")) return ["FONT_WEIGHT"];
@@ -1233,7 +1268,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U;
     namingCtx = tokens;
     let count = 0;
     semanticsRebuilt = false;
@@ -1285,8 +1320,8 @@
       }
       return m;
     }
-    function upsertVarIn(collection, cache, name, type, scopes) {
-      const safe = figmaVarName(name);
+    function upsertVarIn(collection, cache, name, type, scopes, exactName = false) {
+      const safe = exactName ? name : figmaVarName(name);
       let found = cache.get(safe);
       if (found) {
         const stale = found.resolvedType !== type;
@@ -1326,7 +1361,7 @@
         } catch (e) {
         }
       }
-      if (collection.name === COLLECTIONS.primitives) {
+      if (collection.name === COLLECTIONS.primitives || collection.name === COLLECTIONS.dimensionPrimitives) {
         try {
           created.hiddenFromPublishing = true;
         } catch (e) {
@@ -1338,8 +1373,13 @@
       return created;
     }
     function applyVarDescription(variable, collectionName, varName) {
-      var _a2, _b2;
-      const desc = (_b2 = (_a2 = tokens.descriptions) == null ? void 0 : _a2[collectionName]) == null ? void 0 : _b2[varName];
+      var _a2, _b2, _c2, _d2;
+      let desc = (_b2 = (_a2 = tokens.descriptions) == null ? void 0 : _a2[collectionName]) == null ? void 0 : _b2[varName];
+      if (desc === void 0 && collectionName === COLLECTIONS.dimensionSemantics) {
+        const slash = varName.indexOf("/");
+        const legacy = LEGACY_DIMENSION_COLLECTIONS.find((c) => DIMENSION_GROUP[c] === varName.slice(0, slash));
+        if (legacy) desc = (_d2 = (_c2 = tokens.descriptions) == null ? void 0 : _c2[legacy]) == null ? void 0 : _d2[varName.slice(slash + 1)];
+      }
       if (typeof desc !== "string") return;
       try {
         if (variable.description !== desc) variable.description = desc;
@@ -1479,45 +1519,6 @@
           if (raw !== void 0) setDefault(col, v, transform(raw));
         }
       }
-    }
-    function emitRoleAliases(collName, roles, primitiveNameOf, themeRolesOf, forceModes = false) {
-      var _a2, _b2, _c2, _d2;
-      const rootRoles = roles != null ? roles : {};
-      const allRoles = new Set(Object.keys(rootRoles));
-      if (themeRolesOf) {
-        for (const t of foundationThemes) Object.keys((_a2 = themeRolesOf(t)) != null ? _a2 : {}).forEach((k) => allRoles.add(k));
-      }
-      if (allRoles.size === 0) return 0;
-      const col = findOrCreateCollection(collName);
-      const cache = cacheFor(col);
-      const hasThemeMaps = !!(themeRolesOf && foundationThemes.length > 0);
-      const useModes = hasThemeMaps && (forceModes || themeMapsDiffer((t) => themeRolesOf(t), rootRoles));
-      const modeIdOf2 = useModes ? ensureNamedModes(col, foundationThemes) : void 0;
-      const preferred = themeRolesOf && foundationThemes[0] ? themeRolesOf(foundationThemes[0]) : void 0;
-      let n = 0;
-      for (const role of allRoles) {
-        const v = upsertVarIn(col, cache, `role/${role}`, "FLOAT", scopesForCollection(collName, `role/${role}`));
-        if (modeIdOf2 && themeRolesOf) {
-          const byTheme = {};
-          for (const t of foundationThemes) {
-            const step = (_c2 = (_b2 = themeRolesOf(t)) == null ? void 0 : _b2[role]) != null ? _c2 : rootRoles[role];
-            if (typeof step !== "string" || !step) continue;
-            const prim = cache.get(figmaVarName(primitiveNameOf(step)));
-            if (!prim) continue;
-            byTheme[t] = figma.variables.createVariableAlias(prim);
-          }
-          writeByTheme(v, byTheme, modeIdOf2);
-          n++;
-        } else {
-          const step = (_d2 = preferred == null ? void 0 : preferred[role]) != null ? _d2 : rootRoles[role];
-          if (typeof step !== "string" || !step) continue;
-          const prim = cache.get(figmaVarName(primitiveNameOf(step)));
-          if (!prim) continue;
-          setDefault(col, v, figma.variables.createVariableAlias(prim));
-          n++;
-        }
-      }
-      return n;
     }
     try {
       let typoVar2 = function(name, type, value) {
@@ -2072,191 +2073,270 @@
       } catch (e) {
       }
     }
-    emitCollection(
-      COLLECTIONS.spacing,
-      Object.entries(tokens.spacing),
-      "FLOAT",
-      pxToFloat,
-      (k) => k,
-      (t) => {
-        var _a2, _b2;
-        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.spacing;
-      }
-    );
-    const spacingRoleCount = emitRoleAliases(
-      COLLECTIONS.spacing,
-      tokens.spacingRoles,
-      (s) => s,
-      (t) => {
-        var _a2, _b2;
-        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.spacingRoles;
-      }
-    );
-    log(`\u2713 Spacing tokens (${Object.keys(tokens.spacing).length} steps${spacingRoleCount ? ` \xB7 ${spacingRoleCount} roles` : ""})`);
-    if (tokens.padding && Object.keys(tokens.padding).length > 0) {
-      emitCollection(
-        COLLECTIONS.spacing,
-        Object.entries(tokens.padding),
-        "FLOAT",
-        pxToFloat,
-        (k) => `padding/${k}`,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.padding;
-        }
-      );
-      log(`\u2713 Surface padding tokens (${Object.keys(tokens.padding).length} sides)`);
+    const themeFoundation = (t) => {
+      var _a2;
+      return (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t];
+    };
+    const strokeFromV6 = !!(tokens.stroke && Object.keys(tokens.stroke).length > 0);
+    const strokeRoot = strokeFromV6 ? tokens.stroke : (_P = tokens.borders) == null ? void 0 : _P.width;
+    const strokeName = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
+    const isCount = (key) => key === "columns";
+    const dimValues = /* @__PURE__ */ new Set();
+    for (const key of Object.keys((_Q = tokens.dimensions) != null ? _Q : {})) {
+      const n = dimensionFromKey(key);
+      if (Number.isFinite(n)) dimValues.add(n);
     }
-    emitCollection(
-      COLLECTIONS.radius,
-      Object.entries(tokens.radius),
-      "FLOAT",
-      pxToFloat,
-      (k) => k,
-      (t) => {
+    const collectLengths = (map, skip) => {
+      for (const [k, v] of Object.entries(map != null ? map : {})) {
+        if (skip == null ? void 0 : skip(k)) continue;
+        const n = parseDimension(v);
+        if (n !== null) dimValues.add(n);
+      }
+    };
+    const lengthMapsOf = (f) => {
+      var _a2, _b2;
+      collectLengths(f.spacing);
+      collectLengths(f.padding);
+      collectLengths(f.radius);
+      collectLengths(f.sizes);
+      collectLengths(f.selector);
+      collectLengths(f.grid, isCount);
+      collectLengths((_b2 = f.stroke) != null ? _b2 : (_a2 = f.borders) == null ? void 0 : _a2.width);
+    };
+    lengthMapsOf(tokens);
+    for (const t of foundationThemes) {
+      const f = themeFoundation(t);
+      if (f) lengthMapsOf(f);
+    }
+    const pinRoles = (roles) => {
+      for (const v of Object.values(roles != null ? roles : {})) {
+        const n = pinnedDimension(v);
+        if (n !== null) dimValues.add(n);
+      }
+    };
+    const pinAll = (f) => {
+      pinRoles(f.radiusRoles);
+      pinRoles(f.spacingRoles);
+      pinRoles(f.sizeRoles);
+      pinRoles(f.selectorRoles);
+      pinRoles(f.strokeRoles);
+      pinRoles(f.breakpointRoles);
+    };
+    pinAll(tokens);
+    for (const t of foundationThemes) {
+      const f = themeFoundation(t);
+      if (f) pinAll(f);
+    }
+    for (const vp of ["tablet", "mobile"]) {
+      for (const th of [void 0, ...foundationThemes]) {
+        const fr = pluginGridFrame(tokens, vp, th);
+        for (const n of [fr.gutter, fr.margin, fr.container]) if (Number.isFinite(n)) dimValues.add(Math.round(n * 1e3) / 1e3);
+      }
+    }
+    const dimPrimCol = findOrCreateCollection(COLLECTIONS.dimensionPrimitives);
+    const dimPrimCache = cacheFor(dimPrimCol);
+    const dimByValue = /* @__PURE__ */ new Map();
+    const dimPrimWritten = /* @__PURE__ */ new Set();
+    let dimNameRefused = 0;
+    for (const n of [...dimValues].sort((a, b) => a - b)) {
+      const key = dimensionKey(n);
+      let v;
+      try {
+        v = upsertVarIn(dimPrimCol, dimPrimCache, key, "FLOAT", [], true);
+      } catch (e) {
+        dimNameRefused++;
+        v = upsertVarIn(dimPrimCol, dimPrimCache, `value/${key}`, "FLOAT", [], true);
+      }
+      setDefault(dimPrimCol, v, n);
+      dimByValue.set(n, v);
+      dimPrimWritten.add(v.name);
+    }
+    pruneVars(dimPrimCache, dimPrimWritten, COLLECTIONS.dimensionPrimitives);
+    log(`\u2713 Dimension primitives (${dimByValue.size} values${dimNameRefused ? ` \xB7 ${dimNameRefused} sheltered under value/ \u2014 Figma refused the bare name` : ""})`);
+    const dimSemCol = findOrCreateCollection(COLLECTIONS.dimensionSemantics);
+    const dimSemCache = cacheFor(dimSemCol);
+    const dimModeIdOf = foundationThemes.length > 0 ? ensureNamedModes(dimSemCol, foundationThemes) : void 0;
+    const dimSemWritten = /* @__PURE__ */ new Set();
+    const lengthValue = (raw, count2 = false) => {
+      if (raw === void 0 || raw === null || raw === "") return void 0;
+      if (count2) {
+        const n2 = typeof raw === "number" ? raw : parseFloat(raw);
+        return Number.isFinite(n2) ? n2 : void 0;
+      }
+      const n = parseDimension(raw);
+      if (n === null) return void 0;
+      const prim = dimByValue.get(n);
+      return prim ? figma.variables.createVariableAlias(prim) : n;
+    };
+    function writeDim(name, rootVal, themed) {
+      var _a2;
+      if (rootVal === void 0 && !foundationThemes.some((t) => themed(t) !== void 0)) return void 0;
+      const v = upsertVarIn(dimSemCol, dimSemCache, name, "FLOAT", scopesForCollection(COLLECTIONS.dimensionSemantics, name), true);
+      if (dimModeIdOf) {
+        const byTheme = {};
+        for (const t of foundationThemes) byTheme[t] = (_a2 = themed(t)) != null ? _a2 : rootVal;
+        writeByTheme(v, byTheme, dimModeIdOf);
+      } else if (rootVal !== void 0) {
+        setDefault(dimSemCol, v, rootVal);
+      }
+      dimSemWritten.add(name);
+      return v;
+    }
+    function emitDimScale(group, root, themeMapOf, nameOf = (k) => k, count2) {
+      var _a2;
+      const keys = new Set(Object.keys(root != null ? root : {}));
+      for (const t of foundationThemes) Object.keys((_a2 = themeMapOf(t)) != null ? _a2 : {}).forEach((k) => keys.add(k));
+      let n = 0;
+      for (const key of keys) {
+        const isN = !!(count2 == null ? void 0 : count2(key));
+        const written = writeDim(
+          `${group}/${nameOf(key)}`,
+          lengthValue(root == null ? void 0 : root[key], isN),
+          (t) => {
+            var _a3;
+            return lengthValue((_a3 = themeMapOf(t)) == null ? void 0 : _a3[key], isN);
+          }
+        );
+        if (written) n++;
+      }
+      return n;
+    }
+    function emitDimRoles(group, roots, themeRolesOf, stepName = (s) => s, scaleOf = () => void 0) {
+      var _a2;
+      const roles = new Set(Object.keys(roots != null ? roots : {}));
+      for (const t of foundationThemes) Object.keys((_a2 = themeRolesOf(t)) != null ? _a2 : {}).forEach((k) => roles.add(k));
+      const aliasOf = (step, theme) => {
+        var _a3;
+        if (typeof step !== "string" || !step) return void 0;
+        const scale = scaleOf(theme);
+        const px = (_a3 = pinnedDimension(step)) != null ? _a3 : parseDimension(scale == null ? void 0 : scale[stepName(step)]);
+        const prim = px !== null ? dimByValue.get(px) : void 0;
+        if (prim) return figma.variables.createVariableAlias(prim);
+        const target = dimSemCache.get(`${group}/${stepName(step)}`);
+        return target ? figma.variables.createVariableAlias(target) : void 0;
+      };
+      let n = 0;
+      for (const role of roles) {
+        const written = writeDim(`${group}/role/${role}`, aliasOf(roots == null ? void 0 : roots[role]), (t) => {
+          var _a3;
+          return aliasOf((_a3 = themeRolesOf(t)) == null ? void 0 : _a3[role], t);
+        });
+        if (written) n++;
+      }
+      return n;
+    }
+    const spacingSteps = emitDimScale("Spacing", tokens.spacing, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.spacing;
+    });
+    const spacingRoleCount = emitDimRoles("Spacing", tokens.spacingRoles, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.spacingRoles;
+    }, (s) => s, (t) => {
+      var _a2, _b2;
+      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.spacing : void 0) != null ? _b2 : tokens.spacing;
+    });
+    const paddingCount = emitDimScale("Spacing", tokens.padding, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.padding;
+    }, (k) => `padding/${k}`);
+    const radiusSteps = emitDimScale("Radius", tokens.radius, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.radius;
+    });
+    const radiusRoleCount = emitDimRoles("Radius", tokens.radiusRoles, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.radiusRoles;
+    }, (s) => s, (t) => {
+      var _a2, _b2;
+      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.radius : void 0) != null ? _b2 : tokens.radius;
+    });
+    const strokeSteps = emitDimScale("Stroke", strokeRoot, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.stroke;
+    }, strokeName);
+    const strokeRoleCount = emitDimRoles("Stroke", tokens.strokeRoles, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.strokeRoles;
+    }, strokeName, (t) => {
+      var _a2, _b2;
+      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.stroke : void 0) != null ? _b2 : strokeRoot;
+    });
+    const sizeSteps = emitDimScale("Size", tokens.sizes, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.sizes;
+    });
+    const sizeRoleCount = emitDimRoles("Size", tokens.sizeRoles, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.sizeRoles;
+    }, (s) => s, (t) => {
+      var _a2, _b2;
+      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.sizes : void 0) != null ? _b2 : tokens.sizes;
+    });
+    const selectorSteps = emitDimScale("Selector", tokens.selector, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.selector;
+    });
+    const selectorRoleCount = emitDimRoles("Selector", tokens.selectorRoles, (t) => {
+      var _a2;
+      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.selectorRoles;
+    }, (s) => s, (t) => {
+      var _a2, _b2;
+      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.selector : void 0) != null ? _b2 : tokens.selector;
+    });
+    let gridCount = 0;
+    if (tokens.grid) {
+      gridCount += emitDimScale("Grid", tokens.grid, (t) => {
+        var _a2;
+        return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.grid;
+      }, (k) => k, isCount);
+      gridCount += emitDimRoles("Grid", tokens.breakpointRoles, (t) => {
+        var _a2;
+        return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.breakpointRoles;
+      }, (s) => `breakpoint-${s}`, (t) => {
         var _a2, _b2;
-        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.radius;
-      },
-      true
-    );
-    const radiusRoleCount = emitRoleAliases(
-      COLLECTIONS.radius,
-      tokens.radiusRoles,
-      (s) => s,
-      (t) => {
-        var _a2, _b2;
-        return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.radiusRoles;
-      },
-      true
-    );
+        return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.grid : void 0) != null ? _b2 : tokens.grid;
+      });
+      for (const k of ["columns", "gutter", "margin", "container"]) {
+        const target = dimSemCache.get(`Grid/${k}`);
+        if (!target) continue;
+        if (writeDim(`Grid/desktop/${k}`, figma.variables.createVariableAlias(target), () => void 0)) gridCount++;
+      }
+      for (const vp of ["tablet", "mobile"]) {
+        const root = pluginGridFrame(tokens, vp);
+        for (const k of ["columns", "gutter", "margin", "container"]) {
+          const value = (fr) => k === "container" && !fr.container ? void 0 : lengthValue(fr[k], k === "columns");
+          if (writeDim(`Grid/${vp}/${k}`, value(root), (t) => value(pluginGridFrame(tokens, vp, t)))) gridCount++;
+        }
+      }
+    }
+    pruneVars(dimSemCache, dimSemWritten, COLLECTIONS.dimensionSemantics);
+    log(`\u2713 Dimension semantics \u2014 Spacing ${spacingSteps}+${spacingRoleCount} roles${paddingCount ? ` \xB7 ${paddingCount} padding` : ""} \xB7 Radius ${radiusSteps}+${radiusRoleCount} \xB7 Stroke ${strokeSteps}+${strokeRoleCount} \xB7 Size ${sizeSteps}+${sizeRoleCount} \xB7 Selector ${selectorSteps}+${selectorRoleCount} \xB7 Grid ${gridCount}${dimModeIdOf ? ` \xD7 ${Object.keys(dimModeIdOf).length} theme modes` : ""}`);
     const previewRad = previewRadius(tokens);
     const shownRoles = foundationThemes.length ? foundationThemes.map((theme) => {
       var _a2, _b2, _c2, _d2, _e2;
       const roles = (_c2 = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[theme]) == null ? void 0 : _b2.radiusRoles) != null ? _c2 : tokens.radiusRoles;
       return `${capFoundationTheme(theme)} boxes=${(_d2 = roles == null ? void 0 : roles.container) != null ? _d2 : "?"} fields=${(_e2 = roles == null ? void 0 : roles.action) != null ? _e2 : "?"}`;
-    }).join(", ") : `boxes=${(_Q = (_P = previewRad.radiusRoles) == null ? void 0 : _P.container) != null ? _Q : "?"} fields=${(_S = (_R = previewRad.radiusRoles) == null ? void 0 : _R.action) != null ? _S : "?"}`;
-    log(`\u2713 Radius tokens${radiusRoleCount ? ` \xB7 ${radiusRoleCount} roles` : ""} \u2014 ${shownRoles}`);
-    const strokeFromV6 = tokens.stroke && Object.keys(tokens.stroke).length > 0;
-    const strokeMap = strokeFromV6 ? tokens.stroke : (_T = tokens.borders) == null ? void 0 : _T.width;
-    if (strokeMap) {
-      const nameOf = strokeFromV6 ? (k) => k : (k) => `width/${k}`;
-      emitCollection(
-        COLLECTIONS.border,
-        Object.entries(strokeMap),
-        "FLOAT",
-        pxToFloat,
-        nameOf,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.stroke;
+    }).join(", ") : `boxes=${(_S = (_R = previewRad.radiusRoles) == null ? void 0 : _R.container) != null ? _S : "?"} fields=${(_U = (_T = previewRad.radiusRoles) == null ? void 0 : _T.action) != null ? _U : "?"}`;
+    log(`  Radius roles \u2014 ${shownRoles}`);
+    for (const legacyName of LEGACY_DIMENSION_COLLECTIONS) {
+      const legacy = existingCollections.find((c) => c.name === legacyName);
+      if (!legacy) continue;
+      try {
+        legacy.remove();
+        existingCollections.splice(existingCollections.indexOf(legacy), 1);
+        for (let i = allVars.length - 1; i >= 0; i--) {
+          if (allVars[i].variableCollectionId === legacy.id) allVars.splice(i, 1);
         }
-      );
-      const strokeRoleCount = emitRoleAliases(
-        COLLECTIONS.border,
-        tokens.strokeRoles,
-        (s) => s,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.strokeRoles;
-        }
-      );
-      log(`\u2713 Border width tokens (${Object.keys(strokeMap).length}${strokeRoleCount ? ` \xB7 ${strokeRoleCount} roles` : ""})`);
+        foundationsRebuilt = true;
+        log(`Removed "${legacyName}" \u2014 merged into "${COLLECTIONS.dimensionSemantics}" (${DIMENSION_GROUP[legacyName]}/)`);
+      } catch (e) {
+        log(`\u26A0 Could not remove "${legacyName}" \u2014 another file may still use it. Its values no longer sync; "${COLLECTIONS.dimensionSemantics}" is the live one.`);
+      }
     }
     if (tokens.opacity) {
       emitCollection(COLLECTIONS.opacity, Object.entries(tokens.opacity), "FLOAT", (v) => (parseFloat(v) || 0) / 100);
       log(`\u2713 Opacity tokens (${Object.keys(tokens.opacity).length})`);
-    }
-    if (tokens.sizes) {
-      emitCollection(
-        COLLECTIONS.size,
-        Object.entries(tokens.sizes),
-        "FLOAT",
-        pxToFloat,
-        (k) => k,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.sizes;
-        }
-      );
-      const sizeRoleCount = emitRoleAliases(
-        COLLECTIONS.size,
-        tokens.sizeRoles,
-        (s) => s,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.sizeRoles;
-        }
-      );
-      log(`\u2713 Size tokens (${Object.keys(tokens.sizes).length}${sizeRoleCount ? ` \xB7 ${sizeRoleCount} roles` : ""})`);
-    }
-    if (tokens.selector) {
-      emitCollection(
-        COLLECTIONS.selector,
-        Object.entries(tokens.selector),
-        "FLOAT",
-        pxToFloat,
-        (k) => k,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.selector;
-        }
-      );
-      const selectorRoleCount = emitRoleAliases(
-        COLLECTIONS.selector,
-        tokens.selectorRoles,
-        (s) => s,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.selectorRoles;
-        }
-      );
-      log(`\u2713 Selector tokens (${Object.keys(tokens.selector).length}${selectorRoleCount ? ` \xB7 ${selectorRoleCount} roles` : ""})`);
-    }
-    if (tokens.grid) {
-      emitCollection(
-        COLLECTIONS.grid,
-        Object.entries(tokens.grid),
-        "FLOAT",
-        pxToFloat,
-        (k) => k,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.grid;
-        }
-      );
-      const bpRoleCount = emitRoleAliases(
-        COLLECTIONS.grid,
-        tokens.breakpointRoles,
-        (s) => `breakpoint-${s}`,
-        (t) => {
-          var _a2, _b2;
-          return (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[t]) == null ? void 0 : _b2.breakpointRoles;
-        }
-      );
-      const gridCol = findOrCreateCollection(COLLECTIONS.grid);
-      const gridCache = cacheFor(gridCol);
-      for (const k of ["columns", "gutter", "margin", "container"]) {
-        const prim = gridCache.get(k);
-        if (!prim) continue;
-        const v = upsertVarIn(gridCol, gridCache, `desktop/${k}`, "FLOAT", scopesForCollection(COLLECTIONS.grid, `desktop/${k}`));
-        setDefault(gridCol, v, figma.variables.createVariableAlias(prim));
-      }
-      for (const vp of ["tablet", "mobile"]) {
-        const root = pluginGridFrame(tokens, vp);
-        const differ = themeMapsDiffer((t) => pluginGridFrame(tokens, vp, t), root);
-        const gridModeIdOf = differ ? ensureNamedModes(gridCol, foundationThemes) : void 0;
-        for (const k of ["columns", "gutter", "margin", "container"]) {
-          const v = upsertVarIn(gridCol, gridCache, `${vp}/${k}`, "FLOAT", scopesForCollection(COLLECTIONS.grid, `${vp}/${k}`));
-          if (gridModeIdOf) {
-            const byTheme = {};
-            for (const th of foundationThemes) byTheme[th] = pluginGridFrame(tokens, vp, th)[k];
-            writeByTheme(v, byTheme, gridModeIdOf);
-          } else {
-            setDefault(gridCol, v, root[k]);
-          }
-        }
-      }
-      log(`\u2713 Grid tokens (${Object.keys(tokens.grid).length}${bpRoleCount ? ` \xB7 ${bpRoleCount} breakpoint roles` : ""} \xB7 desktop/* + tablet/* + mobile/* frames)`);
     }
     {
       const iconsCol = existingCollections.find((c) => c.name === COLLECTIONS.icons);
@@ -2834,7 +2914,7 @@
   var PLACEHOLDER_CIRCLE_NAME = "icon/circle-dashed";
   var PLACEHOLDER_SQUARE_NAME = "icon/square-dashed";
   async function importSample(tokens, includeFullCatalogue = false) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
     const colNameById = new Map(allCols.map((c) => [c.id, c.name]));
@@ -2850,8 +2930,8 @@
       if (!m.has(v.name)) m.set(v.name, v);
     }
     const findVar = (coll, name) => {
-      var _a2;
-      return (_a2 = varsByCollection.get(coll)) == null ? void 0 : _a2.get(name);
+      var _a2, _b2, _c2;
+      return (_c2 = DIMENSION_GROUP[coll] ? (_a2 = varsByCollection.get(COLLECTIONS.dimensionSemantics)) == null ? void 0 : _a2.get(dimensionLookupName(coll, name)) : void 0) != null ? _c2 : (_b2 = varsByCollection.get(coll)) == null ? void 0 : _b2.get(name);
     };
     function bestVar(coll, ...names) {
       for (const n of names) {
@@ -2995,6 +3075,8 @@
     const rolePx = (role, fallbackStep, fallbackPx) => {
       var _a2, _b2, _c2;
       const step = (_a2 = radRoles == null ? void 0 : radRoles[role]) != null ? _a2 : fallbackStep;
+      const pinned = pinnedDimension(step);
+      if (pinned !== null) return pinned;
       const raw = (_c2 = radScale[step]) != null ? _c2 : (_b2 = tokens.radius) == null ? void 0 : _b2[step];
       return raw !== void 0 ? pxToFloat(raw) : fallbackPx;
     };
@@ -3031,14 +3113,31 @@
         tryBind(node, "bottomRightRadius", v);
       }
     }
-    const spacingCol = allCols.find((c) => c.name === COLLECTIONS.spacing);
-    const spacingVars = varsByCollection.get(COLLECTIONS.spacing);
+    const varById = new Map(allVars.map((v) => [v.id, v]));
+    const defaultModeOfCol = new Map(allCols.map((c) => [c.id, c.defaultModeId]));
+    function resolveFloat(v, depth = 0) {
+      const mid = defaultModeOfCol.get(v.variableCollectionId);
+      const val = mid ? v.valuesByMode[mid] : void 0;
+      if (typeof val === "number") return val;
+      if (val && typeof val === "object" && "type" in val && val.type === "VARIABLE_ALIAS" && depth < 4) {
+        const target = varById.get(val.id);
+        return target ? resolveFloat(target, depth + 1) : void 0;
+      }
+      return void 0;
+    }
+    const spacingSteps = [];
+    for (const [name, v] of (_t = varsByCollection.get(COLLECTIONS.dimensionSemantics)) != null ? _t : []) {
+      if (/^Spacing\/[^/]+$/.test(name) && v.resolvedType === "FLOAT") spacingSteps.push(v);
+    }
+    if (spacingSteps.length === 0) {
+      for (const v of (_v = (_u = varsByCollection.get(COLLECTIONS.spacing)) == null ? void 0 : _u.values()) != null ? _v : []) {
+        if (v.resolvedType === "FLOAT" && !v.name.startsWith("role/") && !v.name.startsWith("padding/")) spacingSteps.push(v);
+      }
+    }
     function closestSpacing(px) {
-      if (!spacingCol || !spacingVars) return void 0;
       let best, diff = Infinity;
-      for (const v of spacingVars.values()) {
-        if (v.resolvedType !== "FLOAT") continue;
-        const val = v.valuesByMode[spacingCol.defaultModeId];
+      for (const v of spacingSteps) {
+        const val = resolveFloat(v);
         if (typeof val === "number" && Math.abs(val - px) < diff) {
           diff = Math.abs(val - px);
           best = v;
@@ -3061,7 +3160,7 @@
       tryBind(node, "itemSpacing", closestSpacing(px));
     }
     function borderWidthVar() {
-      return bestVar(COLLECTIONS.border, "width/default", "width/sm", "width/1");
+      return bestVar(COLLECTIONS.border, "role/control", "sm", "width/default", "width/sm", "width/1");
     }
     function focusRing(node, hex) {
       node.effects = [{
@@ -3581,12 +3680,12 @@
       out.push({ node: content, prop: "Placeholder", def: "Placeholder\u2026" });
       appendIcon(c, out, 12, disabled ? p.textDisabled : p.textTertiary, "icon-chevron", "Icon", "square");
     }
-    const selControl = (_t = findVar(COLLECTIONS.selector, "role/control")) != null ? _t : findVar(COLLECTIONS.selector, "md");
-    const selCompact = (_u = findVar(COLLECTIONS.selector, "role/compact")) != null ? _u : findVar(COLLECTIONS.selector, "sm");
-    const selIndicator = (_v = findVar(COLLECTIONS.selector, "role/indicator")) != null ? _v : findVar(COLLECTIONS.selector, "xs");
-    const selectorMd = pxToFloat((_x = (_w = tokens.selector) == null ? void 0 : _w.md) != null ? _x : "18px");
-    const selectorSm = pxToFloat((_z = (_y = tokens.selector) == null ? void 0 : _y.sm) != null ? _z : "15px");
-    const selectorXs = pxToFloat((_B = (_A = tokens.selector) == null ? void 0 : _A.xs) != null ? _B : "12px");
+    const selControl = (_w = findVar(COLLECTIONS.selector, "role/control")) != null ? _w : findVar(COLLECTIONS.selector, "md");
+    const selCompact = (_x = findVar(COLLECTIONS.selector, "role/compact")) != null ? _x : findVar(COLLECTIONS.selector, "sm");
+    const selIndicator = (_y = findVar(COLLECTIONS.selector, "role/indicator")) != null ? _y : findVar(COLLECTIONS.selector, "xs");
+    const selectorMd = pxToFloat((_A = (_z = tokens.selector) == null ? void 0 : _z.md) != null ? _A : "18px");
+    const selectorSm = pxToFloat((_C = (_B = tokens.selector) == null ? void 0 : _B.sm) != null ? _C : "15px");
+    const selectorXs = pxToFloat((_E = (_D = tokens.selector) == null ? void 0 : _D.xs) != null ? _E : "12px");
     function bindBoxSize(node, v, fallback) {
       node.resize(fallback, fallback);
       tryBind(node, "width", v);
@@ -6856,7 +6955,7 @@
     for (const category of categoryList) {
       const entries = byCategory.get(category);
       const made = makePage(catPageName(category));
-      const pg = (_D = (_C = made != null ? made : capFallbackPage) != null ? _C : oldPage) != null ? _D : figma.currentPage;
+      const pg = (_G = (_F = made != null ? made : capFallbackPage) != null ? _F : oldPage) != null ? _G : figma.currentPage;
       if (made) capFallbackPage = made;
       firstCatPage = firstCatPage != null ? firstCatPage : pg;
       if (!builtCatPages.includes(pg)) builtCatPages.push(pg);
@@ -6938,7 +7037,7 @@
     return builtVariants;
   }
   async function importDocumentation(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
     namingCtx = tokens;
     const allVars = await figma.variables.getLocalVariablesAsync();
     const allCols = await figma.variables.getLocalVariableCollectionsAsync();
@@ -6955,8 +7054,8 @@
       if (!m.has(v.name)) m.set(v.name, v);
     }
     const findVar = (coll, name) => {
-      var _a2;
-      return (_a2 = varsByCollection.get(coll)) == null ? void 0 : _a2.get(name);
+      var _a2, _b2, _c2;
+      return (_c2 = DIMENSION_GROUP[coll] ? (_a2 = varsByCollection.get(COLLECTIONS.dimensionSemantics)) == null ? void 0 : _a2.get(dimensionLookupName(coll, name)) : void 0) != null ? _c2 : (_b2 = varsByCollection.get(coll)) == null ? void 0 : _b2.get(name);
     };
     function bestVar(coll, ...names) {
       for (const n of names) {
@@ -7751,7 +7850,7 @@
         const spacingRoles = tokens.spacingRoles;
         if (spacingRoles) {
           for (const [role, step] of Object.entries(spacingRoles)) {
-            const px = pxToFloat((_k = tokens.spacing[step]) != null ? _k : "");
+            const px = roleStepPx(step, tokens.spacing);
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7772,7 +7871,7 @@
       }
     }
     {
-      const entries = Object.entries((_l = tokens.radius) != null ? _l : {});
+      const entries = Object.entries((_k = tokens.radius) != null ? _k : {});
       if (entries.length > 0) {
         await newBoard("Border Radius");
         root.appendChild(sectionBar("Border Radius"));
@@ -7805,7 +7904,7 @@
         if (radiusRoles) {
           const roleRow = autoFrame("radius-roles", "HORIZONTAL", 24);
           for (const [role, step] of Object.entries(radiusRoles)) {
-            const px = pxToFloat((_m = tokens.radius[step]) != null ? _m : "");
+            const px = roleStepPx(step, tokens.radius);
             const cell = autoFrame(`role-${role}`, "VERTICAL", 8);
             cell.counterAxisAlignItems = "CENTER";
             const sq = figma.createFrame();
@@ -7815,7 +7914,7 @@
             sq.fills = [boundFill(cardVar, cardHex)];
             sq.strokes = [boundFill(accentVar, accentHex, 0.7)];
             sq.strokeWeight = 2;
-            const rv = (_n = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`))) != null ? _n : findVar(COLLECTIONS.radius, step);
+            const rv = (_l = findVar(COLLECTIONS.radius, figmaVarName(`role/${role}`))) != null ? _l : findVar(COLLECTIONS.radius, step);
             if ((rv == null ? void 0 : rv.resolvedType) === "FLOAT") {
               sq.setBoundVariable("topLeftRadius", rv);
               sq.setBoundVariable("topRightRadius", rv);
@@ -7833,7 +7932,7 @@
       }
     }
     {
-      const strokeMap = tokens.stroke && Object.keys(tokens.stroke).length > 0 ? tokens.stroke : (_o = tokens.borders) == null ? void 0 : _o.width;
+      const strokeMap = tokens.stroke && Object.keys(tokens.stroke).length > 0 ? tokens.stroke : (_m = tokens.borders) == null ? void 0 : _m.width;
       const entries = Object.entries(strokeMap != null ? strokeMap : {});
       if (entries.length > 0) {
         await newBoard("Stroke");
@@ -7853,13 +7952,13 @@
           line.strokes = [boundFill(textVar, textHex, 0.85)];
           line.strokeWeight = px;
           line.cornerRadius = 4;
-          bindField(line, "strokeWeight", (_p = findVar(COLLECTIONS.border, key)) != null ? _p : findVar(COLLECTIONS.border, `width/${key}`));
+          bindField(line, "strokeWeight", (_n = findVar(COLLECTIONS.border, key)) != null ? _n : findVar(COLLECTIONS.border, `width/${key}`));
           row.appendChild(line);
           body.appendChild(row);
         }
         if (tokens.strokeRoles) {
           for (const [role, step] of Object.entries(tokens.strokeRoles)) {
-            const px = pxToFloat((_q = (strokeMap != null ? strokeMap : {})[step]) != null ? _q : "");
+            const px = roleStepPx(step, strokeMap);
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -7882,7 +7981,7 @@
       }
     }
     {
-      const entries = Object.entries((_r = tokens.opacity) != null ? _r : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
+      const entries = Object.entries((_o = tokens.opacity) != null ? _o : {}).map(([k, v]) => [k, parseFloat(v) || 0]).sort((a, b) => a[1] - b[1]);
       if (entries.length > 0) {
         await newBoard("Opacity");
         root.appendChild(sectionBar("Opacity"));
@@ -7908,7 +8007,7 @@
       }
     }
     {
-      const entries = Object.entries((_s = tokens.shadows) != null ? _s : {});
+      const entries = Object.entries((_p = tokens.shadows) != null ? _p : {});
       if (entries.length > 0) {
         await newBoard("Shadows");
         root.appendChild(sectionBar("Shadows"));
@@ -7935,9 +8034,9 @@
       }
     }
     {
-      const grid = (_t = tokens.grid) != null ? _t : {};
-      const sizes = Object.entries((_u = tokens.sizes) != null ? _u : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
-      const selectors = Object.entries((_v = tokens.selector) != null ? _v : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      const grid = (_q = tokens.grid) != null ? _q : {};
+      const sizes = Object.entries((_r = tokens.sizes) != null ? _r : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
+      const selectors = Object.entries((_s = tokens.selector) != null ? _s : {}).map(([k, v]) => [k, pxToFloat(v)]).filter(([, px]) => px > 0).sort((a, b) => a[1] - b[1]);
       if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
         await newBoard("Grid & Sizes");
         root.appendChild(sectionBar("Grid & Sizes"));
@@ -7968,7 +8067,7 @@
         }
         if (tokens.sizeRoles) {
           for (const [role, step] of Object.entries(tokens.sizeRoles)) {
-            const px = pxToFloat((_x = (_w = tokens.sizes) == null ? void 0 : _w[step]) != null ? _x : "");
+            const px = roleStepPx(step, tokens.sizes);
             const row = autoFrame(`role-${role}`, "HORIZONTAL", 16);
             row.counterAxisAlignItems = "CENTER";
             const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -8004,7 +8103,7 @@
           }
           if (tokens.selectorRoles) {
             for (const [role, step] of Object.entries(tokens.selectorRoles)) {
-              const px = pxToFloat((_z = (_y = tokens.selector) == null ? void 0 : _y[step]) != null ? _z : "");
+              const px = roleStepPx(step, tokens.selector);
               const row = autoFrame(`role-selector-${role}`, "HORIZONTAL", 16);
               row.counterAxisAlignItems = "CENTER";
               const label = mkText(`${role}  \u2192  ${step}${px ? ` \xB7 ${px}px` : ""}`, { size: 10, colorVar: mutedVar, colorHex: mutedHex });
@@ -8032,7 +8131,7 @@
         await newBoard("Gradients");
         root.appendChild(sectionBar("Gradients"));
         const { card, body } = section("Gradients", 'Named gradients from the configurator, resolved against the previewed accent ramp. Tags mark the surface each one is assigned to \u2014 the "cover" gradient paints the \u2B21 Cover page.');
-        const assigned = (_A = tokens.gradientAssignments) != null ? _A : {};
+        const assigned = (_t = tokens.gradientAssignments) != null ? _t : {};
         const paintStylesByName = new Map(
           (await figma.getLocalPaintStylesAsync()).map((s) => [s.name, s])
         );
