@@ -875,7 +875,7 @@ function archFigmaName(groupLabel: string, key: string): string {
 }
 
 // Color Semantics (mapped roles) — always "Show in all supported properties".
-// Designers pick roles (Action/primary/default, Border/control, …), not ramps.
+// Designers pick roles (Action/primary/default, Border/strong, …), not ramps.
 // Targeted scopes used to hide e.g. Border from Fill; that fought the mapped
 // layer's job. Primitives carry the opposite rule (scopes: []).
 function scopesForSemantic(_name: string): VariableScope[] {
@@ -1371,16 +1371,25 @@ const ARCH_ROLE_MAP: Record<'astryx' | 'shadcn' | 'categorical', Record<string, 
     'background-secondary':         ['surface', 'layer-1'],
     'background-tertiary':          ['surface', 'layer-2'],
     'background-active':            ['surface', 'selected'],
-    'background-disabled':          ['action', 'disabled'],
+    'background-disabled':          ['action', 'disabled.default'],
     'background-overlay':           ['surface', 'overlay'],
     // Not an ALL_ROLES key — inverted surfaces (tooltips, snackbars) bind here
     // so they don't share background-overlay's scrim token.
     'background-inverse':           ['surface', 'inverse'],
     'background-brand-primary':     ['surface', 'accent'],
     'background-input':             ['surface', 'input'],
-    'background-brand-secondary':   ['action', 'secondary.accent'],
+    'background-brand-secondary':   ['surface', 'selected'],
     'background-brand-solid':       ['action', 'primary.default'],
     'background-brand-solid-hover': ['action', 'primary.hover'],
+    // Every button tier reads default / hover / pressed (primary and secondary
+    // both ship all three; ghost is hover/pressed over a transparent rest).
+    'background-brand-solid-pressed': ['action', 'primary.pressed'],
+    'background-neutral-solid':        ['action', 'secondary.default'],
+    'background-neutral-solid-hover':  ['action', 'secondary.hover'],
+    'background-neutral-solid-pressed':['action', 'secondary.pressed'],
+    'background-ghost-default':        ['action', 'ghost.default'],
+    'background-ghost-hover':          ['action', 'ghost.hover'],
+    'background-ghost-pressed':        ['action', 'ghost.pressed'],
     'background-error-primary':     ['status', 'critical.surface'],
     'background-error-solid':       ['status', 'critical.surface-solid'],
     'background-success-primary':   ['status', 'success.surface'],
@@ -1405,9 +1414,9 @@ const ARCH_ROLE_MAP: Record<'astryx' | 'shadcn' | 'categorical', Record<string, 
     'status-info-border':           ['status', 'info.border'],
     // `border-primary` is the flat catalogue's CONTROL stroke, so it follows
     // the control boundary through the phase-1 split — that role is
-    // `border.control` now, not `border.default` (which became the decorative
-    // ladder's middle rung). Same resolved value; the name moved.
-    'border-primary':               ['border', 'control'],
+    // `border.strong` now (the former `border.control` was folded into it).
+    // Same resolved value; the name moved.
+    'border-primary':               ['border', 'strong'],
     'border-secondary':             ['border', 'subtle'],
     'border-strong':                ['border', 'control-hover'],
     // Dividers and rules. Deliberately mapped, deliberately NOT moved onto the
@@ -4123,7 +4132,13 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     brandMuted:     pair(['background/brand-secondary', 'surface/brand-muted', 'surface/brand-subtle', 'bg/accent-subtle'], ['background-brand-secondary', 'surface-brand-muted', 'surface-brand-subtle'], '#243056'),
     action:         pair(['Action/primary/default', 'Action/primary.default', 'action/primary/default', 'action/primary.default', 'background/brand-solid', 'action/primary', 'bg/accent-solid', 'primary'], ['background-brand-solid', 'action-primary', 'bg-accent-solid', 'primary'], '#3B82F6'),
     actionHover:    pair(['Action/primary/hover', 'Action/primary.hover', 'action/primary/hover', 'action/primary.hover', 'background/brand-solid-hover', 'action/primary-hover', 'bg/accent-solid_hover'], ['background-brand-solid-hover', 'action-primary-hover'], '#2f6fe0'),
-    actionDisabled: pair(['background/disabled', 'action/disabled'], ['background-disabled', 'action-disabled'], '#2a2a2a'),
+    actionPressed:  pair(['Action/primary/pressed', 'Action/primary.pressed', 'action/primary/pressed', 'action/primary.pressed'], ['background-brand-solid-pressed', 'action-primary-pressed'], '#2559c4'),
+    secondary:        pair(['Action/secondary/default', 'Action/secondary.default', 'action/secondary/default', 'action/secondary.default'], ['background-neutral-solid'], '#2a2a2a'),
+    secondaryHover:   pair(['Action/secondary/hover', 'Action/secondary.hover', 'action/secondary/hover', 'action/secondary.hover'], ['background-neutral-solid-hover'], '#333333'),
+    secondaryPressed: pair(['Action/secondary/pressed', 'Action/secondary.pressed', 'action/secondary/pressed', 'action/secondary.pressed'], ['background-neutral-solid-pressed'], '#3a3a3a'),
+    ghostHover:     pair(['Action/ghost/hover', 'action/ghost/hover', 'Action/ghost.hover', 'action/ghost.hover'], ['background-ghost-hover'], '#ffffff1a'),
+    ghostPressed:   pair(['Action/ghost/pressed', 'action/ghost/pressed', 'Action/ghost.pressed', 'action/ghost.pressed'], ['background-ghost-pressed'], '#ffffff33'),
+    actionDisabled: pair(['Action/disabled/default', 'action/disabled/default', 'Action/disabled.default', 'action/disabled.default', 'background/disabled', 'action/disabled'], ['background-disabled', 'action-disabled'], '#2a2a2a'),
     actionDisabledSubtle: pair(['background/disabled-subtle', 'action/disabled-subtle'], ['background-disabled-subtle', 'action-disabled-subtle'], '#222222'),
     textPrimary:    pair(['Content/primary', 'content/primary', 'text/primary', 'text'], ['content-primary', 'text-primary', 'text'], '#f5f5f5'),
     textSecondary:  pair(['content/secondary', 'text/secondary'], ['content-secondary', 'text-secondary'], '#c9c9c9'),
@@ -4136,7 +4151,7 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
     textOnBrand:    pair(['Content/on-action', 'content/on-action', 'content/inverse', 'text/on-brand', 'text/primary_on-brand', 'text/white'], ['content-on-brand', 'content-inverse', 'text-on-brand', 'text-white'], '#ffffff'),
     textOnInverse:  pair(['content/inverse', 'text/on-inverse', 'text/white'], ['content-inverse', 'text-on-inverse', 'text-white'], '#0f0f0f'),
     textBrand:      pair(['content/brand', 'text/brand-secondary', 'text/brand', 'text/accent-primary'], ['content-brand', 'text-brand-secondary', 'text-brand'], '#8ab4ff'),
-    borderDefault:  pair(['Border/control', 'border/control', 'border/primary', 'border/default', 'border'], ['border-primary', 'border-default', 'border'], '#333333'),
+    borderDefault:  pair(['Border/strong', 'border/strong', 'Border/control', 'border/control', 'border/primary', 'border/default', 'border'], ['border-primary', 'border-default', 'border'], '#333333'),
     // Control stroke, HOVER step — categorical `Border/control-hover` (WCAG
     // 1.4.11). `Border/strong` stays in the list because that is what this role
     // was called before the phase-1 split, so an older payload still resolves
@@ -4710,10 +4725,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
   type BtnState = typeof STATES[number]
 
   // Button color axes — Brand / Danger / Success, mirroring the universal matrix.
-  interface BtnColor { solid: Pair; hover: Pair; on: Pair; soft: Pair; softText: Pair; line: Pair; text: Pair; ringHex: string }
+  interface BtnColor { solid: Pair; hover: Pair; pressed?: Pair; on: Pair; soft: Pair; softText: Pair; line: Pair; text: Pair; ringHex: string }
   const BTN_COLORS: Record<string, BtnColor> = {
     Brand: {
-      solid: p.action, hover: p.actionHover,
+      solid: p.action, hover: p.actionHover, pressed: p.actionPressed,
       on: p.textOnBrand, soft: p.brandSubtle, softText: p.textBrand,
       line: p.borderBrand, text: p.textBrand, ringHex: p.action.hex,
     },
@@ -4780,7 +4795,10 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       }
     } else if (style === 'Solid') {
       textP = k.on
-      c.fills = [fillP(hoverish ? k.hover : k.solid, dim)]
+      // Brand ships a real pressed role; Danger/Success have no pressed tone
+      // yet, so they keep the old opacity dim rather than invent one.
+      const pressedRole = state === 'Pressed' ? k.pressed : undefined
+      c.fills = pressedRole ? [fillP(pressedRole)] : [fillP(hoverish ? k.hover : k.solid, dim)]
     } else if (style === 'Outline') {
       textP = k.text
       c.fills = hoverish ? [fillP(k.soft, 0.6 * dim)] : []
@@ -4792,7 +4810,9 @@ async function importSample(tokens: DesignTokens, includeFullCatalogue = false):
       c.fills = [fillP(k.soft, hoverish ? 0.8 * dim : 1)]
     } else { // Ghost
       textP = k.text
-      c.fills = hoverish ? [fillP(k.soft, 0.5 * dim)] : []
+      // The ghost wash is its own role (hover/pressed over a transparent rest),
+      // not the soft tint at half opacity.
+      c.fills = hoverish ? [fillP(state === 'Pressed' ? p.ghostPressed : p.ghostHover)] : []
     }
     if (state === 'Focused') focusRing(c, k.ringHex)
 
@@ -11046,7 +11066,7 @@ async function importGettingStarted(tokens: DesignTokens): Promise<boolean> {
     para(body, 'Names describe intent, not appearance, so the system can change visually without a rename.')
     divider(body)
     bullet(body, 'Primitives — 1 to 12', 'Every colour family is a 12-step Radix ramp: accent-1 … accent-12. Step 9 is the anchor (your input hex); 11–12 are the accessible text tones. Never referenced by a component directly.')
-    bullet(body, 'Semantics — by role', 'Surface/page, Content/primary, Action/primary/default, Border/control — a role names what a value is for. Components bind here.')
+    bullet(body, 'Semantics — by role', 'Surface/page, Content/primary, Action/primary/default, Border/strong — a role names what a value is for. Components bind here.')
     bullet(body, 'One collection per category', 'Color Primitives, Color Semantics, Typography, Dimension Primitives, Dimension Semantics. Color Semantics carries a mode per library theme; Dimension Semantics carries a mode per VIEWPORT (Desktop · Tablet · Mobile), so a frame switches the grid by switching mode. Every length is an alias of a Dimension primitive. Type roles add size-mobile beside the desktop size. Components stay bound to Desktop.')
   })
 
