@@ -2305,7 +2305,7 @@
       for (const vp of ["tablet", "mobile"]) {
         const root = pluginGridFrame(tokens, vp);
         for (const k of ["columns", "gutter", "margin", "container"]) {
-          const value = (fr) => k === "container" && !fr.container ? void 0 : lengthValue(fr[k], k === "columns");
+          const value = (fr) => lengthValue(fr[k], k === "columns");
           if (writeDim(`Grid/${vp}/${k}`, value(root), (t) => value(pluginGridFrame(tokens, vp, t)))) gridCount++;
         }
       }

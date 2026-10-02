@@ -3230,7 +3230,8 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     for (const vp of ['tablet', 'mobile'] as const) {
       const root = pluginGridFrame(tokens, vp)
       for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
-        const value = (fr: typeof root) => k === 'container' && !fr.container ? undefined : lengthValue(fr[k], k === 'columns')
+        // `container: 0` is "no max-width" (the frame's `none`): still written, as the 0 primitive.
+        const value = (fr: typeof root) => lengthValue(fr[k], k === 'columns')
         if (writeDim(`Grid/${vp}/${k}`, value(root), (t) => value(pluginGridFrame(tokens, vp, t)))) gridCount++
       }
     }
