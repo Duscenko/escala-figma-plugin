@@ -125,6 +125,10 @@ interface DesignTokens {
   // (control / compact / indicator). Additive; older payloads omit it.
   selector?: Record<string, string>
   selectorRoles?: Record<string, string>
+  // Which viewports become Dimension Semantics' modes (canonical order, ≥ 1).
+  // Omitted = all three. A Starter plan holds one mode per collection, so the
+  // user chooses; the first listed is the default mode.
+  viewports?: ('desktop' | 'tablet' | 'mobile')[]
   // Dimension primitives (configurator `lib/dimensions.ts`): ONE global
   // collection of lengths named by value — `16`, `-4`, `9999`, `3_5` (= 3.5px).
   // Single mode. Additive; an older payload omits it and the plugin derives
@@ -3123,20 +3127,25 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   //     A Figma collection has ONE mode axis, so the values come from the
   //     ACTIVE library theme. A system whose themes carry different dimensions
   //     (a style per theme) is told so below rather than silently merged.
-  const VIEWPORTS = [['desktop', 'Desktop'], ['tablet', 'Tablet'], ['mobile', 'Mobile']] as const
-  type Viewport = (typeof VIEWPORTS)[number][0]
+  const ALL_VIEWPORTS = [['desktop', 'Desktop'], ['tablet', 'Tablet'], ['mobile', 'Mobile']] as const
+  type Viewport = (typeof ALL_VIEWPORTS)[number][0]
+  const wantedViewports = new Set<string>(tokens.viewports?.length ? tokens.viewports : ALL_VIEWPORTS.map(([k]) => k))
+  const VIEWPORTS = ALL_VIEWPORTS.filter(([k]) => wantedViewports.has(k))
+  if (VIEWPORTS.length === 0) VIEWPORTS.push(ALL_VIEWPORTS[0])
   const dimSemCol = findOrCreateCollection(COLLECTIONS.dimensionSemantics)
   const dimSemCache = cacheFor(dimSemCol)
   const dimModeIdOf: Record<Viewport, string | undefined> = { desktop: undefined, tablet: undefined, mobile: undefined }
   {
-    try { dimSemCol.renameMode(dimSemCol.defaultModeId, 'Desktop') } catch { /* not allowed */ }
+    // The first chosen viewport takes the default column; the rest are added in
+    // order, and anything not chosen (a column a previous sync made) is pruned.
+    try { dimSemCol.renameMode(dimSemCol.defaultModeId, VIEWPORTS[0][1]) } catch { /* not allowed */ }
     pruneModes(dimSemCol, new Set(VIEWPORTS.map(([, label]) => label)), dimSemCol.name)
-    dimModeIdOf.desktop = dimSemCol.defaultModeId
+    dimModeIdOf[VIEWPORTS[0][0]] = dimSemCol.defaultModeId
     for (const [key, label] of VIEWPORTS.slice(1)) {
       const found = dimSemCol.modes.find((m) => m.name === label)
       if (found) { dimModeIdOf[key] = found.modeId; continue }
       try { dimModeIdOf[key] = dimSemCol.addMode(label) } catch {
-        log(`⚠ "${COLLECTIONS.dimensionSemantics}": no ${label} column — your Figma plan's mode-per-collection limit was reached. ${label} uses the Desktop values.`)
+        log(`⚠ "${COLLECTIONS.dimensionSemantics}": no ${label} column — your Figma plan's mode-per-collection limit was reached. Deselect a viewport in File & modes to choose which ones ship.`)
       }
     }
   }
@@ -3169,12 +3178,13 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     const perVp = value !== undefined && typeof value === 'object' && !('type' in value) && !('r' in value)
       ? value as Partial<Record<Viewport, VariableValue | undefined>>
       : { desktop: value as VariableValue | undefined, tablet: value as VariableValue | undefined, mobile: value as VariableValue | undefined }
-    const desktop = perVp.desktop
-    if (desktop === undefined) return undefined
+    // A viewport with no value of its own takes the first chosen viewport's.
+    const first = perVp[VIEWPORTS[0][0]] ?? perVp.desktop
+    if (first === undefined) return undefined
     const v = upsertVarIn(dimSemCol, dimSemCache, name, 'FLOAT', scopesForCollection(COLLECTIONS.dimensionSemantics, name), true)
     for (const [key] of VIEWPORTS) {
       const mid = dimModeIdOf[key]
-      if (mid) v.setValueForMode(mid, perVp[key] ?? desktop)
+      if (mid) v.setValueForMode(mid, perVp[key] ?? first)
     }
     dimSemWritten.add(name)
     return v

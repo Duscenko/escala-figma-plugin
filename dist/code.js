@@ -1268,7 +1268,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U, _V;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U, _V, _W;
     namingCtx = tokens;
     let count = 0;
     semanticsRebuilt = false;
@@ -2153,17 +2153,20 @@
     }
     pruneVars(dimPrimCache, dimPrimWritten, COLLECTIONS.dimensionPrimitives);
     log(`\u2713 Dimension primitives (${dimByValue.size} values${dimNameRefused ? ` \xB7 ${dimNameRefused} sheltered under value/ \u2014 Figma refused the bare name` : ""})`);
-    const VIEWPORTS = [["desktop", "Desktop"], ["tablet", "Tablet"], ["mobile", "Mobile"]];
+    const ALL_VIEWPORTS = [["desktop", "Desktop"], ["tablet", "Tablet"], ["mobile", "Mobile"]];
+    const wantedViewports = new Set(((_R = tokens.viewports) == null ? void 0 : _R.length) ? tokens.viewports : ALL_VIEWPORTS.map(([k]) => k));
+    const VIEWPORTS = ALL_VIEWPORTS.filter(([k]) => wantedViewports.has(k));
+    if (VIEWPORTS.length === 0) VIEWPORTS.push(ALL_VIEWPORTS[0]);
     const dimSemCol = findOrCreateCollection(COLLECTIONS.dimensionSemantics);
     const dimSemCache = cacheFor(dimSemCol);
     const dimModeIdOf = { desktop: void 0, tablet: void 0, mobile: void 0 };
     {
       try {
-        dimSemCol.renameMode(dimSemCol.defaultModeId, "Desktop");
+        dimSemCol.renameMode(dimSemCol.defaultModeId, VIEWPORTS[0][1]);
       } catch (e) {
       }
       pruneModes(dimSemCol, new Set(VIEWPORTS.map(([, label]) => label)), dimSemCol.name);
-      dimModeIdOf.desktop = dimSemCol.defaultModeId;
+      dimModeIdOf[VIEWPORTS[0][0]] = dimSemCol.defaultModeId;
       for (const [key, label] of VIEWPORTS.slice(1)) {
         const found = dimSemCol.modes.find((m) => m.name === label);
         if (found) {
@@ -2173,7 +2176,7 @@
         try {
           dimModeIdOf[key] = dimSemCol.addMode(label);
         } catch (e) {
-          log(`\u26A0 "${COLLECTIONS.dimensionSemantics}": no ${label} column \u2014 your Figma plan's mode-per-collection limit was reached. ${label} uses the Desktop values.`);
+          log(`\u26A0 "${COLLECTIONS.dimensionSemantics}": no ${label} column \u2014 your Figma plan's mode-per-collection limit was reached. Deselect a viewport in File & modes to choose which ones ship.`);
         }
       }
     }
@@ -2200,14 +2203,14 @@
       return prim ? figma.variables.createVariableAlias(prim) : n;
     };
     function writeDim(name, value) {
-      var _a2;
+      var _a2, _b2;
       const perVp = value !== void 0 && typeof value === "object" && !("type" in value) && !("r" in value) ? value : { desktop: value, tablet: value, mobile: value };
-      const desktop = perVp.desktop;
-      if (desktop === void 0) return void 0;
+      const first = (_a2 = perVp[VIEWPORTS[0][0]]) != null ? _a2 : perVp.desktop;
+      if (first === void 0) return void 0;
       const v = upsertVarIn(dimSemCol, dimSemCache, name, "FLOAT", scopesForCollection(COLLECTIONS.dimensionSemantics, name), true);
       for (const [key] of VIEWPORTS) {
         const mid = dimModeIdOf[key];
-        if (mid) v.setValueForMode(mid, (_a2 = perVp[key]) != null ? _a2 : desktop);
+        if (mid) v.setValueForMode(mid, (_b2 = perVp[key]) != null ? _b2 : first);
       }
       dimSemWritten.add(name);
       return v;
@@ -2238,7 +2241,7 @@
     };
     const fSpacing = pick("spacing", tokens.spacing);
     const fRadius = pick("radius", tokens.radius);
-    const fStroke = (_R = dimF == null ? void 0 : dimF.stroke) != null ? _R : strokeRoot;
+    const fStroke = (_S = dimF == null ? void 0 : dimF.stroke) != null ? _S : strokeRoot;
     const fSizes = pick("sizes", tokens.sizes);
     const fSelector = pick("selector", tokens.selector);
     const fGrid = pick("grid", tokens.grid);
@@ -2274,7 +2277,7 @@
       var _a2, _b2, _c2, _d2, _e2;
       const roles = (_c2 = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[theme]) == null ? void 0 : _b2.radiusRoles) != null ? _c2 : tokens.radiusRoles;
       return `${capFoundationTheme(theme)} boxes=${(_d2 = roles == null ? void 0 : roles.container) != null ? _d2 : "?"} fields=${(_e2 = roles == null ? void 0 : roles.action) != null ? _e2 : "?"}`;
-    }).join(", ") : `boxes=${(_T = (_S = previewRad.radiusRoles) == null ? void 0 : _S.container) != null ? _T : "?"} fields=${(_V = (_U = previewRad.radiusRoles) == null ? void 0 : _U.action) != null ? _V : "?"}`;
+    }).join(", ") : `boxes=${(_U = (_T = previewRad.radiusRoles) == null ? void 0 : _T.container) != null ? _U : "?"} fields=${(_W = (_V = previewRad.radiusRoles) == null ? void 0 : _V.action) != null ? _W : "?"}`;
     log(`  Radius roles \u2014 ${shownRoles}`);
     for (const legacyName of LEGACY_DIMENSION_COLLECTIONS) {
       const legacy = existingCollections.find((c) => c.name === legacyName);
