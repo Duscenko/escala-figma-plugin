@@ -1268,7 +1268,7 @@
   var semanticsRebuilt = false;
   var foundationsRebuilt = false;
   async function importVariables(tokens) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U, _V;
     namingCtx = tokens;
     let count = 0;
     semanticsRebuilt = false;
@@ -1429,21 +1429,21 @@
     }
     const foundationThemes = columnsFrom(tokens.colors.themeOrder, tokens.foundationsByTheme);
     const capFoundationTheme = (key) => shippedThemeLabel(key, tokens);
-    function themeMapsDiffer(pick, root) {
+    function themeMapsDiffer(pick2, root) {
       var _a2;
       if (foundationThemes.length === 0) return false;
       if (root !== void 0) {
         const rootSig = JSON.stringify(root != null ? root : null);
         if (foundationThemes.some((t) => {
           var _a3;
-          return JSON.stringify((_a3 = pick(t)) != null ? _a3 : null) !== rootSig;
+          return JSON.stringify((_a3 = pick2(t)) != null ? _a3 : null) !== rootSig;
         })) return true;
       }
       if (foundationThemes.length < 2) return false;
-      const first = JSON.stringify((_a2 = pick(foundationThemes[0])) != null ? _a2 : null);
+      const first = JSON.stringify((_a2 = pick2(foundationThemes[0])) != null ? _a2 : null);
       return foundationThemes.slice(1).some((t) => {
         var _a3;
-        return JSON.stringify((_a3 = pick(t)) != null ? _a3 : null) !== first;
+        return JSON.stringify((_a3 = pick2(t)) != null ? _a3 : null) !== first;
       });
     }
     function ensureNamedModes(col, keys) {
@@ -2153,10 +2153,41 @@
     }
     pruneVars(dimPrimCache, dimPrimWritten, COLLECTIONS.dimensionPrimitives);
     log(`\u2713 Dimension primitives (${dimByValue.size} values${dimNameRefused ? ` \xB7 ${dimNameRefused} sheltered under value/ \u2014 Figma refused the bare name` : ""})`);
+    const VIEWPORTS = [["desktop", "Desktop"], ["tablet", "Tablet"], ["mobile", "Mobile"]];
     const dimSemCol = findOrCreateCollection(COLLECTIONS.dimensionSemantics);
     const dimSemCache = cacheFor(dimSemCol);
-    const dimModeIdOf = foundationThemes.length > 0 ? ensureNamedModes(dimSemCol, foundationThemes) : void 0;
+    const dimModeIdOf = { desktop: void 0, tablet: void 0, mobile: void 0 };
+    {
+      try {
+        dimSemCol.renameMode(dimSemCol.defaultModeId, "Desktop");
+      } catch (e) {
+      }
+      pruneModes(dimSemCol, new Set(VIEWPORTS.map(([, label]) => label)), dimSemCol.name);
+      dimModeIdOf.desktop = dimSemCol.defaultModeId;
+      for (const [key, label] of VIEWPORTS.slice(1)) {
+        const found = dimSemCol.modes.find((m) => m.name === label);
+        if (found) {
+          dimModeIdOf[key] = found.modeId;
+          continue;
+        }
+        try {
+          dimModeIdOf[key] = dimSemCol.addMode(label);
+        } catch (e) {
+          log(`\u26A0 "${COLLECTIONS.dimensionSemantics}": no ${label} column \u2014 your Figma plan's mode-per-collection limit was reached. ${label} uses the Desktop values.`);
+        }
+      }
+    }
     const dimSemWritten = /* @__PURE__ */ new Set();
+    const dimTheme = [activeThemeKey(tokens), ...foundationThemes].find((k) => {
+      var _a2;
+      return k && ((_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[k]);
+    });
+    const dimF = dimTheme ? themeFoundation(dimTheme) : void 0;
+    {
+      const sig = (f) => JSON.stringify(f ? [f.spacing, f.spacingRoles, f.padding, f.radius, f.radiusRoles, f.stroke, f.strokeRoles, f.sizes, f.sizeRoles, f.selector, f.selectorRoles, f.grid, f.breakpointRoles, f.gridFrame] : null);
+      const differ = foundationThemes.filter((t) => t !== dimTheme && sig(themeFoundation(t)) !== sig(dimF));
+      if (differ.length) log(`\u26A0 "${COLLECTIONS.dimensionSemantics}" uses ${capFoundationTheme(dimTheme != null ? dimTheme : "")}'s lengths \u2014 ${differ.map(capFoundationTheme).join(", ")} differ${differ.length === 1 ? "s" : ""}. Its modes are viewports, so sync one theme per file to ship another theme's lengths.`);
+    }
     const lengthValue = (raw, count2 = false) => {
       if (raw === void 0 || raw === null || raw === "") return void 0;
       if (count2) {
@@ -2168,156 +2199,82 @@
       const prim = dimByValue.get(n);
       return prim ? figma.variables.createVariableAlias(prim) : n;
     };
-    function writeDim(name, rootVal, themed) {
+    function writeDim(name, value) {
       var _a2;
-      if (rootVal === void 0 && !foundationThemes.some((t) => themed(t) !== void 0)) return void 0;
+      const perVp = value !== void 0 && typeof value === "object" && !("type" in value) && !("r" in value) ? value : { desktop: value, tablet: value, mobile: value };
+      const desktop = perVp.desktop;
+      if (desktop === void 0) return void 0;
       const v = upsertVarIn(dimSemCol, dimSemCache, name, "FLOAT", scopesForCollection(COLLECTIONS.dimensionSemantics, name), true);
-      if (dimModeIdOf) {
-        const byTheme = {};
-        for (const t of foundationThemes) byTheme[t] = (_a2 = themed(t)) != null ? _a2 : rootVal;
-        writeByTheme(v, byTheme, dimModeIdOf);
-      } else if (rootVal !== void 0) {
-        setDefault(dimSemCol, v, rootVal);
+      for (const [key] of VIEWPORTS) {
+        const mid = dimModeIdOf[key];
+        if (mid) v.setValueForMode(mid, (_a2 = perVp[key]) != null ? _a2 : desktop);
       }
       dimSemWritten.add(name);
       return v;
     }
-    function emitDimScale(group, root, themeMapOf, nameOf = (k) => k, count2) {
-      var _a2;
-      const keys = new Set(Object.keys(root != null ? root : {}));
-      for (const t of foundationThemes) Object.keys((_a2 = themeMapOf(t)) != null ? _a2 : {}).forEach((k) => keys.add(k));
+    function emitDimScale(group, map, nameOf = (k) => k, skip) {
       let n = 0;
-      for (const key of keys) {
-        const isN = !!(count2 == null ? void 0 : count2(key));
-        const written = writeDim(
-          `${group}/${nameOf(key)}`,
-          lengthValue(root == null ? void 0 : root[key], isN),
-          (t) => {
-            var _a3;
-            return lengthValue((_a3 = themeMapOf(t)) == null ? void 0 : _a3[key], isN);
-          }
-        );
-        if (written) n++;
+      for (const [key, raw] of Object.entries(map != null ? map : {})) {
+        if (skip == null ? void 0 : skip(key)) continue;
+        if (writeDim(`${group}/${nameOf(key)}`, lengthValue(raw))) n++;
       }
       return n;
     }
-    function emitDimRoles(group, roots, themeRolesOf, stepName = (s) => s, scaleOf = () => void 0) {
+    function emitDimRoles(group, roles, scale, stepName = (s) => s) {
       var _a2;
-      const roles = new Set(Object.keys(roots != null ? roots : {}));
-      for (const t of foundationThemes) Object.keys((_a2 = themeRolesOf(t)) != null ? _a2 : {}).forEach((k) => roles.add(k));
-      const aliasOf = (step, theme) => {
-        var _a3;
-        if (typeof step !== "string" || !step) return void 0;
-        const scale = scaleOf(theme);
-        const px = (_a3 = pinnedDimension(step)) != null ? _a3 : parseDimension(scale == null ? void 0 : scale[stepName(step)]);
+      let n = 0;
+      for (const [role, step] of Object.entries(roles != null ? roles : {})) {
+        if (typeof step !== "string" || !step) continue;
+        const px = (_a2 = pinnedDimension(step)) != null ? _a2 : parseDimension(scale == null ? void 0 : scale[stepName(step)]);
         const prim = px !== null ? dimByValue.get(px) : void 0;
-        if (prim) return figma.variables.createVariableAlias(prim);
-        const target = dimSemCache.get(`${group}/${stepName(step)}`);
-        return target ? figma.variables.createVariableAlias(target) : void 0;
-      };
-      let n = 0;
-      for (const role of roles) {
-        const written = writeDim(`${group}/role/${role}`, aliasOf(roots == null ? void 0 : roots[role]), (t) => {
-          var _a3;
-          return aliasOf((_a3 = themeRolesOf(t)) == null ? void 0 : _a3[role], t);
-        });
-        if (written) n++;
+        const target = prim != null ? prim : dimSemCache.get(`${group}/${stepName(step)}`);
+        if (target && writeDim(`${group}/role/${role}`, figma.variables.createVariableAlias(target))) n++;
       }
       return n;
     }
-    const spacingSteps = emitDimScale("Spacing", tokens.spacing, (t) => {
+    const pick = (k, root) => {
       var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.spacing;
-    });
-    const spacingRoleCount = emitDimRoles("Spacing", tokens.spacingRoles, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.spacingRoles;
-    }, (s) => s, (t) => {
-      var _a2, _b2;
-      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.spacing : void 0) != null ? _b2 : tokens.spacing;
-    });
-    const paddingCount = emitDimScale("Spacing", tokens.padding, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.padding;
-    }, (k) => `padding/${k}`);
-    const radiusSteps = emitDimScale("Radius", tokens.radius, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.radius;
-    });
-    const radiusRoleCount = emitDimRoles("Radius", tokens.radiusRoles, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.radiusRoles;
-    }, (s) => s, (t) => {
-      var _a2, _b2;
-      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.radius : void 0) != null ? _b2 : tokens.radius;
-    });
-    const strokeSteps = emitDimScale("Stroke", strokeRoot, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.stroke;
-    }, strokeName);
-    const strokeRoleCount = emitDimRoles("Stroke", tokens.strokeRoles, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.strokeRoles;
-    }, strokeName, (t) => {
-      var _a2, _b2;
-      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.stroke : void 0) != null ? _b2 : strokeRoot;
-    });
-    const sizeSteps = emitDimScale("Size", tokens.sizes, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.sizes;
-    });
-    const sizeRoleCount = emitDimRoles("Size", tokens.sizeRoles, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.sizeRoles;
-    }, (s) => s, (t) => {
-      var _a2, _b2;
-      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.sizes : void 0) != null ? _b2 : tokens.sizes;
-    });
-    const selectorSteps = emitDimScale("Selector", tokens.selector, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.selector;
-    });
-    const selectorRoleCount = emitDimRoles("Selector", tokens.selectorRoles, (t) => {
-      var _a2;
-      return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.selectorRoles;
-    }, (s) => s, (t) => {
-      var _a2, _b2;
-      return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.selector : void 0) != null ? _b2 : tokens.selector;
-    });
+      return (_a2 = dimF == null ? void 0 : dimF[k]) != null ? _a2 : root;
+    };
+    const fSpacing = pick("spacing", tokens.spacing);
+    const fRadius = pick("radius", tokens.radius);
+    const fStroke = (_R = dimF == null ? void 0 : dimF.stroke) != null ? _R : strokeRoot;
+    const fSizes = pick("sizes", tokens.sizes);
+    const fSelector = pick("selector", tokens.selector);
+    const fGrid = pick("grid", tokens.grid);
+    const spacingSteps = emitDimScale("Spacing", fSpacing);
+    const spacingRoleCount = emitDimRoles("Spacing", pick("spacingRoles", tokens.spacingRoles), fSpacing);
+    const paddingCount = emitDimScale("Spacing", pick("padding", tokens.padding), (k) => `padding/${k}`);
+    const radiusSteps = emitDimScale("Radius", fRadius);
+    const radiusRoleCount = emitDimRoles("Radius", pick("radiusRoles", tokens.radiusRoles), fRadius);
+    const strokeSteps = emitDimScale("Stroke", fStroke, strokeName);
+    const strokeRoleCount = emitDimRoles("Stroke", pick("strokeRoles", tokens.strokeRoles), fStroke, strokeName);
+    const sizeSteps = emitDimScale("Size", fSizes);
+    const sizeRoleCount = emitDimRoles("Size", pick("sizeRoles", tokens.sizeRoles), fSizes);
+    const selectorSteps = emitDimScale("Selector", fSelector);
+    const selectorRoleCount = emitDimRoles("Selector", pick("selectorRoles", tokens.selectorRoles), fSelector);
     let gridCount = 0;
     if (tokens.grid) {
-      gridCount += emitDimScale("Grid", tokens.grid, (t) => {
-        var _a2;
-        return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.grid;
-      }, (k) => k, isCount);
-      gridCount += emitDimRoles("Grid", tokens.breakpointRoles, (t) => {
-        var _a2;
-        return (_a2 = themeFoundation(t)) == null ? void 0 : _a2.breakpointRoles;
-      }, (s) => `breakpoint-${s}`, (t) => {
-        var _a2, _b2;
-        return (_b2 = t ? (_a2 = themeFoundation(t)) == null ? void 0 : _a2.grid : void 0) != null ? _b2 : tokens.grid;
-      });
+      gridCount += emitDimScale("Grid", fGrid, (k) => k, (k) => !k.startsWith("breakpoint-"));
+      gridCount += emitDimRoles("Grid", pick("breakpointRoles", tokens.breakpointRoles), fGrid, (s) => `breakpoint-${s}`);
+      const frames = {
+        desktop: pluginGridFrame(tokens, "desktop", dimTheme),
+        tablet: pluginGridFrame(tokens, "tablet", dimTheme),
+        mobile: pluginGridFrame(tokens, "mobile", dimTheme)
+      };
       for (const k of ["columns", "gutter", "margin", "container"]) {
-        const target = dimSemCache.get(`Grid/${k}`);
-        if (!target) continue;
-        if (writeDim(`Grid/desktop/${k}`, figma.variables.createVariableAlias(target), () => void 0)) gridCount++;
-      }
-      for (const vp of ["tablet", "mobile"]) {
-        const root = pluginGridFrame(tokens, vp);
-        for (const k of ["columns", "gutter", "margin", "container"]) {
-          const value = (fr) => lengthValue(fr[k], k === "columns");
-          if (writeDim(`Grid/${vp}/${k}`, value(root), (t) => value(pluginGridFrame(tokens, vp, t)))) gridCount++;
-        }
+        const per = (vp) => lengthValue(frames[vp][k], k === "columns");
+        if (writeDim(`Grid/${k}`, { desktop: per("desktop"), tablet: per("tablet"), mobile: per("mobile") })) gridCount++;
       }
     }
     pruneVars(dimSemCache, dimSemWritten, COLLECTIONS.dimensionSemantics);
-    log(`\u2713 Dimension semantics \u2014 Spacing ${spacingSteps}+${spacingRoleCount} roles${paddingCount ? ` \xB7 ${paddingCount} padding` : ""} \xB7 Radius ${radiusSteps}+${radiusRoleCount} \xB7 Stroke ${strokeSteps}+${strokeRoleCount} \xB7 Size ${sizeSteps}+${sizeRoleCount} \xB7 Selector ${selectorSteps}+${selectorRoleCount} \xB7 Grid ${gridCount}${dimModeIdOf ? ` \xD7 ${Object.keys(dimModeIdOf).length} theme modes` : ""}`);
+    log(`\u2713 Dimension semantics \u2014 Spacing ${spacingSteps}+${spacingRoleCount} roles${paddingCount ? ` \xB7 ${paddingCount} padding` : ""} \xB7 Radius ${radiusSteps}+${radiusRoleCount} \xB7 Stroke ${strokeSteps}+${strokeRoleCount} \xB7 Size ${sizeSteps}+${sizeRoleCount} \xB7 Selector ${selectorSteps}+${selectorRoleCount} \xB7 Grid ${gridCount} \xD7 ${Object.values(dimModeIdOf).filter(Boolean).length} viewport modes${dimTheme ? ` (${capFoundationTheme(dimTheme)})` : ""}`);
     const previewRad = previewRadius(tokens);
     const shownRoles = foundationThemes.length ? foundationThemes.map((theme) => {
       var _a2, _b2, _c2, _d2, _e2;
       const roles = (_c2 = (_b2 = (_a2 = tokens.foundationsByTheme) == null ? void 0 : _a2[theme]) == null ? void 0 : _b2.radiusRoles) != null ? _c2 : tokens.radiusRoles;
       return `${capFoundationTheme(theme)} boxes=${(_d2 = roles == null ? void 0 : roles.container) != null ? _d2 : "?"} fields=${(_e2 = roles == null ? void 0 : roles.action) != null ? _e2 : "?"}`;
-    }).join(", ") : `boxes=${(_S = (_R = previewRad.radiusRoles) == null ? void 0 : _R.container) != null ? _S : "?"} fields=${(_U = (_T = previewRad.radiusRoles) == null ? void 0 : _T.action) != null ? _U : "?"}`;
+    }).join(", ") : `boxes=${(_T = (_S = previewRad.radiusRoles) == null ? void 0 : _S.container) != null ? _T : "?"} fields=${(_V = (_U = previewRad.radiusRoles) == null ? void 0 : _U.action) != null ? _V : "?"}`;
     log(`  Radius roles \u2014 ${shownRoles}`);
     for (const legacyName of LEGACY_DIMENSION_COLLECTIONS) {
       const legacy = existingCollections.find((c) => c.name === legacyName);
@@ -8040,7 +7997,7 @@
       if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
         await newBoard("Grid & Sizes");
         root.appendChild(sectionBar("Grid & Sizes"));
-        const { card, body } = section("Grid & Sizes", "Layout grid settings (root keys = desktop; desktop/* aliases them; mobile/* is the 4-col recipe), component heights, and selector glyph sizes.");
+        const { card, body } = section("Grid & Sizes", "Layout grid settings (Grid/columns \xB7 gutter \xB7 margin \xB7 container carry a value per viewport mode \u2014 Desktop \xB7 Tablet \xB7 Mobile), component heights, and selector glyph sizes.");
         if (Object.keys(grid).length > 0) {
           const desktop = pluginGridFrame(tokens, "desktop");
           const mobile = pluginGridFrame(tokens, "mobile");
@@ -8973,7 +8930,7 @@
       divider(body);
       bullet(body, "Primitives \u2014 1 to 12", "Every colour family is a 12-step Radix ramp: accent-1 \u2026 accent-12. Step 9 is the anchor (your input hex); 11\u201312 are the accessible text tones. Never referenced by a component directly.");
       bullet(body, "Semantics \u2014 by role", "Surface/page, Content/primary, Action/primary/default, Border/control \u2014 a role names what a value is for. Components bind here.");
-      bullet(body, "One collection per category", "Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid \u2014 each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme. Type roles add size-mobile beside the desktop size; Grid adds desktop/* and mobile/* next to the existing columns/gutter keys. Components stay bound to desktop.");
+      bullet(body, "One collection per category", "Color Primitives, Color Semantics, Typography, Dimension Primitives, Dimension Semantics. Color Semantics carries a mode per library theme; Dimension Semantics carries a mode per VIEWPORT (Desktop \xB7 Tablet \xB7 Mobile), so a frame switches the grid by switching mode. Every length is an alias of a Dimension primitive. Type roles add size-mobile beside the desktop size. Components stay bound to Desktop.");
     });
     board("How this file is organized", (body) => {
       h2(body, "How this file is organized");

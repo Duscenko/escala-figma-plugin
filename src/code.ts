@@ -3113,12 +3113,43 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   pruneVars(dimPrimCache, dimPrimWritten, COLLECTIONS.dimensionPrimitives)
   log(`✓ Dimension primitives (${dimByValue.size} values${dimNameRefused ? ` · ${dimNameRefused} sheltered under value/ — Figma refused the bare name` : ''})`)
 
-  // 2 · The semantic collection. ONE set of theme modes for every group — the
-  //     reason to merge six collections is that a frame switches theme once.
+  // 2 · The semantic collection. Its modes are VIEWPORTS — Desktop · Tablet ·
+  //     Mobile, the same three the configurator's platform switch edits — not
+  //     the colour themes: a length does not change between Light and Dark, it
+  //     changes between a phone and a desktop. Grid's frame is the part that
+  //     differs per viewport today (columns · gutter · margin · container); every
+  //     other group carries one value in all three, ready to diverge later.
+  //
+  //     A Figma collection has ONE mode axis, so the values come from the
+  //     ACTIVE library theme. A system whose themes carry different dimensions
+  //     (a style per theme) is told so below rather than silently merged.
+  const VIEWPORTS = [['desktop', 'Desktop'], ['tablet', 'Tablet'], ['mobile', 'Mobile']] as const
+  type Viewport = (typeof VIEWPORTS)[number][0]
   const dimSemCol = findOrCreateCollection(COLLECTIONS.dimensionSemantics)
   const dimSemCache = cacheFor(dimSemCol)
-  const dimModeIdOf = foundationThemes.length > 0 ? ensureNamedModes(dimSemCol, foundationThemes) : undefined
+  const dimModeIdOf: Record<Viewport, string | undefined> = { desktop: undefined, tablet: undefined, mobile: undefined }
+  {
+    try { dimSemCol.renameMode(dimSemCol.defaultModeId, 'Desktop') } catch { /* not allowed */ }
+    pruneModes(dimSemCol, new Set(VIEWPORTS.map(([, label]) => label)), dimSemCol.name)
+    dimModeIdOf.desktop = dimSemCol.defaultModeId
+    for (const [key, label] of VIEWPORTS.slice(1)) {
+      const found = dimSemCol.modes.find((m) => m.name === label)
+      if (found) { dimModeIdOf[key] = found.modeId; continue }
+      try { dimModeIdOf[key] = dimSemCol.addMode(label) } catch {
+        log(`⚠ "${COLLECTIONS.dimensionSemantics}": no ${label} column — your Figma plan's mode-per-collection limit was reached. ${label} uses the Desktop values.`)
+      }
+    }
+  }
   const dimSemWritten = new Set<string>()
+  const dimTheme: string | undefined = [activeThemeKey(tokens), ...foundationThemes].find((k) => k && tokens.foundationsByTheme?.[k])
+  const dimF = dimTheme ? themeFoundation(dimTheme) : undefined
+  {
+    const sig = (f: ThemeFoundation | undefined) => JSON.stringify(f ? [f.spacing, f.spacingRoles, f.padding, f.radius, f.radiusRoles, f.stroke, f.strokeRoles, f.sizes, f.sizeRoles, f.selector, f.selectorRoles, f.grid, f.breakpointRoles, f.gridFrame] : null)
+    const differ = foundationThemes.filter((t) => t !== dimTheme && sig(themeFoundation(t)) !== sig(dimF))
+    // Light/Dark of ONE library theme share their dimensions; only a genuinely
+    // different theme is worth a line.
+    if (differ.length) log(`⚠ "${COLLECTIONS.dimensionSemantics}" uses ${capFoundationTheme(dimTheme ?? '')}'s lengths — ${differ.map(capFoundationTheme).join(', ')} differ${differ.length === 1 ? 's' : ''}. Its modes are viewports, so sync one theme per file to ship another theme's lengths.`)
+  }
 
   // A length → an alias to its primitive; a count (`columns`) stays a number.
   const lengthValue = (raw: string | number | undefined, count = false): VariableValue | undefined => {
@@ -3133,15 +3164,17 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
     return prim ? figma.variables.createVariableAlias(prim) : n
   }
 
-  function writeDim(name: string, rootVal: VariableValue | undefined, themed: (t: string) => VariableValue | undefined): Variable | undefined {
-    if (rootVal === undefined && !foundationThemes.some((t) => themed(t) !== undefined)) return undefined
+  /** One variable, a value per viewport (a single value fills all three). */
+  function writeDim(name: string, value: VariableValue | undefined | Partial<Record<Viewport, VariableValue | undefined>>): Variable | undefined {
+    const perVp = value !== undefined && typeof value === 'object' && !('type' in value) && !('r' in value)
+      ? value as Partial<Record<Viewport, VariableValue | undefined>>
+      : { desktop: value as VariableValue | undefined, tablet: value as VariableValue | undefined, mobile: value as VariableValue | undefined }
+    const desktop = perVp.desktop
+    if (desktop === undefined) return undefined
     const v = upsertVarIn(dimSemCol, dimSemCache, name, 'FLOAT', scopesForCollection(COLLECTIONS.dimensionSemantics, name), true)
-    if (dimModeIdOf) {
-      const byTheme: Record<string, VariableValue | undefined> = {}
-      for (const t of foundationThemes) byTheme[t] = themed(t) ?? rootVal
-      writeByTheme(v, byTheme, dimModeIdOf)
-    } else if (rootVal !== undefined) {
-      setDefault(dimSemCol, v, rootVal)
+    for (const [key] of VIEWPORTS) {
+      const mid = dimModeIdOf[key]
+      if (mid) v.setValueForMode(mid, perVp[key] ?? desktop)
     }
     dimSemWritten.add(name)
     return v
@@ -3150,22 +3183,14 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
   /** A category's scale: `<Group>/<step>` → alias of the primitive. */
   function emitDimScale(
     group: string,
-    root: Record<string, string> | undefined,
-    themeMapOf: (t: string) => Record<string, string> | undefined,
+    map: Record<string, string> | undefined,
     nameOf: (key: string) => string = (k) => k,
-    count?: (key: string) => boolean,
+    skip?: (key: string) => boolean,
   ): number {
-    const keys = new Set(Object.keys(root ?? {}))
-    for (const t of foundationThemes) Object.keys(themeMapOf(t) ?? {}).forEach((k) => keys.add(k))
     let n = 0
-    for (const key of keys) {
-      const isN = !!count?.(key)
-      const written = writeDim(
-        `${group}/${nameOf(key)}`,
-        lengthValue(root?.[key], isN),
-        (t) => lengthValue(themeMapOf(t)?.[key], isN),
-      )
-      if (written) n++
+    for (const [key, raw] of Object.entries(map ?? {})) {
+      if (skip?.(key)) continue
+      if (writeDim(`${group}/${nameOf(key)}`, lengthValue(raw))) n++
     }
     return n
   }
@@ -3176,69 +3201,65 @@ async function importVariables(tokens: DesignTokens): Promise<number> {
    *  A value that resolves to no length falls back to the step's own variable. */
   function emitDimRoles(
     group: string,
-    roots: Record<string, string> | undefined,
-    themeRolesOf: (t: string) => Record<string, string> | undefined,
+    roles: Record<string, string> | undefined,
+    scale: Record<string, string> | undefined,
     stepName: (step: string) => string = (s) => s,
-    scaleOf: (t?: string) => Record<string, string> | undefined = () => undefined,
   ): number {
-    const roles = new Set(Object.keys(roots ?? {}))
-    for (const t of foundationThemes) Object.keys(themeRolesOf(t) ?? {}).forEach((k) => roles.add(k))
-    const aliasOf = (step: string | undefined, theme?: string): VariableValue | undefined => {
-      if (typeof step !== 'string' || !step) return undefined
-      const scale = scaleOf(theme)
+    let n = 0
+    for (const [role, step] of Object.entries(roles ?? {})) {
+      if (typeof step !== 'string' || !step) continue
       const px = pinnedDimension(step) ?? parseDimension(scale?.[stepName(step)])
       const prim = px !== null ? dimByValue.get(px) : undefined
-      if (prim) return figma.variables.createVariableAlias(prim)
-      const target = dimSemCache.get(`${group}/${stepName(step)}`)
-      return target ? figma.variables.createVariableAlias(target) : undefined
-    }
-    let n = 0
-    for (const role of roles) {
-      const written = writeDim(`${group}/role/${role}`, aliasOf(roots?.[role]), (t) => aliasOf(themeRolesOf(t)?.[role], t))
-      if (written) n++
+      const target = prim ?? dimSemCache.get(`${group}/${stepName(step)}`)
+      if (target && writeDim(`${group}/role/${role}`, figma.variables.createVariableAlias(target))) n++
     }
     return n
   }
 
-  const spacingSteps = emitDimScale('Spacing', tokens.spacing, (t) => themeFoundation(t)?.spacing)
-  const spacingRoleCount = emitDimRoles('Spacing', tokens.spacingRoles, (t) => themeFoundation(t)?.spacingRoles, (s) => s, (t) => (t ? themeFoundation(t)?.spacing : undefined) ?? tokens.spacing)
-  const paddingCount = emitDimScale('Spacing', tokens.padding, (t) => themeFoundation(t)?.padding, (k) => `padding/${k}`)
+  const pick = <K extends keyof ThemeFoundation>(k: K, root: ThemeFoundation[K]) => (dimF?.[k] ?? root) as ThemeFoundation[K]
+  const fSpacing = pick('spacing', tokens.spacing) as Record<string, string> | undefined
+  const fRadius = pick('radius', tokens.radius) as Record<string, string> | undefined
+  const fStroke = (dimF?.stroke ?? strokeRoot) as Record<string, string> | undefined
+  const fSizes = pick('sizes', tokens.sizes) as Record<string, string> | undefined
+  const fSelector = pick('selector', tokens.selector) as Record<string, string> | undefined
+  const fGrid = pick('grid', tokens.grid) as Record<string, string> | undefined
 
-  const radiusSteps = emitDimScale('Radius', tokens.radius, (t) => themeFoundation(t)?.radius)
-  const radiusRoleCount = emitDimRoles('Radius', tokens.radiusRoles, (t) => themeFoundation(t)?.radiusRoles, (s) => s, (t) => (t ? themeFoundation(t)?.radius : undefined) ?? tokens.radius)
+  const spacingSteps = emitDimScale('Spacing', fSpacing)
+  const spacingRoleCount = emitDimRoles('Spacing', pick('spacingRoles', tokens.spacingRoles), fSpacing)
+  const paddingCount = emitDimScale('Spacing', pick('padding', tokens.padding), (k) => `padding/${k}`)
 
-  const strokeSteps = emitDimScale('Stroke', strokeRoot, (t) => themeFoundation(t)?.stroke, strokeName)
-  const strokeRoleCount = emitDimRoles('Stroke', tokens.strokeRoles, (t) => themeFoundation(t)?.strokeRoles, strokeName, (t) => (t ? themeFoundation(t)?.stroke : undefined) ?? strokeRoot)
+  const radiusSteps = emitDimScale('Radius', fRadius)
+  const radiusRoleCount = emitDimRoles('Radius', pick('radiusRoles', tokens.radiusRoles), fRadius)
 
-  const sizeSteps = emitDimScale('Size', tokens.sizes, (t) => themeFoundation(t)?.sizes)
-  const sizeRoleCount = emitDimRoles('Size', tokens.sizeRoles, (t) => themeFoundation(t)?.sizeRoles, (s) => s, (t) => (t ? themeFoundation(t)?.sizes : undefined) ?? tokens.sizes)
+  const strokeSteps = emitDimScale('Stroke', fStroke, strokeName)
+  const strokeRoleCount = emitDimRoles('Stroke', pick('strokeRoles', tokens.strokeRoles), fStroke, strokeName)
 
-  const selectorSteps = emitDimScale('Selector', tokens.selector, (t) => themeFoundation(t)?.selector)
-  const selectorRoleCount = emitDimRoles('Selector', tokens.selectorRoles, (t) => themeFoundation(t)?.selectorRoles, (s) => s, (t) => (t ? themeFoundation(t)?.selector : undefined) ?? tokens.selector)
+  const sizeSteps = emitDimScale('Size', fSizes)
+  const sizeRoleCount = emitDimRoles('Size', pick('sizeRoles', tokens.sizeRoles), fSizes)
+
+  const selectorSteps = emitDimScale('Selector', fSelector)
+  const selectorRoleCount = emitDimRoles('Selector', pick('selectorRoles', tokens.selectorRoles), fSelector)
 
   let gridCount = 0
   if (tokens.grid) {
-    gridCount += emitDimScale('Grid', tokens.grid, (t) => themeFoundation(t)?.grid, (k) => k, isCount)
-    gridCount += emitDimRoles('Grid', tokens.breakpointRoles, (t) => themeFoundation(t)?.breakpointRoles, (s) => `breakpoint-${s}`, (t) => (t ? themeFoundation(t)?.grid : undefined) ?? tokens.grid)
-    // Desktop frame aliases the root grid steps.
-    for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
-      const target = dimSemCache.get(`Grid/${k}`)
-      if (!target) continue
-      if (writeDim(`Grid/desktop/${k}`, figma.variables.createVariableAlias(target), () => undefined)) gridCount++
+    // Breakpoint steps and the viewport cuts are the same in every viewport.
+    gridCount += emitDimScale('Grid', fGrid, (k) => k, (k) => !k.startsWith('breakpoint-'))
+    gridCount += emitDimRoles('Grid', pick('breakpointRoles', tokens.breakpointRoles), fGrid, (s) => `breakpoint-${s}`)
+    // The frame IS per viewport: one variable per field, a value per mode.
+    const frames = {
+      desktop: pluginGridFrame(tokens, 'desktop', dimTheme),
+      tablet: pluginGridFrame(tokens, 'tablet', dimTheme),
+      mobile: pluginGridFrame(tokens, 'mobile', dimTheme),
     }
-    // Tablet / mobile frames carry their own recipe per theme.
-    for (const vp of ['tablet', 'mobile'] as const) {
-      const root = pluginGridFrame(tokens, vp)
-      for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
-        // `container: 0` is "no max-width" (the frame's `none`): still written, as the 0 primitive.
-        const value = (fr: typeof root) => lengthValue(fr[k], k === 'columns')
-        if (writeDim(`Grid/${vp}/${k}`, value(root), (t) => value(pluginGridFrame(tokens, vp, t)))) gridCount++
-      }
+    for (const k of ['columns', 'gutter', 'margin', 'container'] as const) {
+      // `container: 0` is "no max-width" (the frame's `none`), written as the 0 primitive.
+      const per = (vp: Viewport) => lengthValue(frames[vp][k], k === 'columns')
+      if (writeDim(`Grid/${k}`, { desktop: per('desktop'), tablet: per('tablet'), mobile: per('mobile') })) gridCount++
     }
   }
 
   pruneVars(dimSemCache, dimSemWritten, COLLECTIONS.dimensionSemantics)
-  log(`✓ Dimension semantics — Spacing ${spacingSteps}+${spacingRoleCount} roles${paddingCount ? ` · ${paddingCount} padding` : ''} · Radius ${radiusSteps}+${radiusRoleCount} · Stroke ${strokeSteps}+${strokeRoleCount} · Size ${sizeSteps}+${sizeRoleCount} · Selector ${selectorSteps}+${selectorRoleCount} · Grid ${gridCount}${dimModeIdOf ? ` × ${Object.keys(dimModeIdOf).length} theme modes` : ''}`)
+  log(`✓ Dimension semantics — Spacing ${spacingSteps}+${spacingRoleCount} roles${paddingCount ? ` · ${paddingCount} padding` : ''} · Radius ${radiusSteps}+${radiusRoleCount} · Stroke ${strokeSteps}+${strokeRoleCount} · Size ${sizeSteps}+${sizeRoleCount} · Selector ${selectorSteps}+${selectorRoleCount} · Grid ${gridCount} × ${Object.values(dimModeIdOf).filter(Boolean).length} viewport modes${dimTheme ? ` (${capFoundationTheme(dimTheme)})` : ''}`)
   const previewRad = previewRadius(tokens)
   const shownRoles = foundationThemes.length
     ? foundationThemes.map((theme) => {
@@ -10036,7 +10057,7 @@ async function importDocumentation(tokens: DesignTokens): Promise<number> {
     if (Object.keys(grid).length > 0 || sizes.length > 0 || selectors.length > 0) {
       await newBoard('Grid & Sizes')
       root.appendChild(sectionBar('Grid & Sizes'))
-      const { card, body } = section('Grid & Sizes', 'Layout grid settings (root keys = desktop; desktop/* aliases them; mobile/* is the 4-col recipe), component heights, and selector glyph sizes.')
+      const { card, body } = section('Grid & Sizes', 'Layout grid settings (Grid/columns · gutter · margin · container carry a value per viewport mode — Desktop · Tablet · Mobile), component heights, and selector glyph sizes.')
       if (Object.keys(grid).length > 0) {
         const desktop = pluginGridFrame(tokens, 'desktop')
         const mobile = pluginGridFrame(tokens, 'mobile')
@@ -11016,7 +11037,7 @@ async function importGettingStarted(tokens: DesignTokens): Promise<boolean> {
     divider(body)
     bullet(body, 'Primitives — 1 to 12', 'Every colour family is a 12-step Radix ramp: accent-1 … accent-12. Step 9 is the anchor (your input hex); 11–12 are the accessible text tones. Never referenced by a component directly.')
     bullet(body, 'Semantics — by role', 'Surface/page, Content/primary, Action/primary/default, Border/control — a role names what a value is for. Components bind here.')
-    bullet(body, 'One collection per category', 'Color Primitives, Color Semantics, Typography, Spacing, Radius, Size, Selector, Border, Grid — each its own Figma collection. Color Semantics (and foundations that differ per theme) carry a mode per library theme. Type roles add size-mobile beside the desktop size; Grid adds desktop/* and mobile/* next to the existing columns/gutter keys. Components stay bound to desktop.')
+    bullet(body, 'One collection per category', 'Color Primitives, Color Semantics, Typography, Dimension Primitives, Dimension Semantics. Color Semantics carries a mode per library theme; Dimension Semantics carries a mode per VIEWPORT (Desktop · Tablet · Mobile), so a frame switches the grid by switching mode. Every length is an alias of a Dimension primitive. Type roles add size-mobile beside the desktop size. Components stay bound to Desktop.')
   })
 
   // 7 · How this file is organized ──────────────────────────────────────────
